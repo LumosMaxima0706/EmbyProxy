@@ -32,11 +32,16 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "Not Found", http.StatusNotFound)
 		return
 	}
-	if !strings.HasPrefix(req.URL.Path, r.prefix+"/") && req.URL.Path != r.prefix {
+	rawPath, err := requestPath(req)
+	if err != nil {
 		http.Error(w, "Not Found", http.StatusNotFound)
 		return
 	}
-	relative := strings.TrimPrefix(req.URL.Path, r.prefix)
+	if !strings.HasPrefix(rawPath, r.prefix+"/") && rawPath != r.prefix {
+		http.Error(w, "Not Found", http.StatusNotFound)
+		return
+	}
+	relative := strings.TrimPrefix(rawPath, r.prefix)
 	parts, err := splitRoutePath(relative)
 	if err != nil {
 		http.Error(w, "Not Found", http.StatusNotFound)
@@ -46,7 +51,7 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "Not Found", http.StatusNotFound)
 		return
 	}
-	if r.serveSlug(w, req, parts) || r.serveNode(w, req, parts) {
+	if r.serveSlug(w, req, rawPath, parts) || r.serveNode(w, req, rawPath, parts) {
 		return
 	}
 	http.Error(w, "Not Found", http.StatusNotFound)

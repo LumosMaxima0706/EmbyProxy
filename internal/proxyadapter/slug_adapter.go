@@ -7,7 +7,7 @@ import (
 	"embyproxy/internal/mediaproxy"
 )
 
-func (r *Router) serveSlug(w http.ResponseWriter, req *http.Request, parts []string) bool {
+func (r *Router) serveSlug(w http.ResponseWriter, req *http.Request, rawPath string, parts []string) bool {
 	if len(parts) < 2 || parts[0] != "s" {
 		return false
 	}
@@ -25,7 +25,7 @@ func (r *Router) serveSlug(w http.ResponseWriter, req *http.Request, parts []str
 	if len(parts) > pathStart {
 		forward = "/" + strings.Join(parts[pathStart:], "/")
 	}
-	if strings.HasSuffix(req.URL.Path, "/") && !strings.HasSuffix(forward, "/") {
+	if strings.HasSuffix(rawPath, "/") && !strings.HasSuffix(forward, "/") {
 		forward += "/"
 	}
 	r.forward(w, req, forward, target, publicPath)

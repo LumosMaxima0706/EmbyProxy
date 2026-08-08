@@ -14,6 +14,9 @@ func parseServerTarget(raw string) (mediaproxy.Target, error) {
 	if err != nil || parsed.User != nil || parsed.Fragment != "" || parsed.RawQuery != "" {
 		return mediaproxy.Target{}, ErrInvalidTarget
 	}
+	if strings.HasSuffix(parsed.Host, ":") {
+		return mediaproxy.Target{}, ErrInvalidTarget
+	}
 	if parsed.Scheme != "http" && parsed.Scheme != "https" || parsed.Hostname() == "" {
 		return mediaproxy.Target{}, ErrInvalidTarget
 	}

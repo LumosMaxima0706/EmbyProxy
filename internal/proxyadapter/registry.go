@@ -47,8 +47,10 @@ func NewRegistry(slugs []SlugConfig, nodes []storage.Node) (*Registry, error) {
 		if _, exists := registry.slugs[config.Slug]; exists {
 			return nil, ErrInvalidSlug
 		}
-		if config.PublicPath != "" && (!strings.HasPrefix(config.PublicPath, "/") || strings.ContainsAny(config.PublicPath, "?#")) {
-			return nil, ErrInvalidSlug
+		if config.PublicPath != "" {
+			if err := validateRawPath(config.PublicPath); err != nil {
+				return nil, ErrInvalidSlug
+			}
 		}
 		registry.slugs[config.Slug] = slugRecord{target: target, enabled: config.Enabled, publicPath: config.PublicPath}
 	}

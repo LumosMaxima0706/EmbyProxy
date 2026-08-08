@@ -2,6 +2,7 @@ package proxyadapter
 
 import (
 	"bufio"
+	"crypto/tls"
 	"fmt"
 	"net"
 	"net/http"
@@ -88,7 +89,7 @@ func TestSlugUnknownAndQueryCannotSelectUpstream(t *testing.T) {
 		t.Fatalf("unknown status=%d", unknown.Code)
 	}
 	query := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, DefaultMockPrefix+"/s/demo/health?upstream="+url.QueryEscape(forbidden.URL), nil)
+	req := httptest.NewRequest(http.MethodGet, DefaultMockPrefix+"/s/demo/health?upstream="+url.QueryEscape(forbidden.URL)+"&url="+url.QueryEscape(forbidden.URL)+"&target="+url.QueryEscape(forbidden.URL), nil)
 	router.ServeHTTP(query, req)
 	if query.Code != http.StatusNoContent || allowedHits.Load() != 1 || forbiddenHits.Load() != 0 {
 		t.Fatalf("query override status=%d allowed=%d forbidden=%d", query.Code, allowedHits.Load(), forbiddenHits.Load())
@@ -131,10 +132,101 @@ func TestRegistryRejectsUnsafeSlugAndTarget(t *testing.T) {
 		"http://media.example/path?token=dummy",
 		"http://media.example/path#fragment",
 		"ftp://media.example",
+		"http://media.example:",
 	} {
 		if _, err := NewRegistry([]SlugConfig{{Slug: "demo", RawTarget: target, Enabled: true}}, nil); err != ErrInvalidTarget {
 			t.Fatalf("target %q err=%v", target, err)
 		}
+	}
+}
+
+func TestAdapterRejectsEncodedRouteSeparatorsAndTraversal(t *testing.T) {
+	var hits atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstream.Close()
+	router := newRouter(t, newRegistry(t, upstream.URL))
+	for _, escaped := range []string{
+		"%2F", "%2f", "%5C", "%5c", "%2E", "%2e",
+		"%2e%2e/", "..%2F", "%2e%2e%2f",
+	} {
+		for _, route := range []string{
+			DefaultMockPrefix + "/s/demo/" + escaped + "tail",
+			DefaultMockPrefix + "/node/shared/" + escaped + "tail",
+		} {
+			recorder := httptest.NewRecorder()
+			router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, route, nil))
+			if recorder.Code != http.StatusNotFound {
+				t.Fatalf("route=%q status=%d", route, recorder.Code)
+			}
+		}
+	}
+	for _, segment := range []string{".", ".."} {
+		for _, route := range []string{
+			DefaultMockPrefix + "/s/demo/" + segment + "/tail",
+			DefaultMockPrefix + "/node/shared/" + segment + "/tail",
+		} {
+			recorder := httptest.NewRecorder()
+			router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, route, nil))
+			if recorder.Code != http.StatusNotFound {
+				t.Fatalf("dot traversal route=%q status=%d", route, recorder.Code)
+			}
+		}
+	}
+	for _, route := range []string{
+		DefaultMockPrefix + "/s/de%2Fmo/path",
+		DefaultMockPrefix + "/no%2Fde/shared/path",
+	} {
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, route, nil))
+		if recorder.Code != http.StatusNotFound {
+			t.Fatalf("encoded boundary route=%q status=%d", route, recorder.Code)
+		}
+	}
+	if hits.Load() != 0 {
+		t.Fatalf("unsafe routes reached upstream: %d", hits.Load())
+	}
+	for _, route := range []string{
+		DefaultMockPrefix + "/s/demo/normal/path",
+		DefaultMockPrefix + "/node/shared/normal/path",
+	} {
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, route, nil))
+		if recorder.Code != http.StatusNoContent {
+			t.Fatalf("normal route=%q status=%d", route, recorder.Code)
+		}
+	}
+}
+
+func TestSlugHTTPSForwarding(t *testing.T) {
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/secure/Ping" {
+			t.Errorf("path=%q", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstream.Close()
+	parsed, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := mediaproxy.Config{
+		AllowPrivateTargets: true,
+		TLSConfig:           &tls.Config{InsecureSkipVerify: true}, // test-only local TLS server
+	}
+	registry, err := NewRegistry([]SlugConfig{{Slug: "secure", RawTarget: upstream.URL + "/secure", Enabled: true}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	NewRouter(DefaultMockPrefix, registry, mediaproxy.NewExecutor(config), config).ServeHTTP(
+		recorder,
+		httptest.NewRequest(http.MethodGet, DefaultMockPrefix+"/s/secure/Ping", nil),
+	)
+	if recorder.Code != http.StatusNoContent || parsed.Scheme != "https" {
+		t.Fatalf("status=%d scheme=%q", recorder.Code, parsed.Scheme)
 	}
 }
 

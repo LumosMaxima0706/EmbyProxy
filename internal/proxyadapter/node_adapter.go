@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-func (r *Router) serveNode(w http.ResponseWriter, req *http.Request, parts []string) bool {
+func (r *Router) serveNode(w http.ResponseWriter, req *http.Request, rawPath string, parts []string) bool {
 	if len(parts) < 1 || parts[0] == "s" {
 		return false
 	}
@@ -34,7 +34,7 @@ func (r *Router) serveNode(w http.ResponseWriter, req *http.Request, parts []str
 	if len(parts) > strip {
 		forward = "/" + strings.Join(parts[strip:], "/")
 	}
-	if strings.HasSuffix(req.URL.Path, "/") && !strings.HasSuffix(forward, "/") {
+	if strings.HasSuffix(rawPath, "/") && !strings.HasSuffix(forward, "/") {
 		forward += "/"
 	}
 	r.forward(w, req, forward, target, "")
