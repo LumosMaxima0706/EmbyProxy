@@ -27,11 +27,12 @@ EmbyProxy source remains the host project for this local POC.
   returned not found when reviewed on 2026-08-09.
 
 No permission to copy, modify, merge, or redistribute the Gsy source can be
-established from the repository. Phase 2B therefore does not copy, translate,
-or create a derivative `internal/gsyproxy` package. Implementation is blocked
-until the copyright holder publishes a compatible license or provides written
-permission covering modification, combination, and redistribution.
+established from the repository. The Gsy source was **not copied, modified,
+translated, or merged** into this project, and no `internal/gsyproxy` package
+was created. This remains blocked until the copyright holder publishes a
+compatible license or provides written permission covering modification,
+combination, and redistribution.
 
-If permission is later obtained, retain the upstream copyright and license
-notice in this file and in any copied source as required by that license. Pin
-the reviewed revision and record any local modifications.
+If permission is later obtained, re-evaluate the integration separately. Until
+then, the project uses an independent `internal/mediaproxy` implementation and
+does not claim it is derived from Gsy.

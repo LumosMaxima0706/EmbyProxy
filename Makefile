@@ -10,6 +10,6 @@ test: test-image
 
 test-race: test-image
 	docker run --rm -e CGO_ENABLED=1 -v "$(CURDIR):/workspace" -w /workspace $(DEV_IMAGE) \
-		go test -race ./internal/storage ./internal/proxy ./internal/failover ./internal/admin
+		go test -race ./internal/storage ./internal/proxy ./internal/failover ./internal/admin ./internal/mediaproxy
 
 test-race-core: test-race
