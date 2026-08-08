@@ -3,6 +3,7 @@ package failover
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 )
 
@@ -106,6 +107,9 @@ func ApplyDNS(ctx context.Context, provider DNSProvider, change DNSChange) (DNSP
 	if provider == nil {
 		return DNSPropagation{}, errors.New("dns_provider_unavailable")
 	}
+	if err := validateDNSChange(change); err != nil {
+		return DNSPropagation{Verified: false, Detail: "invalid_change"}, err
+	}
 	if change.DryRun {
 		_, err := provider.DryRunUpdate(ctx, change)
 		return DNSPropagation{Verified: false, Detail: "dry_run"}, err
@@ -125,4 +129,22 @@ func ApplyDNS(ctx context.Context, provider DNSProvider, change DNSChange) (DNSP
 		return DNSPropagation{Verified: false, Detail: "apply_failed"}, err
 	}
 	return provider.VerifyPropagation(ctx, change)
+}
+
+func validateDNSChange(change DNSChange) error {
+	if strings.TrimSpace(change.Name) == "" || strings.ContainsAny(change.Name, "?&#= \t\r\n") {
+		return errors.New("invalid_record_name")
+	}
+	if change.TTL < 0 || change.TTL > 86400 {
+		return errors.New("invalid_ttl")
+	}
+	switch change.Type {
+	case "A", "AAAA", "CNAME":
+	default:
+		return errors.New("unsupported_record_type")
+	}
+	if strings.TrimSpace(change.Value) == "" || strings.ContainsAny(change.Value, "?&#=\r\n") {
+		return errors.New("invalid_record_value")
+	}
+	return nil
 }

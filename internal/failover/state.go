@@ -10,19 +10,22 @@ import (
 var ErrInvalidMode = errors.New("invalid failover mode")
 var ErrUnknownNode = errors.New("unknown failover node")
 var ErrCooldown = errors.New("failover cooldown active")
+var ErrInvalidTraffic = errors.New("invalid traffic sample")
 
 type Controller struct {
-	mu           sync.RWMutex
-	nodes        map[string]Node
-	state        State
-	config       PolicyConfig
-	events       []Event
-	eventWriter  func(Event) error
-	dnsRunWriter func(DNSChange, bool) error
-	stateWriter  func(State) error
-	now          func() time.Time
-	dns          DNSProvider
-	record       string
+	mu            sync.RWMutex
+	nodes         map[string]Node
+	state         State
+	config        PolicyConfig
+	events        []Event
+	eventWriter   func(Event) error
+	dnsRunWriter  func(DNSChange, bool) error
+	stateWriter   func(State) error
+	trafficWriter func(TrafficSample) error
+	healthWriter  func(HealthResult, Node) error
+	now           func() time.Time
+	dns           DNSProvider
+	record        string
 }
 
 func (c *Controller) SetEventWriter(writer func(Event) error) {
@@ -43,10 +46,20 @@ func (c *Controller) SetStateWriter(writer func(State) error) {
 	c.stateWriter = writer
 }
 
+func (c *Controller) SetTrafficWriter(writer func(TrafficSample) error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.trafficWriter = writer
+}
+
+func (c *Controller) SetHealthWriter(writer func(HealthResult, Node) error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.healthWriter = writer
+}
+
 func NewController(nodes []Node, cfg PolicyConfig, dns DNSProvider) *Controller {
-	if cfg.FailureThreshold <= 0 {
-		cfg = DefaultPolicyConfig()
-	}
+	cfg = normalizePolicyConfig(cfg)
 	byID := make(map[string]Node, len(nodes))
 	for _, node := range nodes {
 		byID[node.ID] = node
@@ -72,6 +85,23 @@ func (c *Controller) SetDNSProvider(provider DNSProvider) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.dns = provider
+}
+
+func (c *Controller) DryRunDNS(ctx context.Context, change DNSChange) (DNSPlan, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.dns == nil {
+		return DNSPlan{}, errors.New("dns_provider_unavailable")
+	}
+	if err := validateDNSChange(change); err != nil {
+		return DNSPlan{}, err
+	}
+	change.DryRun = true
+	plan, err := c.dns.DryRunUpdate(ctx, change)
+	if c.dnsRunWriter != nil {
+		_ = c.dnsRunWriter(change, err == nil)
+	}
+	return plan, err
 }
 
 // ApplyDNSAndCommit demonstrates the safe transaction boundary: local active
@@ -124,6 +154,21 @@ func (c *Controller) SetNow(now func() time.Time) {
 	}
 }
 
+func (c *Controller) RestoreState(state State) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if state.Mode == "" {
+		state.Mode = ModeAuto
+	}
+	c.state = state
+}
+
+func (c *Controller) RestoreEvents(events []Event) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.events = append([]Event(nil), events...)
+}
+
 func (c *Controller) Status() (State, []Node) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -169,6 +214,23 @@ func (c *Controller) SetTraffic(sample TrafficSample) error {
 	if !ok {
 		return ErrUnknownNode
 	}
+	if sample.Quality == "" {
+		sample.Quality = TrafficUnknown
+	}
+	if sample.Quality == TrafficKnown && (sample.InboundBytes < 0 || sample.OutboundBytes < 0 || sample.QuotaBytes < 0 || sample.ThresholdPct < 0 || sample.ThresholdPct > 100) {
+		return ErrInvalidTraffic
+	}
+	if sample.SampledAt.IsZero() {
+		sample.SampledAt = c.now()
+	}
+	if sample.Quality == TrafficKnown {
+		sample.TotalBytes = sample.InboundBytes + sample.OutboundBytes
+	}
+	if c.trafficWriter != nil {
+		if err := c.trafficWriter(sample); err != nil {
+			return err
+		}
+	}
 	node.Traffic = sample
 	c.nodes[sample.NodeID] = node
 	return nil
@@ -190,7 +252,24 @@ func (c *Controller) SetHealth(result HealthResult) error {
 		node.ConsecutiveFailures++
 		node.ConsecutiveSuccesses = 0
 	}
+	if c.healthWriter != nil {
+		if err := c.healthWriter(result, node); err != nil {
+			return err
+		}
+	}
 	c.nodes[result.NodeID] = node
+	return nil
+}
+
+func (c *Controller) SetMaintenance(nodeID string, maintenance bool) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	node, ok := c.nodes[nodeID]
+	if !ok {
+		return ErrUnknownNode
+	}
+	node.Maintenance = maintenance
+	c.nodes[nodeID] = node
 	return nil
 }
 
@@ -201,6 +280,7 @@ func (c *Controller) Evaluate() Decision {
 	state := c.state
 	state.LastEvaluationAt = now
 	c.state = state
+	c.persistStateLocked()
 	nodes := make([]Node, 0, len(c.nodes))
 	for _, node := range c.nodes {
 		nodes = append(nodes, node)

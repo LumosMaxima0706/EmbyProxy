@@ -4,15 +4,7 @@ import "time"
 
 // Evaluate is pure policy logic. It never mutates state or calls a provider.
 func Evaluate(nodes []Node, state State, cfg PolicyConfig, now time.Time) Decision {
-	if cfg.FailureThreshold <= 0 {
-		cfg.FailureThreshold = 3
-	}
-	if cfg.RecoverySuccesses <= 0 {
-		cfg.RecoverySuccesses = 3
-	}
-	if cfg.TrafficThresholdPct <= 0 {
-		cfg.TrafficThresholdPct = 97
-	}
+	cfg = normalizePolicyConfig(cfg)
 	byID := make(map[string]Node, len(nodes))
 	for _, node := range nodes {
 		byID[node.ID] = node
@@ -51,6 +43,26 @@ func Evaluate(nodes []Node, state State, cfg PolicyConfig, now time.Time) Decisi
 		return Decision{Reason: "selected_node_missing"}
 	}
 	return Decision{NodeID: requested, Change: requested != state.ActiveNodeID, Reason: reasonFor(requested, primary, fallback, state)}
+}
+
+func normalizePolicyConfig(cfg PolicyConfig) PolicyConfig {
+	defaults := DefaultPolicyConfig()
+	if cfg.FailureThreshold <= 0 {
+		cfg.FailureThreshold = defaults.FailureThreshold
+	}
+	if cfg.RecoverySuccesses <= 0 {
+		cfg.RecoverySuccesses = defaults.RecoverySuccesses
+	}
+	if cfg.Cooldown <= 0 {
+		cfg.Cooldown = defaults.Cooldown
+	}
+	if cfg.TrafficThresholdPct <= 0 {
+		cfg.TrafficThresholdPct = defaults.TrafficThresholdPct
+	}
+	if cfg.MaxSwitchesPerWindow <= 0 {
+		cfg.MaxSwitchesPerWindow = defaults.MaxSwitchesPerWindow
+	}
+	return cfg
 }
 
 func findRoles(nodes []Node) (Node, Node) {

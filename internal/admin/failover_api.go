@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -30,7 +31,7 @@ func (h *Handler) handleFailoverAPI(w http.ResponseWriter, r *http.Request, path
 				"health_status":                node.HealthStatus,
 				"consecutive_health_failures":  node.ConsecutiveFailures,
 				"consecutive_health_successes": node.ConsecutiveSuccesses,
-				"traffic":                      node.Traffic,
+				"traffic":                      failoverTrafficView(node.Traffic),
 			})
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "state": state, "nodes": views})
@@ -69,7 +70,7 @@ func (h *Handler) handleFailoverAPI(w http.ResponseWriter, r *http.Request, path
 		_, nodes := h.failover.Status()
 		traffic := make([]map[string]any, 0, len(nodes))
 		for _, node := range nodes {
-			traffic = append(traffic, map[string]any{"node_id": node.ID, "name": node.Name, "sample": node.Traffic})
+			traffic = append(traffic, map[string]any{"node_id": node.ID, "name": node.Name, "sample": failoverTrafficView(node.Traffic)})
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "nodes": traffic})
 	case r.Method == http.MethodPost && path == "/api/admin/traffic/manual-sample":
@@ -82,8 +83,16 @@ func (h *Handler) handleFailoverAPI(w http.ResponseWriter, r *http.Request, path
 		outbound, _ := body["outbound_bytes"].(float64)
 		quota, _ := body["quota_bytes"].(float64)
 		threshold, _ := body["threshold_percent"].(float64)
+		if nodeID == "" || invalidTrafficNumber(inbound) || invalidTrafficNumber(outbound) || invalidTrafficNumber(quota) || math.IsNaN(threshold) || math.IsInf(threshold, 0) || threshold < 0 || threshold > 100 {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "INVALID_TRAFFIC_SAMPLE"})
+			return
+		}
 		sample := failover.TrafficSample{NodeID: nodeID, CycleKey: asString(body["cycle_key"]), InboundBytes: int64(inbound), OutboundBytes: int64(outbound), TotalBytes: int64(inbound + outbound), QuotaBytes: int64(quota), ThresholdPct: threshold, Quality: failover.TrafficKnown}
 		if err := h.failover.SetTraffic(sample); err != nil {
+			if err == failover.ErrInvalidTraffic {
+				writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "INVALID_TRAFFIC_SAMPLE"})
+				return
+			}
 			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "UNKNOWN_NODE"})
 			return
 		}
@@ -101,7 +110,12 @@ func (h *Handler) handleFailoverAPI(w http.ResponseWriter, r *http.Request, path
 			change.TTL = 60
 		}
 		if change.DryRun {
-			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "dry_run": true, "change": map[string]any{"name": change.Name, "type": change.Type, "ttl": change.TTL}})
+			plan, err := h.failover.DryRunDNS(r.Context(), change)
+			if err != nil {
+				writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": "DNS_DRY_RUN_FAILED"})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "dry_run": true, "change": map[string]any{"name": plan.Change.Name, "type": plan.Change.Type, "ttl": plan.Change.TTL}, "note": plan.Note})
 			return
 		}
 		nodeID := asString(body["node_id"])
@@ -128,4 +142,30 @@ func decodeFailoverJSON(w http.ResponseWriter, r *http.Request) (map[string]any,
 func intFromJSON(value any) int {
 	n, _ := value.(float64)
 	return int(n)
+}
+
+func invalidTrafficNumber(value float64) bool {
+	return math.IsNaN(value) || math.IsInf(value, 0) || value < 0 || value > float64(1<<63-1)
+}
+
+func failoverTrafficView(sample failover.TrafficSample) map[string]any {
+	quality := sample.Quality
+	if quality == "" {
+		quality = failover.TrafficUnknown
+	}
+	view := map[string]any{
+		"node_id": sample.NodeID,
+		"quality": quality,
+	}
+	if quality != failover.TrafficKnown {
+		return view
+	}
+	view["cycle_key"] = sample.CycleKey
+	view["inbound_bytes"] = sample.InboundBytes
+	view["outbound_bytes"] = sample.OutboundBytes
+	view["total_bytes"] = sample.TotalBytes
+	view["quota_bytes"] = sample.QuotaBytes
+	view["threshold_percent"] = sample.ThresholdPct
+	view["sampled_at"] = sample.SampledAt
+	return view
 }

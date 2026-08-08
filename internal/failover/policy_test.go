@@ -110,3 +110,64 @@ func TestControllerRecordsSwitchEvent(t *testing.T) {
 		t.Fatalf("events = %+v", events)
 	}
 }
+
+func TestPolicyConfigPreservesExplicitCooldown(t *testing.T) {
+	cfg := PolicyConfig{FailureThreshold: 3, Cooldown: time.Second}
+	c := NewController(testNodes(), cfg, nil)
+	now := time.Unix(100, 0)
+	c.SetNow(func() time.Time { return now })
+	if err := c.ApplyDecision(Decision{NodeID: "bwg", Change: true}, "health_failure"); err != nil {
+		t.Fatal(err)
+	}
+	state, _ := c.Status()
+	if !state.CooldownUntil.Equal(now.Add(time.Second)) {
+		t.Fatalf("cooldown = %v", state.CooldownUntil)
+	}
+}
+
+func TestSchedulerEmitsDecisionWithoutApplyingIt(t *testing.T) {
+	c := NewController(testNodes(), DefaultPolicyConfig(), nil)
+	called := make(chan Decision, 1)
+	s := Scheduler{Controller: c, OnDecision: func(decision Decision) { called <- decision }}
+	decision := s.RunOnce()
+	select {
+	case emitted := <-called:
+		if emitted.NodeID != decision.NodeID {
+			t.Fatalf("emitted = %+v decision = %+v", emitted, decision)
+		}
+	default:
+		t.Fatal("scheduler did not emit decision")
+	}
+	state, _ := c.Status()
+	if state.ActiveNodeID != "nosla" {
+		t.Fatalf("scheduler changed active state: %+v", state)
+	}
+}
+
+func TestControllerPersistsHealthAndTrafficBeforePublishing(t *testing.T) {
+	c := NewController(testNodes(), DefaultPolicyConfig(), nil)
+	trafficWrites, healthWrites := 0, 0
+	c.SetTrafficWriter(func(sample TrafficSample) error {
+		trafficWrites++
+		if sample.SampledAt.IsZero() || sample.TotalBytes != 30 {
+			t.Fatalf("sample = %+v", sample)
+		}
+		return nil
+	})
+	c.SetHealthWriter(func(result HealthResult, node Node) error {
+		healthWrites++
+		if !result.Success || node.ConsecutiveSuccesses != 1 {
+			t.Fatalf("result=%+v node=%+v", result, node)
+		}
+		return nil
+	})
+	if err := c.SetTraffic(TrafficSample{NodeID: "nosla", InboundBytes: 10, OutboundBytes: 20, Quality: TrafficKnown}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.SetHealth(HealthResultAt("nosla", "mock", true, 200, 0, "")); err != nil {
+		t.Fatal(err)
+	}
+	if trafficWrites != 1 || healthWrites != 1 {
+		t.Fatalf("trafficWrites=%d healthWrites=%d", trafficWrites, healthWrites)
+	}
+}

@@ -475,6 +475,7 @@ tr:last-child td{border-bottom:0}
       <nav class="rail-nav">
         <button class="rail-button active" onclick="switchTab('nodes',this)">节点</button>
         <button class="rail-button" onclick="switchTab('stats',this)">统计</button>
+		<button class="rail-button" onclick="switchTab('failover',this)">切换</button>
         <button class="rail-button" onclick="switchTab('logs',this)">日志</button>
       </nav>
       <div class="rail-bottom">
@@ -573,6 +574,27 @@ tr:last-child td{border-bottom:0}
             </table>
           </div>
         </section>
+
+		<section id="tabFailover" class="stats-deck" style="display:none">
+		  <div class="stats-top">
+			<div class="action-pack">
+			  <button class="primary-action" onclick="loadFailoverStatus()">刷新</button>
+			  <button class="btn" onclick="setFailoverMode('auto')">自动模式</button>
+			  <button class="btn" onclick="setFailoverMode('force_nosla')">强制 NOSLA</button>
+			  <button class="btn" onclick="setFailoverMode('force_bwg')">强制 BWG</button>
+			  <button class="btn" onclick="setFailoverMode('maintenance_nosla')">维护 NOSLA</button>
+			  <button class="btn" onclick="pauseFailoverAutomation()">暂停自动切换</button>
+			  <button class="btn" onclick="dryRunFailoverDNS()">DNS Dry-run</button>
+			</div>
+		  </div>
+		  <div class="stats-grid" id="failoverCards"></div>
+		  <div class="data-table">
+			<table>
+			  <thead><tr><th>时间</th><th>事件</th><th>来源</th><th>目标</th><th>原因</th><th>结果</th></tr></thead>
+			  <tbody id="failoverEvents"><tr><td colspan="6" class="table-empty">暂无事件</td></tr></tbody>
+			</table>
+		  </div>
+		</section>
 
         <section id="tabLogs" class="logs-deck" style="display:none">
           <div class="logs-top">
@@ -1467,7 +1489,7 @@ function switchTab(name, btn) {
   document.getElementById('app')?.classList.toggle('logs-active', name === 'logs');
   document.querySelectorAll('.rail-button').forEach(t => t.classList.remove('active'));
   btn.classList.add('active');
-  const tabs = { nodes: 'tabNodes', stats: 'tabStats', logs: 'tabLogs' };
+  const tabs = { nodes: 'tabNodes', stats: 'tabStats', failover: 'tabFailover', logs: 'tabLogs' };
   for (const [key, id] of Object.entries(tabs)) {
     const el = document.getElementById(id);
     if (el) el.style.display = key === name ? '' : 'none';
@@ -1475,6 +1497,7 @@ function switchTab(name, btn) {
   const meta = {
     nodes: ['媒体中枢', 'Emby 服务器管理', '统一管理 Emby 服务器访问、线路与策略'],
     stats: ['播放统计', '播放统计', '查看近期播放次数、会话数与客户端分布'],
+	failover: ['本地控制', '故障转移', '节点状态、流量策略与 mock DNS 操作'],
     logs: ['运行日志', '运行日志', '查看服务运行期间产生的日志'],
   }[name] || ['媒体中枢', 'Emby 服务器管理', '统一管理 Emby 服务器访问、线路与策略'];
   document.getElementById('pageKicker').textContent = meta[0];
@@ -1483,7 +1506,10 @@ function switchTab(name, btn) {
   if (name === 'stats') {
     stopLogRealtime('待机', 'paused');
     loadStats();
-  } else if (name === 'logs') {
+	} else if (name === 'failover') {
+	  stopLogRealtime('待机', 'paused');
+	  loadFailoverStatus();
+	} else if (name === 'logs') {
     loadLogs();
     if (document.getElementById('logAutoRefresh')?.checked) syncLogRealtime();
   } else {
@@ -3161,6 +3187,77 @@ function toast(msg, type = 'info') {
   el.textContent = msg;
   document.getElementById('toastRoot').appendChild(el);
   setTimeout(() => el.remove(), 3200);
+}
+
+let failoverSnapshot = null;
+
+async function failoverRequest(path, options = {}) {
+  return authFetch(path, {
+	credentials: 'same-origin',
+	headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+	...options,
+  });
+}
+
+async function loadFailoverStatus() {
+  const [status, events] = await Promise.all([
+	failoverRequest('/api/admin/failover/status'),
+	failoverRequest('/api/admin/failover/events?limit=20'),
+  ]);
+  if (!status.ok) {
+	toast('读取故障转移状态失败', 'err');
+	return;
+  }
+  failoverSnapshot = status;
+  renderFailoverStatus(status, events.events || []);
+}
+
+function renderFailoverStatus(status, events) {
+  const state = status.state || {};
+  const nodes = status.nodes || [];
+  const cards = [
+	['当前节点', state.active_node_id || '--'],
+	['当前模式', state.mode || '--'],
+  ];
+  for (const node of nodes) {
+	const traffic = node.traffic || {};
+	const used = traffic.quality === 'known' ? formatBytes(traffic.total_bytes || 0) : 'unknown';
+	cards.push([`${node.name} 健康`, node.health_status || 'unknown']);
+	if (node.node_id === 'nosla') {
+	  cards.push(['NOSLA 本周期流量', used]);
+	  cards.push(['流量阈值', traffic.threshold_percent ? `${traffic.threshold_percent}%` : '--']);
+	  cards.push(['重置日', node.reset_day || '--']);
+	}
+  }
+  document.getElementById('failoverCards').innerHTML = cards.map(([label, value]) =>
+	`<div class="stat-block"><div class="val">${esc(value)}</div><div class="lbl">${esc(label)}</div></div>`
+  ).join('');
+  document.getElementById('failoverEvents').innerHTML = events.length ? events.map(event => `
+	<tr><td>${esc(new Date(event.created_at).toLocaleString('zh-CN'))}</td><td>${esc(event.event_type)}</td><td>${esc(event.from_node_id || '--')}</td><td>${esc(event.to_node_id || '--')}</td><td>${esc(event.reason_code)}</td><td>${event.success ? '成功' : '失败'}</td></tr>
+  `).join('') : '<tr><td colspan="6" class="table-empty">暂无事件</td></tr>';
+}
+
+async function setFailoverMode(mode) {
+  const result = await failoverRequest('/api/admin/failover/mode', { method: 'POST', body: JSON.stringify({ mode }) });
+  toast(result.ok ? '模式已更新' : '模式更新失败', result.ok ? 'ok' : 'err');
+  if (result.ok) loadFailoverStatus();
+}
+
+async function pauseFailoverAutomation() {
+  const active = failoverSnapshot?.state?.active_node_id;
+  if (active !== 'nosla' && active !== 'bwg') {
+	toast('当前节点状态不可用', 'err');
+	return;
+  }
+  await setFailoverMode(active === 'nosla' ? 'force_nosla' : 'force_bwg');
+}
+
+async function dryRunFailoverDNS() {
+  const result = await failoverRequest('/api/admin/dns/dry-run', {
+	method: 'POST',
+	body: JSON.stringify({ name: 'stream.mock.invalid', type: 'A', value: '192.0.2.1', ttl: 60 }),
+  });
+  toast(result.ok ? 'DNS dry-run 已完成' : 'DNS dry-run 失败', result.ok ? 'ok' : 'err');
 }
 </script>
 </body>

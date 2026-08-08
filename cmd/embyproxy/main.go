@@ -81,13 +81,53 @@ func main() {
 		return store.AppendRedactedFailoverEvent(context.Background(), event.CreatedAt.Unix(), event.EventType, event.FromNodeID, event.ToNodeID, string(event.Mode), event.ReasonCode, event.Success)
 	})
 	failoverController.SetDNSRunWriter(func(change failover.DNSChange, success bool) error {
-		return store.RecordDNSUpdateRun(context.Background(), "mock", change.Name, change.Type, change.DryRun, success, "mock", "verified")
+		propagation := "verified"
+		if change.DryRun {
+			propagation = "dry_run"
+		}
+		return store.RecordDNSUpdateRun(context.Background(), "mock", change.Name, change.Type, change.DryRun, success, "mock", propagation)
 	})
 	failoverController.SetStateWriter(func(state failover.State) error {
 		return store.SaveFailoverState(context.Background(), state.ActiveNodeID, state.DesiredNodeID, state.ObservedDNSNodeID, string(state.Mode), state.CurrentCycleKey, unixOrZero(state.CooldownUntil), unixOrZero(state.LastTransitionAt), unixOrZero(state.LastEvaluationAt), state.ReconciliationRequired)
 	})
+	failoverController.SetHealthWriter(func(result failover.HealthResult, node failover.Node) error {
+		return store.RecordFailoverHealthCheck(context.Background(), result.NodeID, time.Now().Unix(), result.Kind, result.Success, result.StatusCode, result.Latency.Milliseconds(), node.ConsecutiveFailures, node.ConsecutiveSuccesses, result.ErrorCode)
+	})
+	failoverController.SetTrafficWriter(func(sample failover.TrafficSample) error {
+		var inbound, outbound, total, quota *int64
+		var usage *float64
+		if sample.Quality == failover.TrafficKnown {
+			inbound, outbound, total, quota = &sample.InboundBytes, &sample.OutboundBytes, &sample.TotalBytes, &sample.QuotaBytes
+			if value, ok := sample.UsagePercent(); ok {
+				usage = &value
+			}
+		}
+		return store.RecordFailoverTrafficSample(context.Background(), storage.TrafficSampleRecord{
+			NodeID: sample.NodeID, SampledAt: sample.SampledAt.Unix(), CycleKey: sample.CycleKey,
+			SourceType: "controller", InboundBytes: inbound, OutboundBytes: outbound,
+			TotalBytes: total, QuotaBytes: quota, UsagePercent: usage, Quality: string(sample.Quality),
+		})
+	})
+	if saved, ok, loadErr := store.LoadFailoverState(context.Background()); loadErr != nil {
+		log.Warn("failover", "state restore failed", map[string]any{"event": "failoverStateRestoreFailed"})
+	} else if ok {
+		failoverController.RestoreState(failover.State{
+			ActiveNodeID: saved.ActiveNodeID, DesiredNodeID: saved.DesiredNodeID,
+			ObservedDNSNodeID: saved.ObservedDNSNodeID, Mode: failover.Mode(saved.Mode),
+			CooldownUntil: unixTimeOrZero(saved.CooldownUntil), LastTransitionAt: unixTimeOrZero(saved.LastTransitionAt),
+			LastEvaluationAt: unixTimeOrZero(saved.LastEvaluationAt), CurrentCycleKey: saved.CurrentCycleKey,
+			ReconciliationRequired: saved.ReconciliationRequired,
+		})
+	}
+	if savedEvents, loadErr := store.LoadFailoverEvents(context.Background(), 200); loadErr == nil {
+		restored := make([]failover.Event, 0, len(savedEvents))
+		for index, event := range savedEvents {
+			restored = append(restored, failover.Event{ID: int64(index + 1), CreatedAt: time.Unix(event.CreatedAt, 0), EventType: event.EventType, FromNodeID: event.FromNodeID, ToNodeID: event.ToNodeID, Mode: failover.Mode(event.Mode), ReasonCode: event.ReasonCode, Success: event.Success})
+		}
+		failoverController.RestoreEvents(restored)
+	}
 	for _, node := range failoverNodes {
-		if err := store.UpsertFailoverNode(context.Background(), node.ID, node.Name, string(node.Role), node.PublicHost, node.Enabled, node.Maintenance, node.Priority); err != nil {
+		if err := store.UpsertFailoverNodeConfig(context.Background(), node.ID, node.Name, string(node.Role), node.PublicHost, node.HealthURL, "", node.Enabled, node.Maintenance, node.Priority, node.ResetDay, node.ResetTimezone, node.Traffic.QuotaBytes, node.Traffic.ThresholdPct, string(failover.TrafficSourceMock)); err != nil {
 			log.Warn("failover", "node seed failed", map[string]any{"event": "failoverNodeSeedFailed", "node": node.ID})
 		}
 	}
@@ -133,6 +173,13 @@ func unixOrZero(value time.Time) int64 {
 	return value.Unix()
 }
 
+func unixTimeOrZero(value int64) time.Time {
+	if value == 0 {
+		return time.Time{}
+	}
+	return time.Unix(value, 0)
+}
+
 func registerRoutes(mux *http.ServeMux, adminHandler http.Handler, proxyHandler http.Handler) {
 	mux.Handle("/admin", adminHandler)
 	mux.Handle("/admin/", adminHandler)
@@ -167,8 +214,8 @@ func proxyRouteHandler(cfg config.Config, store *storage.Store, fallback http.Ha
 
 func defaultFailoverNodes() []failover.Node {
 	return []failover.Node{
-		{ID: "nosla", Name: "NOSLA", Role: failover.RolePrimary, PublicHost: "stream-n.149077530.xyz", Enabled: true, HealthStatus: failover.HealthUnknown, Priority: 1},
-		{ID: "bwg", Name: "BWG", Role: failover.RoleFallback, PublicHost: "stream-b.149077530.xyz", Enabled: true, HealthStatus: failover.HealthUnknown, Priority: 2},
+		{ID: "nosla", Name: "NOSLA", Role: failover.RolePrimary, PublicHost: "stream-n.149077530.xyz", Enabled: true, HealthStatus: failover.HealthUnknown, Priority: 1, ResetDay: 21, ResetTimezone: "UTC", Traffic: failover.TrafficSample{NodeID: "nosla", QuotaBytes: 1100000000000, ThresholdPct: 97, Quality: failover.TrafficUnknown}},
+		{ID: "bwg", Name: "BWG", Role: failover.RoleFallback, PublicHost: "stream-b.149077530.xyz", Enabled: true, HealthStatus: failover.HealthUnknown, Priority: 2, ResetDay: 7, ResetTimezone: "UTC", Traffic: failover.TrafficSample{NodeID: "bwg", QuotaBytes: 2000000000000, ThresholdPct: 97, Quality: failover.TrafficUnknown}},
 	}
 }
 

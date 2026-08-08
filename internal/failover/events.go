@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-var uuidLikeRE = regexp.MustCompile(`(?i)[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}`)
+var uuidLikeRE = regexp.MustCompile(`(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
 
 func RedactReason(reason string) string {
 	value := strings.TrimSpace(reason)
@@ -17,7 +17,7 @@ func RedactReason(reason string) string {
 			return "redacted"
 		}
 	}
-	if strings.ContainsAny(value, "?&=") || strings.Contains(value, "://") || uuidLikeRE.MatchString(value) {
+	if strings.ContainsAny(value, "?&=/\\") || strings.Contains(value, "://") || uuidLikeRE.MatchString(value) {
 		return "redacted"
 	}
 	if len(value) > 80 {

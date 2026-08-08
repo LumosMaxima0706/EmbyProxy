@@ -8,6 +8,18 @@ import (
 type Scheduler struct {
 	Controller *Controller
 	Interval   time.Duration
+	OnDecision func(Decision)
+}
+
+func (s Scheduler) RunOnce() Decision {
+	if s.Controller == nil {
+		return Decision{Reason: "controller_unavailable"}
+	}
+	decision := s.Controller.Evaluate()
+	if s.OnDecision != nil {
+		s.OnDecision(decision)
+	}
+	return decision
 }
 
 func (s Scheduler) Run(ctx context.Context) {
@@ -25,11 +37,9 @@ func (s Scheduler) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			decision := s.Controller.Evaluate()
-			if decision.Change {
-				// Phase 2A is mock-only. Callers explicitly apply decisions in tests.
-				_ = decision
-			}
+			// The scheduler only emits a decision. Applying it remains an
+			// explicit caller action in this local-only phase.
+			s.RunOnce()
 		}
 	}
 }

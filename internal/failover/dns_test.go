@@ -54,3 +54,39 @@ func TestDNSVerifyFailureDoesNotCommitActiveState(t *testing.T) {
 		t.Fatalf("state changed unexpectedly: before=%+v after=%+v", before, after)
 	}
 }
+
+func TestControllerDryRunRecordsWithoutChangingState(t *testing.T) {
+	provider := NewMockDNSProvider()
+	var recorded int
+	c := NewController(testNodes(), DefaultPolicyConfig(), provider)
+	c.SetDNSRunWriter(func(change DNSChange, success bool) error {
+		recorded++
+		if !change.DryRun || !success {
+			t.Fatalf("change=%+v success=%v", change, success)
+		}
+		return nil
+	})
+	before, _ := c.Status()
+	plan, err := c.DryRunDNS(context.Background(), DNSChange{Name: "stream.example", Type: "A", Value: "192.0.2.10", TTL: 60})
+	if err != nil || !plan.Change.DryRun || recorded != 1 {
+		t.Fatalf("plan=%+v err=%v recorded=%d", plan, err, recorded)
+	}
+	after, _ := c.Status()
+	if after.ActiveNodeID != before.ActiveNodeID {
+		t.Fatalf("state changed: before=%+v after=%+v", before, after)
+	}
+}
+
+func TestDNSRejectsUnsafeRecordInput(t *testing.T) {
+	provider := NewMockDNSProvider()
+	for _, change := range []DNSChange{
+		{Name: "", Type: "A", Value: "192.0.2.1"},
+		{Name: "stream.example", Type: "TXT", Value: "x"},
+		{Name: "stream.example", Type: "A", Value: ""},
+		{Name: "stream.example", Type: "A", Value: "192.0.2.1", TTL: 90000},
+	} {
+		if _, err := ApplyDNS(context.Background(), provider, change); err == nil {
+			t.Fatalf("change %+v unexpectedly accepted", change)
+		}
+	}
+}
