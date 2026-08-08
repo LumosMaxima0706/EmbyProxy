@@ -1,0 +1,36 @@
+name: Go CI
+
+on:
+  push:
+    branches:
+      - feature/mediaproxy-core-poc
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test and build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run tests
+        run: go test ./...
+
+      - name: Run race tests
+        run: go test -race ./...
+
+      - name: Build
+        run: go build ./...
