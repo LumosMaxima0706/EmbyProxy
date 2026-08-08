@@ -108,3 +108,14 @@ func validateRawPath(raw string) error {
 	}
 	return ErrNotFound
 }
+
+func normalizeSafeBasePath(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "/" {
+		return "", nil
+	}
+	if err := validateRawPath(raw); err != nil {
+		return "", ErrInvalidTarget
+	}
+	return raw, nil
+}

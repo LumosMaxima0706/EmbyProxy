@@ -31,9 +31,9 @@ func parseServerTarget(raw string) (mediaproxy.Target, error) {
 	} else {
 		port = 80
 	}
-	basePath := parsed.EscapedPath()
-	if basePath == "" {
-		basePath = "/"
+	basePath, err := normalizeSafeBasePath(parsed.EscapedPath())
+	if err != nil {
+		return mediaproxy.Target{}, ErrInvalidTarget
 	}
 	target, err := mediaproxy.ParseTarget(parsed.Scheme, parsed.Hostname(), port, basePath)
 	if err != nil {

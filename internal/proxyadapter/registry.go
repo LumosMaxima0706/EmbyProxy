@@ -48,7 +48,7 @@ func NewRegistry(slugs []SlugConfig, nodes []storage.Node) (*Registry, error) {
 			return nil, ErrInvalidSlug
 		}
 		if config.PublicPath != "" {
-			if err := validateRawPath(config.PublicPath); err != nil {
+			if _, err := normalizeSafeBasePath(config.PublicPath); err != nil {
 				return nil, ErrInvalidSlug
 			}
 		}

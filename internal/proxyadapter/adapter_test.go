@@ -89,7 +89,7 @@ func TestSlugUnknownAndQueryCannotSelectUpstream(t *testing.T) {
 		t.Fatalf("unknown status=%d", unknown.Code)
 	}
 	query := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, DefaultMockPrefix+"/s/demo/health?upstream="+url.QueryEscape(forbidden.URL)+"&url="+url.QueryEscape(forbidden.URL)+"&target="+url.QueryEscape(forbidden.URL), nil)
+	req := httptest.NewRequest(http.MethodGet, DefaultMockPrefix+"/s/demo/health?upstream="+url.QueryEscape(forbidden.URL)+"&url="+url.QueryEscape(forbidden.URL)+"&target="+url.QueryEscape(forbidden.URL)+"&host=forbidden&scheme=https&port=1", nil)
 	router.ServeHTTP(query, req)
 	if query.Code != http.StatusNoContent || allowedHits.Load() != 1 || forbiddenHits.Load() != 0 {
 		t.Fatalf("query override status=%d allowed=%d forbidden=%d", query.Code, allowedHits.Load(), forbiddenHits.Load())
@@ -133,9 +133,29 @@ func TestRegistryRejectsUnsafeSlugAndTarget(t *testing.T) {
 		"http://media.example/path#fragment",
 		"ftp://media.example",
 		"http://media.example:",
+		"http://media.example/path%2Fsegment",
+		"http://media.example/path%2fsegment",
+		"http://media.example/path%5Csegment",
+		"http://media.example/path%5csegment",
+		"http://media.example/path%2Esegment",
+		"http://media.example/path%2esegment",
+		"http://media.example/path/../segment",
+		"http://media.example/path/..%2Fsegment",
+		"http://media.example/path/%2e%2e%2fsegment",
+		"http://media.example/path%252Fsegment",
+		"http://media.example/path%252Esegment",
+		"http://media.example/path/%zz",
 	} {
 		if _, err := NewRegistry([]SlugConfig{{Slug: "demo", RawTarget: target, Enabled: true}}, nil); err != ErrInvalidTarget {
 			t.Fatalf("target %q err=%v", target, err)
+		}
+		if _, err := NewRegistry(nil, []storage.Node{{Name: "node", Target: target}}); err != ErrInvalidTarget {
+			t.Fatalf("node target %q err=%v", target, err)
+		}
+	}
+	for _, publicPath := range []string{"/s/demo/%2F", "/s/demo/%2E", "/s/demo/..%2F"} {
+		if _, err := NewRegistry([]SlugConfig{{Slug: "demo", RawTarget: "http://media.example", Enabled: true, PublicPath: publicPath}}, nil); err != ErrInvalidSlug {
+			t.Fatalf("public path %q err=%v", publicPath, err)
 		}
 	}
 }
