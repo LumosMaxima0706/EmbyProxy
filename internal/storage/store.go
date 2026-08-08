@@ -170,7 +170,10 @@ func (s *Store) InitSchema(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return s.ensurePlaybackStatColumns(ctx)
+	if err := s.ensurePlaybackStatColumns(ctx); err != nil {
+		return err
+	}
+	return s.InitFailoverSchema(ctx)
 }
 
 func (s *Store) ensurePlaybackStatColumns(ctx context.Context) error {

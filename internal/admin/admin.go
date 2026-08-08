@@ -23,6 +23,7 @@ import (
 	"embyproxy/internal/buildinfo"
 	"embyproxy/internal/capture"
 	"embyproxy/internal/config"
+	"embyproxy/internal/failover"
 	"embyproxy/internal/localtime"
 	"embyproxy/internal/logging"
 	"embyproxy/internal/proxy"
@@ -75,6 +76,11 @@ type Handler struct {
 	log        *logging.Logger
 	resetRoute ResetFunc
 	imageCache ImageCacheManager
+	failover   *failover.Controller
+}
+
+func (h *Handler) SetFailoverController(controller *failover.Controller) {
+	h.failover = controller
 }
 
 func New(cfg config.Config, store *storage.Store, checker *auth.Checker, tg *telegram.Service, log *logging.Logger, reset ResetFunc, imageCaches ...ImageCacheManager) *Handler {
@@ -124,6 +130,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Method == http.MethodGet && path == "/admin/logs/stream" {
 		h.streamLogs(w, r, res)
+		return
+	}
+	if strings.HasPrefix(path, "/api/admin/failover/") || strings.HasPrefix(path, "/api/admin/traffic/") || strings.HasPrefix(path, "/api/admin/dns/") {
+		h.handleFailoverAPI(w, r, path)
 		return
 	}
 	if r.Method == http.MethodPost && path == "/admin/api" {

@@ -18,6 +18,7 @@ import (
 	"embyproxy/internal/buildinfo"
 	"embyproxy/internal/capture"
 	"embyproxy/internal/config"
+	"embyproxy/internal/failover"
 	"embyproxy/internal/identity"
 	"embyproxy/internal/logging"
 	"embyproxy/internal/proxy"
@@ -72,6 +73,23 @@ func main() {
 	checker := auth.NewChecker(cfg, store)
 	proxyHandler := proxy.New(cfg, store, ids, log)
 	adminHandler := admin.New(cfg, store, checker, tg, log, proxyHandler.ResetNodeRoutingState, proxyHandler)
+	failoverNodes := defaultFailoverNodes()
+	failoverController := failover.NewController(failoverNodes, failover.DefaultPolicyConfig(), failover.NewMockDNSProvider())
+	failoverController.SetEventWriter(func(event failover.Event) error {
+		return store.AppendRedactedFailoverEvent(context.Background(), event.CreatedAt.Unix(), event.EventType, event.FromNodeID, event.ToNodeID, string(event.Mode), event.ReasonCode, event.Success)
+	})
+	failoverController.SetDNSRunWriter(func(change failover.DNSChange, success bool) error {
+		return store.RecordDNSUpdateRun(context.Background(), "mock", change.Name, change.Type, change.DryRun, success, "mock", "verified")
+	})
+	failoverController.SetStateWriter(func(state failover.State) error {
+		return store.SaveFailoverState(context.Background(), state.ActiveNodeID, state.DesiredNodeID, state.ObservedDNSNodeID, string(state.Mode), state.CurrentCycleKey, unixOrZero(state.CooldownUntil), unixOrZero(state.LastTransitionAt), unixOrZero(state.LastEvaluationAt), state.ReconciliationRequired)
+	})
+	for _, node := range failoverNodes {
+		if err := store.UpsertFailoverNode(context.Background(), node.ID, node.Name, string(node.Role), node.PublicHost, node.Enabled, node.Maintenance, node.Priority); err != nil {
+			log.Warn("failover", "node seed failed", map[string]any{"event": "failoverNodeSeedFailed", "node": node.ID})
+		}
+	}
+	adminHandler.SetFailoverController(failoverController)
 
 	scheduler.New(log, tg, proxyHandler.CleanupTTLMaps).Start(ctx)
 
@@ -106,9 +124,18 @@ func main() {
 	}
 }
 
+func unixOrZero(value time.Time) int64 {
+	if value.IsZero() {
+		return 0
+	}
+	return value.Unix()
+}
+
 func registerRoutes(mux *http.ServeMux, adminHandler http.Handler, proxyHandler http.Handler) {
 	mux.Handle("/admin", adminHandler)
 	mux.Handle("/admin/", adminHandler)
+	mux.Handle("/api/admin", adminHandler)
+	mux.Handle("/api/admin/", adminHandler)
 	mux.HandleFunc("/favicon.ico", func(w http.ResponseWriter, r *http.Request) {
 		capture.SetMeta(r, map[string]any{"mode": "admin", "stage": "favicon"})
 		w.WriteHeader(http.StatusNoContent)
@@ -121,6 +148,13 @@ func registerRoutes(mux *http.ServeMux, adminHandler http.Handler, proxyHandler 
 		}
 		proxyHandler.ServeHTTP(w, r)
 	})
+}
+
+func defaultFailoverNodes() []failover.Node {
+	return []failover.Node{
+		{ID: "nosla", Name: "NOSLA", Role: failover.RolePrimary, PublicHost: "stream-n.149077530.xyz", Enabled: true, HealthStatus: failover.HealthUnknown, Priority: 1},
+		{ID: "bwg", Name: "BWG", Role: failover.RoleFallback, PublicHost: "stream-b.149077530.xyz", Enabled: true, HealthStatus: failover.HealthUnknown, Priority: 2},
+	}
 }
 
 func logBuildInfo(log *logging.Logger) {
