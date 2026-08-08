@@ -18,6 +18,9 @@ func (r *Router) serveSlug(w http.ResponseWriter, req *http.Request, rawPath str
 		return true
 	}
 	target, enabled, publicPath, err := r.resolver.slug(req.Context(), parts[1])
+	if errors.Is(err, ErrNotFound) {
+		return false
+	}
 	if err != nil || !enabled {
 		status := http.StatusNotFound
 		if errors.Is(err, ErrResolver) {
@@ -47,11 +50,9 @@ func (r *Router) forward(w http.ResponseWriter, req *http.Request, path string, 
 		publicPath = r.executorConfig.PublicPrefix
 	}
 	if publicPath != "" {
-		// The executor remains the single proxy implementation; this optional
-		// prefix only controls response Location rewriting for the mock route.
-		config := r.executorConfig
-		config.PublicPrefix = publicPath
-		mediaproxy.NewExecutor(config).ServeHTTP(w, clone, target)
+		// The executor remains the single proxy implementation; this route prefix
+		// only controls response Location rewriting.
+		r.executor.ServeHTTPWithPublicPrefix(w, clone, target, publicPath)
 		return
 	}
 	r.executor.ServeHTTP(w, clone, target)

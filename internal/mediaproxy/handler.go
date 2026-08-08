@@ -26,7 +26,25 @@ func (e *Executor) SetLogger(logger Logger) {
 }
 
 func (e *Executor) ServeHTTP(w http.ResponseWriter, r *http.Request, target Target) {
-	if e == nil || r == nil {
+	if e == nil {
+		http.Error(w, "Bad Gateway", http.StatusBadGateway)
+		return
+	}
+	e.serveHTTP(w, r, target, e.cfg.PublicPrefix)
+}
+
+// ServeHTTPWithPublicPrefix reuses the executor's transport and connection
+// pool while allowing an adapter to select the externally visible route prefix.
+func (e *Executor) ServeHTTPWithPublicPrefix(w http.ResponseWriter, r *http.Request, target Target, publicPrefix string) {
+	if e == nil {
+		http.Error(w, "Bad Gateway", http.StatusBadGateway)
+		return
+	}
+	e.serveHTTP(w, r, target, publicPrefix)
+}
+
+func (e *Executor) serveHTTP(w http.ResponseWriter, r *http.Request, target Target, publicPrefix string) {
+	if r == nil {
 		http.Error(w, "Bad Gateway", http.StatusBadGateway)
 		return
 	}
@@ -72,7 +90,6 @@ func (e *Executor) ServeHTTP(w http.ResponseWriter, r *http.Request, target Targ
 		return
 	}
 	defer response.Body.Close()
-	publicPrefix := e.cfg.PublicPrefix
 	if publicPrefix == "" {
 		publicPrefix = "/"
 	}

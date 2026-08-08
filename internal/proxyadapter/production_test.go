@@ -109,6 +109,9 @@ func TestProductionNodeRouteAndFallbackBoundaries(t *testing.T) {
 	if err := store.SaveNode(context.Background(), "admin", storage.Node{Name: "multi", Target: upstream.URL + ";" + upstream.URL + "/backup"}); err != nil {
 		t.Fatal(err)
 	}
+	if err := store.SaveNode(context.Background(), "admin", storage.Node{Name: "legacy", Target: upstream.URL + "/base?legacy=1"}); err != nil {
+		t.Fatal(err)
+	}
 	var fallbackHits atomic.Int32
 	fallback := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fallbackHits.Add(1)
@@ -125,14 +128,14 @@ func TestProductionNodeRouteAndFallbackBoundaries(t *testing.T) {
 	if wrong.Code != http.StatusNotFound {
 		t.Fatalf("wrong secret status=%d", wrong.Code)
 	}
-	for _, path := range []string{"/multi/System/Ping", "/missing/System/Ping", "/http/legacy"} {
+	for _, path := range []string{"/multi/System/Ping", "/legacy/System/Ping", "/missing/System/Ping", "/http/legacy", "/https/legacy", "/api/admin", "/admin/", "/health"} {
 		recorder := httptest.NewRecorder()
 		router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
 		if recorder.Code != http.StatusTeapot {
 			t.Fatalf("fallback path=%q status=%d", path, recorder.Code)
 		}
 	}
-	if fallbackHits.Load() != 3 {
+	if fallbackHits.Load() != 8 {
 		t.Fatalf("fallback hits=%d", fallbackHits.Load())
 	}
 }
@@ -141,15 +144,22 @@ func TestProductionSlugRequiresEnabledPublicRoute(t *testing.T) {
 	store := newRouteStore(t)
 	seedManagedRoute(t, store, "disabled", "https://media.example", false, true)
 	seedManagedRoute(t, store, "private", "https://media.example", true, false)
+	var fallbackHits atomic.Int32
 	router := newProductionTestRouter(t, store, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Fatal("slug route must not fall back")
+		fallbackHits.Add(1)
+		w.WriteHeader(http.StatusTeapot)
 	}))
-	for _, path := range []string{"/s/disabled/item", "/s/private/item", "/s/missing/item"} {
+	for _, path := range []string{"/s/disabled/item", "/s/private/item"} {
 		recorder := httptest.NewRecorder()
 		router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
 		if recorder.Code != http.StatusNotFound {
 			t.Fatalf("path=%q status=%d", path, recorder.Code)
 		}
+	}
+	unknown := httptest.NewRecorder()
+	router.ServeHTTP(unknown, httptest.NewRequest(http.MethodGet, "/s/missing/item", nil))
+	if unknown.Code != http.StatusTeapot || fallbackHits.Load() != 1 {
+		t.Fatalf("unknown slug status=%d fallbackHits=%d", unknown.Code, fallbackHits.Load())
 	}
 }
 
@@ -212,6 +222,9 @@ func TestProductionLogsDoNotContainRequestSecrets(t *testing.T) {
 	req.Header.Set("Cookie", "redacted")
 	router.ServeHTTP(httptest.NewRecorder(), req)
 	joined := strings.Join(logged, "\n")
+	if len(logged) == 0 {
+		t.Fatal("expected the shared executor to emit a request log")
+	}
 	for _, blocked := range []string{"private-segment", "credential", "Authorization", "Cookie", "hidden"} {
 		if strings.Contains(joined, blocked) {
 			t.Fatalf("log contains blocked value %q", blocked)

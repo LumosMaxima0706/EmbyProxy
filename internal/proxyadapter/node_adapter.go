@@ -18,7 +18,7 @@ func (r *Router) serveNode(w http.ResponseWriter, req *http.Request, rawPath str
 	}
 	node, target, err := r.resolver.node(req.Context(), parts[0])
 	if err != nil {
-		if r.fallback != nil && (errors.Is(err, ErrNotFound) || errors.Is(err, ErrMultipleTarget)) {
+		if r.fallback != nil && (errors.Is(err, ErrNotFound) || errors.Is(err, ErrMultipleTarget) || errors.Is(err, ErrInvalidTarget)) {
 			return false
 		}
 		if errors.Is(err, ErrResolver) {

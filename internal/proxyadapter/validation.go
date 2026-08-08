@@ -18,6 +18,7 @@ var (
 	ErrInvalidSecret  = errors.New("invalid node secret")
 	ErrMultipleTarget = errors.New("multiple node targets are not supported by this route adapter")
 	ErrResolver       = errors.New("route resolver unavailable")
+	ErrRouteDisabled  = errors.New("managed route is disabled or private")
 )
 
 var slugPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,30}[a-z0-9]$|^[a-z0-9]$`)

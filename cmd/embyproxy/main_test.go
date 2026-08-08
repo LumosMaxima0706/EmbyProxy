@@ -218,12 +218,24 @@ func TestEntryRoutesSetTrafficCaptureStage(t *testing.T) {
 }
 
 func TestProxyRouteHandlerDefaultsToLegacyProxy(t *testing.T) {
+	store, err := storage.New(filepath.Join(t.TempDir(), "proxy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if _, err := store.DB().ExecContext(context.Background(), `
+		INSERT INTO managed_routes
+			(slug, node_name, enabled, public, default_line, created_at, updated_at)
+		VALUES ('demo', 'demo-node', 1, 1, 'main', 1, 1)
+	`); err != nil {
+		t.Fatal(err)
+	}
 	fallback := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusTeapot)
 	})
-	handler := proxyRouteHandler(config.Config{}, nil, fallback)
+	handler := proxyRouteHandler(config.Config{}, store, fallback)
 	recorder := httptest.NewRecorder()
-	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/node/path", nil))
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/s/demo/path", nil))
 	if recorder.Code != http.StatusTeapot {
 		t.Fatalf("status=%d", recorder.Code)
 	}

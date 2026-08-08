@@ -35,8 +35,11 @@ func (r *StorageResolver) slug(ctx context.Context, slug string) (mediaproxy.Tar
 	if err != nil {
 		return mediaproxy.Target{}, false, "", fmt.Errorf("%w: managed route lookup", ErrResolver)
 	}
-	if route == nil || !route.Enabled || !route.Public {
+	if route == nil {
 		return mediaproxy.Target{}, false, "", ErrNotFound
+	}
+	if !route.Enabled || !route.Public {
+		return mediaproxy.Target{}, false, "", ErrRouteDisabled
 	}
 	lines, err := r.store.ListManagedRouteLines(ctx, slug)
 	if err != nil {
@@ -44,7 +47,7 @@ func (r *StorageResolver) slug(ctx context.Context, slug string) (mediaproxy.Tar
 	}
 	line, ok := selectManagedLine(route.DefaultLine, lines)
 	if !ok {
-		return mediaproxy.Target{}, false, "", ErrNotFound
+		return mediaproxy.Target{}, false, "", ErrRouteDisabled
 	}
 	target, err := parseServerTarget(line.Target)
 	if err != nil {
