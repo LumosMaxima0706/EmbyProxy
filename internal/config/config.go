@@ -24,6 +24,7 @@ type Config struct {
 	Port             int
 	AdminToken       string
 	Admin2FADisabled bool
+	MediaProxyRoutes bool
 	Defaults         Defaults
 }
 
@@ -50,6 +51,7 @@ func Load() (Config, error) {
 		Port:             envInt("PORT", 8787),
 		AdminToken:       os.Getenv("ADMIN_TOKEN"),
 		Admin2FADisabled: envBool("ADMIN_2FA_DISABLED", false),
+		MediaProxyRoutes: envBool("MEDIAPROXY_ROUTES_ENABLED", false),
 		Defaults: Defaults{
 			CacheTTL:           10000,
 			ListCacheTTL:       180000,

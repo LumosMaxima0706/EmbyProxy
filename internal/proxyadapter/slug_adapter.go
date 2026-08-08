@@ -1,10 +1,12 @@
 package proxyadapter
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 
 	"embyproxy/internal/mediaproxy"
+	"embyproxy/internal/requestlog"
 )
 
 func (r *Router) serveSlug(w http.ResponseWriter, req *http.Request, rawPath string, parts []string) bool {
@@ -15,11 +17,16 @@ func (r *Router) serveSlug(w http.ResponseWriter, req *http.Request, rawPath str
 		http.Error(w, "Not Found", http.StatusNotFound)
 		return true
 	}
-	target, enabled, publicPath, err := r.registry.slug(parts[1])
+	target, enabled, publicPath, err := r.resolver.slug(req.Context(), parts[1])
 	if err != nil || !enabled {
-		http.Error(w, "Not Found", http.StatusNotFound)
+		status := http.StatusNotFound
+		if errors.Is(err, ErrResolver) {
+			status = http.StatusBadGateway
+		}
+		http.Error(w, http.StatusText(status), status)
 		return true
 	}
+	requestlog.SetRequestURI(req.Context(), "/s/"+parts[1]+"/<path>")
 	pathStart := 2
 	forward := "/"
 	if len(parts) > pathStart {

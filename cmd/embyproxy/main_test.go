@@ -217,6 +217,35 @@ func TestEntryRoutesSetTrafficCaptureStage(t *testing.T) {
 	assertCaptureRouteMeta(t, records[1], "admin", "favicon", "/favicon.ico", http.StatusNoContent)
 }
 
+func TestProxyRouteHandlerDefaultsToLegacyProxy(t *testing.T) {
+	fallback := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTeapot)
+	})
+	handler := proxyRouteHandler(config.Config{}, nil, fallback)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/node/path", nil))
+	if recorder.Code != http.StatusTeapot {
+		t.Fatalf("status=%d", recorder.Code)
+	}
+}
+
+func TestProxyRouteHandlerEnabledKeepsLegacyFallback(t *testing.T) {
+	store, err := storage.New(filepath.Join(t.TempDir(), "proxy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	fallback := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTeapot)
+	})
+	handler := proxyRouteHandler(config.Config{MediaProxyRoutes: true}, store, fallback)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/missing/path", nil))
+	if recorder.Code != http.StatusTeapot {
+		t.Fatalf("status=%d", recorder.Code)
+	}
+}
+
 func assertCaptureRouteMeta(t *testing.T, record capture.Record, mode, stage, inboundURL string, status int) {
 	t.Helper()
 	if record.Mode != mode || record.Stage != stage || record.InboundURL != inboundURL || record.Status != status {

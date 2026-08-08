@@ -16,7 +16,8 @@ var (
 	ErrInvalidNode    = errors.New("invalid node")
 	ErrMissingSecret  = errors.New("missing node secret")
 	ErrInvalidSecret  = errors.New("invalid node secret")
-	ErrMultipleTarget = errors.New("multiple node targets are not supported by mock adapter")
+	ErrMultipleTarget = errors.New("multiple node targets are not supported by this route adapter")
+	ErrResolver       = errors.New("route resolver unavailable")
 )
 
 var slugPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,30}[a-z0-9]$|^[a-z0-9]$`)

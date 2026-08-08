@@ -1,8 +1,11 @@
 package proxyadapter
 
 import (
+	"errors"
 	"net/http"
 	"strings"
+
+	"embyproxy/internal/requestlog"
 )
 
 func (r *Router) serveNode(w http.ResponseWriter, req *http.Request, rawPath string, parts []string) bool {
@@ -13,8 +16,15 @@ func (r *Router) serveNode(w http.ResponseWriter, req *http.Request, rawPath str
 		http.Error(w, "Not Found", http.StatusNotFound)
 		return true
 	}
-	node, target, err := r.registry.node(parts[0])
+	node, target, err := r.resolver.node(req.Context(), parts[0])
 	if err != nil {
+		if r.fallback != nil && (errors.Is(err, ErrNotFound) || errors.Is(err, ErrMultipleTarget)) {
+			return false
+		}
+		if errors.Is(err, ErrResolver) {
+			http.Error(w, http.StatusText(http.StatusBadGateway), http.StatusBadGateway)
+			return true
+		}
 		http.Error(w, "Not Found", http.StatusNotFound)
 		return true
 	}
@@ -30,6 +40,11 @@ func (r *Router) serveNode(w http.ResponseWriter, req *http.Request, rawPath str
 		}
 		strip = 2
 	}
+	logPath := "/" + parts[0] + "/<path>"
+	if node.Secret != "" {
+		logPath = "/" + parts[0] + "/<secret>/<path>"
+	}
+	requestlog.SetRequestURI(req.Context(), logPath)
 	forward := "/"
 	if len(parts) > strip {
 		forward = "/" + strings.Join(parts[strip:], "/")
@@ -37,6 +52,7 @@ func (r *Router) serveNode(w http.ResponseWriter, req *http.Request, rawPath str
 	if strings.HasSuffix(rawPath, "/") && !strings.HasSuffix(forward, "/") {
 		forward += "/"
 	}
-	r.forward(w, req, forward, target, "")
+	publicPath := "/" + strings.Join(parts[:strip], "/") + "/"
+	r.forward(w, req, forward, target, publicPath)
 	return true
 }

@@ -173,7 +173,10 @@ func (s *Store) InitSchema(ctx context.Context) error {
 	if err := s.ensurePlaybackStatColumns(ctx); err != nil {
 		return err
 	}
-	return s.InitFailoverSchema(ctx)
+	if err := s.InitFailoverSchema(ctx); err != nil {
+		return err
+	}
+	return s.InitManagedRoutesSchema(ctx)
 }
 
 func (s *Store) ensurePlaybackStatColumns(ctx context.Context) error {

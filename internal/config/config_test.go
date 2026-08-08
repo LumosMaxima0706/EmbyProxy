@@ -22,3 +22,32 @@ func TestEnvBoolParsesAdmin2FADisabledValues(t *testing.T) {
 		})
 	}
 }
+
+func TestMediaProxyRoutesDisabledByDefault(t *testing.T) {
+	t.Setenv("MEDIAPROXY_ROUTES_ENABLED", "")
+	if got := envBool("MEDIAPROXY_ROUTES_ENABLED", false); got {
+		t.Fatal("mediaproxy production routes must default to disabled")
+	}
+}
+
+func TestLoadReadsMediaProxyRoutesFlag(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		value string
+		want  bool
+	}{
+		{name: "enabled", value: "true", want: true},
+		{name: "disabled", value: "false", want: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("MEDIAPROXY_ROUTES_ENABLED", tt.value)
+			cfg, err := Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.MediaProxyRoutes != tt.want {
+				t.Fatalf("MediaProxyRoutes=%v, want %v", cfg.MediaProxyRoutes, tt.want)
+			}
+		})
+	}
+}

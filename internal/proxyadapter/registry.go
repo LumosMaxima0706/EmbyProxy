@@ -1,6 +1,7 @@
 package proxyadapter
 
 import (
+	"context"
 	"strings"
 	"sync"
 
@@ -24,6 +25,11 @@ type slugRecord struct {
 type nodeRecord struct {
 	node   storage.Node
 	target mediaproxy.Target
+}
+
+type Resolver interface {
+	slug(context.Context, string) (mediaproxy.Target, bool, string, error)
+	node(context.Context, string) (storage.Node, mediaproxy.Target, error)
 }
 
 // Registry is an immutable-after-construction server-side route snapshot.
@@ -81,7 +87,7 @@ func NewRegistry(slugs []SlugConfig, nodes []storage.Node) (*Registry, error) {
 	return registry, nil
 }
 
-func (r *Registry) slug(slug string) (mediaproxy.Target, bool, string, error) {
+func (r *Registry) slug(_ context.Context, slug string) (mediaproxy.Target, bool, string, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	record, ok := r.slugs[slug]
@@ -91,7 +97,7 @@ func (r *Registry) slug(slug string) (mediaproxy.Target, bool, string, error) {
 	return record.target, record.enabled, record.publicPath, nil
 }
 
-func (r *Registry) node(name string) (storage.Node, mediaproxy.Target, error) {
+func (r *Registry) node(_ context.Context, name string) (storage.Node, mediaproxy.Target, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	record, ok := r.nodes[strings.ToLower(name)]

@@ -21,7 +21,9 @@ import (
 	"embyproxy/internal/failover"
 	"embyproxy/internal/identity"
 	"embyproxy/internal/logging"
+	"embyproxy/internal/mediaproxy"
 	"embyproxy/internal/proxy"
+	"embyproxy/internal/proxyadapter"
 	"embyproxy/internal/requestlog"
 	"embyproxy/internal/scheduler"
 	"embyproxy/internal/storage"
@@ -94,7 +96,7 @@ func main() {
 	scheduler.New(log, tg, proxyHandler.CleanupTTLMaps).Start(ctx)
 
 	mux := http.NewServeMux()
-	registerRoutes(mux, adminHandler, proxyHandler)
+	registerRoutes(mux, adminHandler, proxyRouteHandler(cfg, store, proxyHandler))
 
 	var handler http.Handler = mux
 	handler = capture.New(cfg, store, log).Middleware(handler)
@@ -148,6 +150,19 @@ func registerRoutes(mux *http.ServeMux, adminHandler http.Handler, proxyHandler 
 		}
 		proxyHandler.ServeHTTP(w, r)
 	})
+}
+
+func proxyRouteHandler(cfg config.Config, store *storage.Store, fallback http.Handler) http.Handler {
+	if !cfg.MediaProxyRoutes || store == nil {
+		return fallback
+	}
+	mediaConfig := mediaproxy.Config{TrustProxyEnv: true}
+	return proxyadapter.NewProductionRouter(
+		proxyadapter.NewStorageResolver(store, "admin"),
+		mediaproxy.NewExecutor(mediaConfig),
+		mediaConfig,
+		fallback,
+	)
 }
 
 func defaultFailoverNodes() []failover.Node {
