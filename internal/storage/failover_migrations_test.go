@@ -74,3 +74,71 @@ func TestFailoverStateAndEventsRoundTrip(t *testing.T) {
 		t.Fatalf("events=%+v err=%v", events, err)
 	}
 }
+
+func TestFailoverRuntimeLoadsLatestHealthAndTraffic(t *testing.T) {
+	store, err := New(filepath.Join(t.TempDir(), "proxy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	if err := store.RecordFailoverHealthCheck(ctx, "nosla", 100, "mock", false, 503, 5, 2, 0, "down"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordFailoverHealthCheck(ctx, "nosla", 101, "mock", true, 200, 5, 0, 1, ""); err != nil {
+		t.Fatal(err)
+	}
+	value := int64(950)
+	if err := store.RecordFailoverTrafficSample(ctx, TrafficSampleRecord{NodeID: "nosla", SampledAt: 100, CycleKey: "cycle-a", Quality: "known", TotalBytes: &value}); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := store.LoadFailoverNodeRuntime(ctx)
+	if err != nil || runtime["nosla"].ConsecutiveSuccesses != 1 || runtime["nosla"].Traffic.CycleKey != "cycle-a" {
+		t.Fatalf("runtime=%+v err=%v", runtime, err)
+	}
+}
+
+func TestLoadFailoverStateHandlesNullTimeColumns(t *testing.T) {
+	store, err := New(filepath.Join(t.TempDir(), "proxy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO failover_state (scope, mode, updated_at) VALUES ('default', 'auto', 1)`); err != nil {
+		t.Fatal(err)
+	}
+	state, ok, err := store.LoadFailoverState(ctx)
+	if err != nil || !ok || state.ActiveNodeID != "" || state.CooldownUntil != 0 {
+		t.Fatalf("state=%+v ok=%v err=%v", state, ok, err)
+	}
+}
+
+func TestFailoverTransactionRollsBackRunAndEventWhenStateFails(t *testing.T) {
+	store, err := New(filepath.Join(t.TempDir(), "proxy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	if _, err := store.db.ExecContext(ctx, `CREATE TRIGGER failover_state_block BEFORE INSERT ON failover_state BEGIN SELECT RAISE(ABORT, 'blocked'); END`); err != nil {
+		t.Fatal(err)
+	}
+	err = store.CommitDNSUpdate(ctx, DNSUpdateRunRecord{StartedAt: 1, CompletedAt: 2, ProviderKind: "mock", RecordName: "stream.example", RecordType: "A", Success: true}, FailoverStateRecord{ActiveNodeID: "bwg", Mode: "auto"}, FailoverEventRecord{CreatedAt: 2, EventType: "switch", Mode: "auto", Success: true})
+	if err == nil {
+		t.Fatal("expected transaction failure")
+	}
+	var count int
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM dns_update_runs`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("dns runs after rollback = %d", count)
+	}
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM failover_events`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("events after rollback = %d", count)
+	}
+}

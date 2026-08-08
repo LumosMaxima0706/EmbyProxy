@@ -72,9 +72,13 @@ func (h *HealthTracker) Record(result HealthResult) {
 		node.ConsecutiveSuccesses++
 		node.ConsecutiveFailures = 0
 	} else {
-		node.HealthStatus = HealthFailed
 		node.ConsecutiveFailures++
 		node.ConsecutiveSuccesses = 0
+		if node.ConsecutiveFailures >= 3 {
+			node.HealthStatus = HealthFailed
+		} else {
+			node.HealthStatus = HealthDegraded
+		}
 	}
 	h.Nodes[result.NodeID] = node
 }

@@ -29,23 +29,183 @@ type FailoverStateRecord struct {
 	ReconciliationRequired bool
 }
 
+type DNSUpdateRunRecord struct {
+	StartedAt         int64
+	CompletedAt       int64
+	ProviderKind      string
+	RecordName        string
+	RecordType        string
+	DryRun            bool
+	ProviderResult    string
+	PropagationResult string
+	Success           bool
+}
+
+type FailoverNodeRuntime struct {
+	NodeID               string
+	HealthStatus         string
+	ConsecutiveFailures  int
+	ConsecutiveSuccesses int
+	Traffic              TrafficSampleRecord
+}
+
+func (s *Store) LoadFailoverNodeRuntime(ctx context.Context) (map[string]FailoverNodeRuntime, error) {
+	result := make(map[string]FailoverNodeRuntime)
+	healthRows, err := s.db.QueryContext(ctx, `
+		SELECT node_id, success, consecutive_failure_count, consecutive_success_count, last_error
+		FROM failover_health_checks ORDER BY id DESC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	for healthRows.Next() {
+		var nodeID, lastError string
+		var success, failures, successes int
+		if err := healthRows.Scan(&nodeID, &success, &failures, &successes, &lastError); err != nil {
+			healthRows.Close()
+			return nil, err
+		}
+		if _, exists := result[nodeID]; exists {
+			continue
+		}
+		status := "failed"
+		if success != 0 {
+			status = "healthy"
+		}
+		result[nodeID] = FailoverNodeRuntime{NodeID: nodeID, HealthStatus: status, ConsecutiveFailures: failures, ConsecutiveSuccesses: successes}
+	}
+	if err := healthRows.Err(); err != nil {
+		healthRows.Close()
+		return nil, err
+	}
+	healthRows.Close()
+	trafficRows, err := s.db.QueryContext(ctx, `
+		SELECT node_id, sampled_at, cycle_key, source_type, inbound_bytes, outbound_bytes, total_bytes, quota_bytes, usage_percent, quality, source_ref
+		FROM failover_traffic_samples ORDER BY id DESC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer trafficRows.Close()
+	for trafficRows.Next() {
+		var sample TrafficSampleRecord
+		var inbound, outbound, total, quota sql.NullInt64
+		var usage sql.NullFloat64
+		if err := trafficRows.Scan(&sample.NodeID, &sample.SampledAt, &sample.CycleKey, &sample.SourceType, &inbound, &outbound, &total, &quota, &usage, &sample.Quality, &sample.SourceRef); err != nil {
+			return nil, err
+		}
+		if _, exists := result[sample.NodeID]; !exists {
+			result[sample.NodeID] = FailoverNodeRuntime{NodeID: sample.NodeID}
+		}
+		runtime := result[sample.NodeID]
+		if runtime.Traffic.SampledAt != 0 {
+			continue
+		}
+		if inbound.Valid {
+			value := inbound.Int64
+			sample.InboundBytes = &value
+		}
+		if outbound.Valid {
+			value := outbound.Int64
+			sample.OutboundBytes = &value
+		}
+		if total.Valid {
+			value := total.Int64
+			sample.TotalBytes = &value
+		}
+		if quota.Valid {
+			value := quota.Int64
+			sample.QuotaBytes = &value
+		}
+		if usage.Valid {
+			value := usage.Float64
+			sample.UsagePercent = &value
+		}
+		runtime.Traffic = sample
+		result[sample.NodeID] = runtime
+	}
+	return result, trafficRows.Err()
+}
+
+// CommitFailoverTransition keeps an in-memory transition unpublished until
+// both its event and state rows commit in one SQLite transaction.
+func (s *Store) CommitFailoverTransition(ctx context.Context, state FailoverStateRecord, event FailoverEventRecord) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := appendFailoverEventTx(ctx, tx, event); err != nil {
+		return err
+	}
+	if err := saveFailoverStateTx(ctx, tx, state); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// CommitDNSUpdate atomically records the provider result, audit event, and
+// resulting local state. The provider call itself occurs before this method.
+func (s *Store) CommitDNSUpdate(ctx context.Context, run DNSUpdateRunRecord, state FailoverStateRecord, event FailoverEventRecord) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := recordDNSUpdateRunTx(ctx, tx, run); err != nil {
+		return err
+	}
+	if err := appendFailoverEventTx(ctx, tx, event); err != nil {
+		return err
+	}
+	if err := saveFailoverStateTx(ctx, tx, state); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func (s *Store) LoadFailoverState(ctx context.Context) (FailoverStateRecord, bool, error) {
 	var record FailoverStateRecord
-	var cooldown, transition, evaluation, reconciliation int64
+	var active, desired, observed, cycle sql.NullString
+	var mode sql.NullString
+	var cooldown, transition, evaluation, reconciliation sql.NullInt64
 	err := s.db.QueryRowContext(ctx, `
 		SELECT active_node_id, desired_node_id, observed_dns_node_id, mode,
 		cooldown_until, last_transition_at, last_evaluation_at, current_cycle_key, reconciliation_required
 		FROM failover_state WHERE scope = 'default'
-	`).Scan(&record.ActiveNodeID, &record.DesiredNodeID, &record.ObservedDNSNodeID, &record.Mode,
-		&cooldown, &transition, &evaluation, &record.CurrentCycleKey, &reconciliation)
+	`).Scan(&active, &desired, &observed, &mode,
+		&cooldown, &transition, &evaluation, &cycle, &reconciliation)
 	if err == sql.ErrNoRows {
 		return FailoverStateRecord{}, false, nil
 	}
 	if err != nil {
 		return FailoverStateRecord{}, false, err
 	}
-	record.CooldownUntil, record.LastTransitionAt, record.LastEvaluationAt = cooldown, transition, evaluation
-	record.ReconciliationRequired = reconciliation != 0
+	if active.Valid {
+		record.ActiveNodeID = active.String
+	}
+	if desired.Valid {
+		record.DesiredNodeID = desired.String
+	}
+	if observed.Valid {
+		record.ObservedDNSNodeID = observed.String
+	}
+	if mode.Valid {
+		record.Mode = mode.String
+	}
+	if cooldown.Valid {
+		record.CooldownUntil = cooldown.Int64
+	}
+	if transition.Valid {
+		record.LastTransitionAt = transition.Int64
+	}
+	if evaluation.Valid {
+		record.LastEvaluationAt = evaluation.Int64
+	}
+	if cycle.Valid {
+		record.CurrentCycleKey = cycle.String
+	}
+	record.ReconciliationRequired = reconciliation.Valid && reconciliation.Int64 != 0
 	return record, true, nil
 }
 
@@ -184,7 +344,15 @@ func (s *Store) AppendRedactedFailoverEvent(ctx context.Context, createdAt int64
 }
 
 func (s *Store) SaveFailoverState(ctx context.Context, active, desired, observed, mode, cycle string, cooldownUntil, lastTransition, lastEvaluation int64, reconciliation bool) error {
-	_, err := s.db.ExecContext(ctx, `
+	return saveFailoverStateTx(ctx, s.db, FailoverStateRecord{ActiveNodeID: active, DesiredNodeID: desired, ObservedDNSNodeID: observed, Mode: mode, CurrentCycleKey: cycle, CooldownUntil: cooldownUntil, LastTransitionAt: lastTransition, LastEvaluationAt: lastEvaluation, ReconciliationRequired: reconciliation})
+}
+
+type sqlFailoverExecutor interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+func saveFailoverStateTx(ctx context.Context, exec sqlFailoverExecutor, state FailoverStateRecord) error {
+	_, err := exec.ExecContext(ctx, `
 		INSERT INTO failover_state (scope, active_node_id, desired_node_id, observed_dns_node_id, mode, current_cycle_key, cooldown_until, last_transition_at, last_evaluation_at, reconciliation_required, updated_at)
 		VALUES ('default', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(scope) DO UPDATE SET active_node_id=excluded.active_node_id,
@@ -192,12 +360,16 @@ func (s *Store) SaveFailoverState(ctx context.Context, active, desired, observed
 		mode=excluded.mode, current_cycle_key=excluded.current_cycle_key, cooldown_until=excluded.cooldown_until,
 		last_transition_at=excluded.last_transition_at, last_evaluation_at=excluded.last_evaluation_at,
 		reconciliation_required=excluded.reconciliation_required, updated_at=excluded.updated_at
-	`, active, desired, observed, mode, cycle, cooldownUntil, lastTransition, lastEvaluation, reconciliation, time.Now().Unix())
+	`, state.ActiveNodeID, state.DesiredNodeID, state.ObservedDNSNodeID, state.Mode, state.CurrentCycleKey, state.CooldownUntil, state.LastTransitionAt, state.LastEvaluationAt, state.ReconciliationRequired, time.Now().Unix())
 	return err
 }
 
 func (s *Store) AppendFailoverEvent(ctx context.Context, event FailoverEventRecord) error {
-	_, err := s.db.ExecContext(ctx, `
+	return appendFailoverEventTx(ctx, s.db, event)
+}
+
+func appendFailoverEventTx(ctx context.Context, exec sqlFailoverExecutor, event FailoverEventRecord) error {
+	_, err := exec.ExecContext(ctx, `
 		INSERT INTO failover_events
 		(created_at, event_type, from_node_id, to_node_id, mode, reason_code, success)
 		VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -207,11 +379,32 @@ func (s *Store) AppendFailoverEvent(ctx context.Context, event FailoverEventReco
 
 func (s *Store) RecordDNSUpdateRun(ctx context.Context, provider, name, recordType string, dryRun, success bool, providerResult, propagationResult string) error {
 	now := time.Now().Unix()
-	_, err := s.db.ExecContext(ctx, `
+	return recordDNSUpdateRunTx(ctx, s.db, DNSUpdateRunRecord{StartedAt: now, CompletedAt: now, ProviderKind: provider, RecordName: name, RecordType: recordType, DryRun: dryRun, ProviderResult: providerResult, PropagationResult: propagationResult, Success: success})
+}
+
+func (s *Store) LoadLatestDNSUpdateRun(ctx context.Context) (DNSUpdateRunRecord, bool, error) {
+	var run DNSUpdateRunRecord
+	var dryRun, success int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT started_at, completed_at, provider_kind, record_name, record_type, dry_run, provider_result, propagation_result, success
+		FROM dns_update_runs ORDER BY id DESC LIMIT 1
+	`).Scan(&run.StartedAt, &run.CompletedAt, &run.ProviderKind, &run.RecordName, &run.RecordType, &dryRun, &run.ProviderResult, &run.PropagationResult, &success)
+	if err == sql.ErrNoRows {
+		return DNSUpdateRunRecord{}, false, nil
+	}
+	if err != nil {
+		return DNSUpdateRunRecord{}, false, err
+	}
+	run.DryRun, run.Success = dryRun != 0, success != 0
+	return run, true, nil
+}
+
+func recordDNSUpdateRunTx(ctx context.Context, exec sqlFailoverExecutor, run DNSUpdateRunRecord) error {
+	_, err := exec.ExecContext(ctx, `
 		INSERT INTO dns_update_runs
 		(started_at, completed_at, provider_kind, record_name, record_type, dry_run, provider_result, propagation_result, success)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, now, now, provider, name, recordType, dryRun, providerResult, propagationResult, success)
+	`, run.StartedAt, run.CompletedAt, run.ProviderKind, run.RecordName, run.RecordType, run.DryRun, run.ProviderResult, run.PropagationResult, run.Success)
 	return err
 }
 

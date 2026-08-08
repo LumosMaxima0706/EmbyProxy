@@ -90,6 +90,7 @@ type PolicyConfig struct {
 	TrafficThresholdPct  float64
 	AllowUnknownRecovery bool
 	MaxSwitchesPerWindow int
+	SwitchWindow         time.Duration
 }
 
 func DefaultPolicyConfig() PolicyConfig {
@@ -100,6 +101,7 @@ func DefaultPolicyConfig() PolicyConfig {
 		TrafficThresholdPct:  97,
 		AllowUnknownRecovery: false,
 		MaxSwitchesPerWindow: 3,
+		SwitchWindow:         24 * time.Hour,
 	}
 }
 

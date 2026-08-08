@@ -62,6 +62,9 @@ func normalizePolicyConfig(cfg PolicyConfig) PolicyConfig {
 	if cfg.MaxSwitchesPerWindow <= 0 {
 		cfg.MaxSwitchesPerWindow = defaults.MaxSwitchesPerWindow
 	}
+	if cfg.SwitchWindow <= 0 {
+		cfg.SwitchWindow = defaults.SwitchWindow
+	}
 	return cfg
 }
 

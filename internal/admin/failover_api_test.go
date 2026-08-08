@@ -111,3 +111,18 @@ func TestUnknownTrafficAPIDoesNotReportZeroUsage(t *testing.T) {
 		}
 	}
 }
+
+func TestDNSStatusIncludesPersistedLatestRun(t *testing.T) {
+	handler := newAuthTestHandler(t, failoverTestConfig())
+	handler.SetFailoverController(failover.NewController([]failover.Node{
+		{ID: "nosla", Role: failover.RolePrimary, Enabled: true},
+		{ID: "bwg", Role: failover.RoleFallback, Enabled: true},
+	}, failover.DefaultPolicyConfig(), failover.NewMockDNSProvider()))
+	handler.SetDNSStatusReader(func() map[string]any { return map[string]any{"available": true, "success": false} })
+	login := serveAdminJSON(t, handler, http.MethodPost, "/admin/auth/login", map[string]any{"token": "strong-admin-token"}, nil)
+	cookie := login.Result().Cookies()[0]
+	response := serveAdminJSON(t, handler, http.MethodGet, "/api/admin/dns/status", nil, cookie)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"last_run"`) {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+}

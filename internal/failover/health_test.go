@@ -39,3 +39,13 @@ func TestHealthTrackerIsRaceSafeForConcurrentRecords(t *testing.T) {
 		}
 	}
 }
+
+func TestHealthTrackerDistinguishesProbeFailureFromFailoverEligibility(t *testing.T) {
+	tracker := NewHealthTracker(testNodes())
+	tracker.Record(HealthResultAt("nosla", "mock", false, 503, 0, "unavailable"))
+	for _, node := range tracker.Snapshot() {
+		if node.ID == "nosla" && node.HealthStatus != HealthDegraded {
+			t.Fatalf("node = %+v", node)
+		}
+	}
+}

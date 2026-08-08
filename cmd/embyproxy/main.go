@@ -75,7 +75,9 @@ func main() {
 	checker := auth.NewChecker(cfg, store)
 	proxyHandler := proxy.New(cfg, store, ids, log)
 	adminHandler := admin.New(cfg, store, checker, tg, log, proxyHandler.ResetNodeRoutingState, proxyHandler)
-	failoverNodes := defaultFailoverNodes()
+	// Failover nodes are intentionally not seeded during normal startup. Local
+	// tests and explicit mock fixtures provide their own node registry.
+	failoverNodes := []failover.Node{}
 	failoverController := failover.NewController(failoverNodes, failover.DefaultPolicyConfig(), failover.NewMockDNSProvider())
 	failoverController.SetEventWriter(func(event failover.Event) error {
 		return store.AppendRedactedFailoverEvent(context.Background(), event.CreatedAt.Unix(), event.EventType, event.FromNodeID, event.ToNodeID, string(event.Mode), event.ReasonCode, event.Success)
@@ -84,11 +86,30 @@ func main() {
 		propagation := "verified"
 		if change.DryRun {
 			propagation = "dry_run"
+		} else if !success {
+			propagation = "failed"
 		}
 		return store.RecordDNSUpdateRun(context.Background(), "mock", change.Name, change.Type, change.DryRun, success, "mock", propagation)
 	})
+	failoverController.SetDNSPendingWriter(func(change failover.DNSChange) error {
+		return store.RecordDNSUpdateRun(context.Background(), "mock", change.Name, change.Type, false, false, "pending", "pending")
+	})
 	failoverController.SetStateWriter(func(state failover.State) error {
 		return store.SaveFailoverState(context.Background(), state.ActiveNodeID, state.DesiredNodeID, state.ObservedDNSNodeID, string(state.Mode), state.CurrentCycleKey, unixOrZero(state.CooldownUntil), unixOrZero(state.LastTransitionAt), unixOrZero(state.LastEvaluationAt), state.ReconciliationRequired)
+	})
+	failoverController.SetTransitionWriter(func(state failover.State, event failover.Event) error {
+		return store.CommitFailoverTransition(context.Background(), failoverStateRecord(state), failoverEventRecord(event))
+	})
+	failoverController.SetDNSCommitWriter(func(change failover.DNSChange, state failover.State, event failover.Event, success bool) error {
+		propagation := "failed"
+		if success {
+			propagation = "verified"
+		}
+		return store.CommitDNSUpdate(context.Background(), storage.DNSUpdateRunRecord{
+			StartedAt: time.Now().Unix(), CompletedAt: time.Now().Unix(), ProviderKind: "mock",
+			RecordName: change.Name, RecordType: change.Type, DryRun: change.DryRun,
+			ProviderResult: "mock", PropagationResult: propagation, Success: success,
+		}, failoverStateRecord(state), failoverEventRecord(event))
 	})
 	failoverController.SetHealthWriter(func(result failover.HealthResult, node failover.Node) error {
 		return store.RecordFailoverHealthCheck(context.Background(), result.NodeID, time.Now().Unix(), result.Kind, result.Success, result.StatusCode, result.Latency.Milliseconds(), node.ConsecutiveFailures, node.ConsecutiveSuccesses, result.ErrorCode)
@@ -126,12 +147,20 @@ func main() {
 		}
 		failoverController.RestoreEvents(restored)
 	}
-	for _, node := range failoverNodes {
-		if err := store.UpsertFailoverNodeConfig(context.Background(), node.ID, node.Name, string(node.Role), node.PublicHost, node.HealthURL, "", node.Enabled, node.Maintenance, node.Priority, node.ResetDay, node.ResetTimezone, node.Traffic.QuotaBytes, node.Traffic.ThresholdPct, string(failover.TrafficSourceMock)); err != nil {
-			log.Warn("failover", "node seed failed", map[string]any{"event": "failoverNodeSeedFailed", "node": node.ID})
+	if runtimes, loadErr := store.LoadFailoverNodeRuntime(context.Background()); loadErr == nil {
+		for nodeID, runtime := range runtimes {
+			traffic := trafficSampleFromRecord(runtime.Traffic)
+			failoverController.RestoreNodeRuntime(nodeID, failover.HealthStatus(runtime.HealthStatus), runtime.ConsecutiveFailures, runtime.ConsecutiveSuccesses, traffic)
 		}
 	}
 	adminHandler.SetFailoverController(failoverController)
+	adminHandler.SetDNSStatusReader(func() map[string]any {
+		run, ok, err := store.LoadLatestDNSUpdateRun(context.Background())
+		if err != nil || !ok {
+			return map[string]any{"available": false}
+		}
+		return map[string]any{"available": true, "dry_run": run.DryRun, "success": run.Success, "provider": run.ProviderKind, "propagation": run.PropagationResult, "completed_at": run.CompletedAt}
+	})
 
 	scheduler.New(log, tg, proxyHandler.CleanupTTLMaps).Start(ctx)
 
@@ -180,6 +209,38 @@ func unixTimeOrZero(value int64) time.Time {
 	return time.Unix(value, 0)
 }
 
+func failoverStateRecord(state failover.State) storage.FailoverStateRecord {
+	return storage.FailoverStateRecord{
+		ActiveNodeID: state.ActiveNodeID, DesiredNodeID: state.DesiredNodeID, ObservedDNSNodeID: state.ObservedDNSNodeID,
+		Mode: string(state.Mode), CooldownUntil: unixOrZero(state.CooldownUntil), LastTransitionAt: unixOrZero(state.LastTransitionAt),
+		LastEvaluationAt: unixOrZero(state.LastEvaluationAt), CurrentCycleKey: state.CurrentCycleKey, ReconciliationRequired: state.ReconciliationRequired,
+	}
+}
+
+func failoverEventRecord(event failover.Event) storage.FailoverEventRecord {
+	return storage.FailoverEventRecord{CreatedAt: event.CreatedAt.Unix(), EventType: event.EventType, FromNodeID: event.FromNodeID, ToNodeID: event.ToNodeID, Mode: string(event.Mode), ReasonCode: event.ReasonCode, Success: event.Success}
+}
+
+func trafficSampleFromRecord(record storage.TrafficSampleRecord) failover.TrafficSample {
+	sample := failover.TrafficSample{NodeID: record.NodeID, CycleKey: record.CycleKey, Quality: failover.TrafficQuality(record.Quality)}
+	if record.InboundBytes != nil {
+		sample.InboundBytes = *record.InboundBytes
+	}
+	if record.OutboundBytes != nil {
+		sample.OutboundBytes = *record.OutboundBytes
+	}
+	if record.TotalBytes != nil {
+		sample.TotalBytes = *record.TotalBytes
+	}
+	if record.QuotaBytes != nil {
+		sample.QuotaBytes = *record.QuotaBytes
+	}
+	if record.SampledAt != 0 {
+		sample.SampledAt = time.Unix(record.SampledAt, 0)
+	}
+	return sample
+}
+
 func registerRoutes(mux *http.ServeMux, adminHandler http.Handler, proxyHandler http.Handler) {
 	mux.Handle("/admin", adminHandler)
 	mux.Handle("/admin/", adminHandler)
@@ -210,13 +271,6 @@ func proxyRouteHandler(cfg config.Config, store *storage.Store, fallback http.Ha
 		mediaConfig,
 		fallback,
 	)
-}
-
-func defaultFailoverNodes() []failover.Node {
-	return []failover.Node{
-		{ID: "nosla", Name: "NOSLA", Role: failover.RolePrimary, PublicHost: "stream-n.149077530.xyz", Enabled: true, HealthStatus: failover.HealthUnknown, Priority: 1, ResetDay: 21, ResetTimezone: "UTC", Traffic: failover.TrafficSample{NodeID: "nosla", QuotaBytes: 1100000000000, ThresholdPct: 97, Quality: failover.TrafficUnknown}},
-		{ID: "bwg", Name: "BWG", Role: failover.RoleFallback, PublicHost: "stream-b.149077530.xyz", Enabled: true, HealthStatus: failover.HealthUnknown, Priority: 2, ResetDay: 7, ResetTimezone: "UTC", Traffic: failover.TrafficSample{NodeID: "bwg", QuotaBytes: 2000000000000, ThresholdPct: 97, Quality: failover.TrafficUnknown}},
-	}
 }
 
 func logBuildInfo(log *logging.Logger) {

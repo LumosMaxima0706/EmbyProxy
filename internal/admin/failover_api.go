@@ -29,6 +29,7 @@ func (h *Handler) handleFailoverAPI(w http.ResponseWriter, r *http.Request, path
 				"enabled":                      node.Enabled,
 				"maintenance_mode":             node.Maintenance,
 				"health_status":                node.HealthStatus,
+				"failover_eligible":            node.Enabled && !node.Maintenance && node.ConsecutiveFailures < failover.DefaultPolicyConfig().FailureThreshold,
 				"consecutive_health_failures":  node.ConsecutiveFailures,
 				"consecutive_health_successes": node.ConsecutiveSuccesses,
 				"traffic":                      failoverTrafficView(node.Traffic),
@@ -99,7 +100,11 @@ func (h *Handler) handleFailoverAPI(w http.ResponseWriter, r *http.Request, path
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	case r.Method == http.MethodGet && path == "/api/admin/dns/status":
 		state, _ := h.failover.Status()
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "provider": "mock", "state": map[string]any{"observed_node_id": state.ObservedDNSNodeID, "reconciliation_required": state.ReconciliationRequired}})
+		response := map[string]any{"ok": true, "provider": "mock", "state": map[string]any{"observed_node_id": state.ObservedDNSNodeID, "reconciliation_required": state.ReconciliationRequired}}
+		if h.dnsStatusReader != nil {
+			response["last_run"] = h.dnsStatusReader()
+		}
+		writeJSON(w, http.StatusOK, response)
 	case r.Method == http.MethodPost && (path == "/api/admin/dns/dry-run" || path == "/api/admin/dns/apply"):
 		body, ok := decodeFailoverJSON(w, r)
 		if !ok {

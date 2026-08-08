@@ -69,18 +69,23 @@ const trafficCaptureClearWriterBuffer = 256 * 1024
 const telegramServerRemarkMaxRunes = 80
 
 type Handler struct {
-	cfg        config.Config
-	store      *storage.Store
-	checker    *auth.Checker
-	telegram   *telegram.Service
-	log        *logging.Logger
-	resetRoute ResetFunc
-	imageCache ImageCacheManager
-	failover   *failover.Controller
+	cfg             config.Config
+	store           *storage.Store
+	checker         *auth.Checker
+	telegram        *telegram.Service
+	log             *logging.Logger
+	resetRoute      ResetFunc
+	imageCache      ImageCacheManager
+	failover        *failover.Controller
+	dnsStatusReader func() map[string]any
 }
 
 func (h *Handler) SetFailoverController(controller *failover.Controller) {
 	h.failover = controller
+}
+
+func (h *Handler) SetDNSStatusReader(reader func() map[string]any) {
+	h.dnsStatusReader = reader
 }
 
 func New(cfg config.Config, store *storage.Store, checker *auth.Checker, tg *telegram.Service, log *logging.Logger, reset ResetFunc, imageCaches ...ImageCacheManager) *Handler {

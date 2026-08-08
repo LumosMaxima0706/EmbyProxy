@@ -2,6 +2,7 @@ package failover
 
 import (
 	"context"
+	"errors"
 	"testing"
 )
 
@@ -87,6 +88,63 @@ func TestDNSRejectsUnsafeRecordInput(t *testing.T) {
 	} {
 		if _, err := ApplyDNS(context.Background(), provider, change); err == nil {
 			t.Fatalf("change %+v unexpectedly accepted", change)
+		}
+	}
+}
+
+func TestDNSCommitWriterFailureDoesNotPublishState(t *testing.T) {
+	provider := NewMockDNSProvider()
+	c := NewController(testNodes(), DefaultPolicyConfig(), provider)
+	c.SetDNSCommitWriter(func(DNSChange, State, Event, bool) error { return errors.New("sqlite failure") })
+	before, _ := c.Status()
+	err := c.ApplyDNSAndCommit(context.Background(), DNSChange{Name: "stream.example", Type: "A", Value: "192.0.2.20", TTL: 60}, "bwg")
+	if err == nil {
+		t.Fatal("expected commit failure")
+	}
+	after, _ := c.Status()
+	if after.ActiveNodeID != before.ActiveNodeID {
+		t.Fatalf("state changed: before=%+v after=%+v", before, after)
+	}
+}
+
+func TestDNSPendingRunFailurePreventsProviderCall(t *testing.T) {
+	provider := NewMockDNSProvider()
+	c := NewController(testNodes(), DefaultPolicyConfig(), provider)
+	c.SetDNSPendingWriter(func(DNSChange) error { return errors.New("pending write failed") })
+	if err := c.ApplyDNSAndCommit(context.Background(), DNSChange{Name: "stream.example", Type: "A", Value: "192.0.2.22", TTL: 60}, "bwg"); err == nil {
+		t.Fatal("expected pending writer failure")
+	}
+	if provider.ApplyCount != 0 {
+		t.Fatalf("provider apply count = %d", provider.ApplyCount)
+	}
+}
+
+func TestDNSRunWriterFailureDoesNotPublishState(t *testing.T) {
+	provider := NewMockDNSProvider()
+	c := NewController(testNodes(), DefaultPolicyConfig(), provider)
+	c.SetDNSRunWriter(func(DNSChange, bool) error { return errors.New("run write failed") })
+	before, _ := c.Status()
+	if err := c.ApplyDNSAndCommit(context.Background(), DNSChange{Name: "stream.example", Type: "A", Value: "192.0.2.23", TTL: 60}, "bwg"); err == nil {
+		t.Fatal("expected run writer failure")
+	}
+	after, _ := c.Status()
+	if after.ActiveNodeID != before.ActiveNodeID {
+		t.Fatalf("state changed: before=%+v after=%+v", before, after)
+	}
+}
+
+func TestDNSCommitRejectsDisabledAndMaintenanceTargets(t *testing.T) {
+	for _, mutate := range []func(*Node){func(node *Node) { node.Enabled = false }, func(node *Node) { node.Maintenance = true }} {
+		nodes := testNodes()
+		mutate(&nodes[1])
+		c := NewController(nodes, DefaultPolicyConfig(), NewMockDNSProvider())
+		before, _ := c.Status()
+		if err := c.ApplyDNSAndCommit(context.Background(), DNSChange{Name: "stream.example", Type: "A", Value: "192.0.2.21", TTL: 60}, "bwg"); err != ErrNodeNotEligible {
+			t.Fatalf("err = %v", err)
+		}
+		after, _ := c.Status()
+		if after.ActiveNodeID != before.ActiveNodeID {
+			t.Fatalf("state changed: before=%+v after=%+v", before, after)
 		}
 	}
 }
