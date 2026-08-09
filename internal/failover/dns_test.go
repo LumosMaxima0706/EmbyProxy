@@ -3,6 +3,7 @@ package failover
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -130,6 +131,38 @@ func TestDNSRunWriterFailureDoesNotPublishState(t *testing.T) {
 	after, _ := c.Status()
 	if after.ActiveNodeID != before.ActiveNodeID {
 		t.Fatalf("state changed: before=%+v after=%+v", before, after)
+	}
+	if provider.ApplyCount != 0 {
+		t.Fatalf("provider called before atomic writer validation: %d", provider.ApplyCount)
+	}
+}
+
+func TestDNSLegacyWritersRequireAtomicCommitBeforeProviderCall(t *testing.T) {
+	provider := NewMockDNSProvider()
+	c := NewController(testNodes(), DefaultPolicyConfig(), provider)
+	runWrites, eventWrites, stateWrites := 0, 0, 0
+	c.SetDNSRunWriter(func(DNSChange, bool) error { runWrites++; return nil })
+	c.SetEventWriter(func(Event) error { eventWrites++; return errors.New("event failed") })
+	c.SetStateWriter(func(State) error { stateWrites++; return nil })
+	before, _ := c.Status()
+	err := c.ApplyDNSAndCommit(context.Background(), DNSChange{Name: "stream.example", Type: "A", Value: "192.0.2.24", TTL: 60}, "bwg")
+	if err != ErrAtomicPersistenceRequired {
+		t.Fatalf("err = %v", err)
+	}
+	after, _ := c.Status()
+	if after.ActiveNodeID != before.ActiveNodeID || provider.ApplyCount != 0 || runWrites != 0 || eventWrites != 0 || stateWrites != 0 {
+		t.Fatalf("unexpected side effect: before=%+v after=%+v provider=%d run=%d event=%d state=%d", before, after, provider.ApplyCount, runWrites, eventWrites, stateWrites)
+	}
+}
+
+func TestDNSDryRunReturnsProviderAndRunWriterFailures(t *testing.T) {
+	provider := NewMockDNSProvider()
+	provider.FailDryRun = true
+	c := NewController(testNodes(), DefaultPolicyConfig(), provider)
+	c.SetDNSRunWriter(func(DNSChange, bool) error { return errors.New("run write failed") })
+	_, err := c.DryRunDNS(context.Background(), DNSChange{Name: "stream.example", Type: "A", Value: "192.0.2.25", TTL: 60})
+	if err == nil || !strings.Contains(err.Error(), "mock_dry_run_failed") || !strings.Contains(err.Error(), "run write failed") {
+		t.Fatalf("err = %v", err)
 	}
 }
 

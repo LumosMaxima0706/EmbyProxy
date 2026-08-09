@@ -43,7 +43,6 @@ type DNSUpdateRunRecord struct {
 
 type FailoverNodeRuntime struct {
 	NodeID               string
-	HealthStatus         string
 	ConsecutiveFailures  int
 	ConsecutiveSuccesses int
 	Traffic              TrafficSampleRecord
@@ -68,11 +67,7 @@ func (s *Store) LoadFailoverNodeRuntime(ctx context.Context) (map[string]Failove
 		if _, exists := result[nodeID]; exists {
 			continue
 		}
-		status := "failed"
-		if success != 0 {
-			status = "healthy"
-		}
-		result[nodeID] = FailoverNodeRuntime{NodeID: nodeID, HealthStatus: status, ConsecutiveFailures: failures, ConsecutiveSuccesses: successes}
+		result[nodeID] = FailoverNodeRuntime{NodeID: nodeID, ConsecutiveFailures: failures, ConsecutiveSuccesses: successes}
 	}
 	if err := healthRows.Err(); err != nil {
 		healthRows.Close()

@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -125,4 +126,59 @@ func TestDNSStatusIncludesPersistedLatestRun(t *testing.T) {
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"last_run"`) {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
+}
+
+func TestFailoverAPIEligibilityUsesControllerPolicy(t *testing.T) {
+	handler := newAuthTestHandler(t, failoverTestConfig())
+	controller := failover.NewController([]failover.Node{
+		{ID: "primary", Role: failover.RolePrimary, Enabled: true, HealthStatus: failover.HealthHealthy, Priority: 1},
+		{ID: "fallback", Role: failover.RoleFallback, Enabled: true, HealthStatus: failover.HealthHealthy, Priority: 2},
+	}, failover.DefaultPolicyConfig(), nil)
+	handler.SetFailoverController(controller)
+	login := serveAdminJSON(t, handler, http.MethodPost, "/admin/auth/login", map[string]any{"token": "strong-admin-token"}, nil)
+	cookie := login.Result().Cookies()[0]
+
+	if err := controller.SetHealth(failover.HealthResultAt("primary", "mock", false, 503, 0, "unavailable")); err != nil {
+		t.Fatal(err)
+	}
+	if eligible := failoverEligibleFromResponse(t, serveAdminJSON(t, handler, http.MethodGet, "/api/admin/failover/status", nil, cookie), "primary"); eligible {
+		t.Fatal("single failure reported failover eligible")
+	}
+	for i := 0; i < 2; i++ {
+		if err := controller.SetHealth(failover.HealthResultAt("primary", "mock", false, 503, 0, "unavailable")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if eligible := failoverEligibleFromResponse(t, serveAdminJSON(t, handler, http.MethodGet, "/api/admin/failover/status", nil, cookie), "primary"); !eligible {
+		t.Fatal("threshold failure was not reported failover eligible")
+	}
+	if err := controller.SetMode(failover.ModeForceBWG); err != nil {
+		t.Fatal(err)
+	}
+	if eligible := failoverEligibleFromResponse(t, serveAdminJSON(t, handler, http.MethodGet, "/api/admin/failover/status", nil, cookie), "primary"); eligible {
+		t.Fatal("forced mode reported automatic failover eligible")
+	}
+}
+
+func failoverEligibleFromResponse(t *testing.T, response *httptest.ResponseRecorder, nodeID string) bool {
+	t.Helper()
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var body struct {
+		Nodes []struct {
+			NodeID   string `json:"node_id"`
+			Eligible bool   `json:"failover_eligible"`
+		} `json:"nodes"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	for _, node := range body.Nodes {
+		if node.NodeID == nodeID {
+			return node.Eligible
+		}
+	}
+	t.Fatalf("node %q missing from response", nodeID)
+	return false
 }

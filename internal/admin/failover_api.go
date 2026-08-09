@@ -29,7 +29,7 @@ func (h *Handler) handleFailoverAPI(w http.ResponseWriter, r *http.Request, path
 				"enabled":                      node.Enabled,
 				"maintenance_mode":             node.Maintenance,
 				"health_status":                node.HealthStatus,
-				"failover_eligible":            node.Enabled && !node.Maintenance && node.ConsecutiveFailures < failover.DefaultPolicyConfig().FailureThreshold,
+				"failover_eligible":            h.failover.FailoverEligible(node.ID),
 				"consecutive_health_failures":  node.ConsecutiveFailures,
 				"consecutive_health_successes": node.ConsecutiveSuccesses,
 				"traffic":                      failoverTrafficView(node.Traffic),
@@ -37,7 +37,11 @@ func (h *Handler) handleFailoverAPI(w http.ResponseWriter, r *http.Request, path
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "state": state, "nodes": views})
 	case r.Method == http.MethodPost && path == "/api/admin/failover/check-now":
-		decision := h.failover.Evaluate()
+		decision, err := h.failover.Evaluate()
+		if err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "error": "FAILOVER_STATE_PERSIST_FAILED"})
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "dry_run": true, "decision": decision})
 	case r.Method == http.MethodPost && path == "/api/admin/failover/mode":
 		body, ok := decodeFailoverJSON(w, r)

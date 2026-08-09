@@ -14,6 +14,7 @@ var ErrCooldown = errors.New("failover cooldown active")
 var ErrInvalidTraffic = errors.New("invalid traffic sample")
 var ErrNodeNotEligible = errors.New("failover node is not eligible")
 var ErrSwitchRateLimited = errors.New("failover switch rate limit active")
+var ErrAtomicPersistenceRequired = errors.New("atomic failover persistence writer required")
 
 type TransitionWriter func(State, Event) error
 type DNSCommitWriter func(DNSChange, State, Event, bool) error
@@ -126,8 +127,8 @@ func (c *Controller) DryRunDNS(ctx context.Context, change DNSChange) (DNSPlan, 
 	change.DryRun = true
 	plan, err := c.dns.DryRunUpdate(ctx, change)
 	if c.dnsRunWriter != nil {
-		if writeErr := c.dnsRunWriter(change, err == nil); writeErr != nil && err == nil {
-			return DNSPlan{}, writeErr
+		if writeErr := c.dnsRunWriter(change, err == nil); writeErr != nil {
+			return DNSPlan{}, errors.Join(err, writeErr)
 		}
 	}
 	return plan, err
@@ -148,6 +149,9 @@ func (c *Controller) ApplyDNSAndCommit(ctx context.Context, change DNSChange, no
 	if !node.Enabled || node.Maintenance {
 		return c.rejectNodeLocked(nodeID)
 	}
+	if c.dnsCommitWriter == nil && c.hasDNSPersistenceLocked() {
+		return ErrAtomicPersistenceRequired
+	}
 	if c.dnsPendingWriter != nil {
 		if err := c.dnsPendingWriter(change); err != nil {
 			return err
@@ -164,28 +168,16 @@ func (c *Controller) ApplyDNSAndCommit(ctx context.Context, change DNSChange, no
 		if c.dnsCommitWriter != nil {
 			event = appendEventCopy(c.events, event, c.now())[len(c.events)]
 			if commitErr := c.dnsCommitWriter(change, next, event, false); commitErr != nil {
-				return commitErr
+				return errors.Join(err, commitErr)
 			}
 			c.state = next
 			c.events = appendEventCopy(c.events, event, c.now())
 			return err
 		}
-		if c.dnsRunWriter != nil {
-			if writeErr := c.dnsRunWriter(change, false); writeErr != nil {
-				return writeErr
-			}
-		}
-		if appendErr := c.appendEventLocked(event); appendErr != nil {
-			return appendErr
-		}
-		if persistErr := c.persistStateLocked(next); persistErr != nil {
-			c.events = c.events[:len(c.events)-1]
-			return persistErr
-		}
 		c.state = next
+		c.events = appendEventCopy(c.events, event, c.now())
 		return err
 	}
-	previous := c.state
 	next := c.state
 	next.ObservedDNSNodeID = nodeID
 	next.ActiveNodeID = nodeID
@@ -202,20 +194,8 @@ func (c *Controller) ApplyDNSAndCommit(ctx context.Context, change DNSChange, no
 		c.events = appendEventCopy(c.events, event, c.now())
 		return nil
 	}
-	if c.dnsRunWriter != nil {
-		if writeErr := c.dnsRunWriter(change, true); writeErr != nil {
-			return writeErr
-		}
-	}
-	if appendErr := c.appendEventLocked(event); appendErr != nil {
-		return appendErr
-	}
-	if persistErr := c.persistStateLocked(next); persistErr != nil {
-		c.state = previous
-		c.events = c.events[:len(c.events)-1]
-		return persistErr
-	}
 	c.state = next
+	c.events = appendEventCopy(c.events, event, c.now())
 	return nil
 }
 
@@ -242,18 +222,16 @@ func (c *Controller) RestoreEvents(events []Event) {
 	c.events = append([]Event(nil), events...)
 }
 
-func (c *Controller) RestoreNodeRuntime(nodeID string, status HealthStatus, failures, successes int, traffic TrafficSample) {
+func (c *Controller) RestoreNodeRuntime(nodeID string, failures, successes int, traffic TrafficSample) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	node, ok := c.nodes[nodeID]
 	if !ok {
 		return
 	}
-	if status != "" {
-		node.HealthStatus = status
-	}
 	node.ConsecutiveFailures = failures
 	node.ConsecutiveSuccesses = successes
+	node.HealthStatus = healthStatusForCounters(failures, successes, c.config.FailureThreshold)
 	if traffic.NodeID != "" {
 		node.Traffic = traffic
 	}
@@ -344,18 +322,13 @@ func (c *Controller) SetHealth(result HealthResult) error {
 		return ErrUnknownNode
 	}
 	if result.Success {
-		node.HealthStatus = HealthHealthy
 		node.ConsecutiveSuccesses++
 		node.ConsecutiveFailures = 0
 	} else {
 		node.ConsecutiveFailures++
 		node.ConsecutiveSuccesses = 0
-		if node.ConsecutiveFailures >= c.config.FailureThreshold {
-			node.HealthStatus = HealthFailed
-		} else {
-			node.HealthStatus = HealthDegraded
-		}
 	}
+	node.HealthStatus = healthStatusForCounters(node.ConsecutiveFailures, node.ConsecutiveSuccesses, c.config.FailureThreshold)
 	if c.healthWriter != nil {
 		if err := c.healthWriter(result, node); err != nil {
 			return err
@@ -377,7 +350,7 @@ func (c *Controller) SetMaintenance(nodeID string, maintenance bool) error {
 	return nil
 }
 
-func (c *Controller) Evaluate() Decision {
+func (c *Controller) Evaluate() (Decision, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	now := c.now()
@@ -402,10 +375,11 @@ func (c *Controller) Evaluate() Decision {
 	if decision.Change && c.switchLimitReachedLocked(now) {
 		decision = Decision{NodeID: state.ActiveNodeID, Reason: "switch_rate_limited"}
 	}
-	if err := c.persistStateLocked(next); err == nil {
-		c.state = next
+	if err := c.persistStateLocked(next); err != nil {
+		return Decision{NodeID: state.ActiveNodeID, Reason: "state_persist_failed"}, err
 	}
-	return decision
+	c.state = next
+	return decision, nil
 }
 
 // ApplyDecision updates local state only. Production DNS orchestration is
@@ -461,17 +435,20 @@ func (c *Controller) commitTransitionLocked(previous, next State, event Event) e
 		c.events = append(c.events, event)
 		return nil
 	}
-	if err := c.appendEventLocked(event); err != nil {
-		return err
-	}
-	if err := c.persistStateLocked(next); err != nil {
-		// The state change is not published in memory. A legacy event writer
-		// may already have written its event; atomic writers are preferred.
-		c.events = c.events[:len(c.events)-1]
-		return err
+	if c.hasTransitionPersistenceLocked() {
+		return ErrAtomicPersistenceRequired
 	}
 	c.state = next
+	c.events = append(c.events, event)
 	return nil
+}
+
+func (c *Controller) hasTransitionPersistenceLocked() bool {
+	return c.eventWriter != nil || c.stateWriter != nil
+}
+
+func (c *Controller) hasDNSPersistenceLocked() bool {
+	return c.dnsRunWriter != nil || c.dnsPendingWriter != nil || c.eventWriter != nil || c.stateWriter != nil
 }
 
 func appendEventCopy(events []Event, event Event, now time.Time) []Event {
@@ -505,6 +482,16 @@ func (c *Controller) switchLimitReachedLocked(now time.Time) bool {
 		}
 	}
 	return count >= c.config.MaxSwitchesPerWindow
+}
+
+func (c *Controller) FailoverEligible(nodeID string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	node, ok := c.nodes[nodeID]
+	if !ok || c.state.Mode != ModeAuto {
+		return false
+	}
+	return node.Enabled && !node.Maintenance && node.HealthStatus == HealthFailed && node.ConsecutiveFailures >= c.config.FailureThreshold
 }
 
 func knownCycle(sample TrafficSample) string {

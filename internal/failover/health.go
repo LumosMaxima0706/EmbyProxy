@@ -68,19 +68,30 @@ func (h *HealthTracker) Record(result HealthResult) {
 		return
 	}
 	if result.Success {
-		node.HealthStatus = HealthHealthy
 		node.ConsecutiveSuccesses++
 		node.ConsecutiveFailures = 0
 	} else {
 		node.ConsecutiveFailures++
 		node.ConsecutiveSuccesses = 0
-		if node.ConsecutiveFailures >= 3 {
-			node.HealthStatus = HealthFailed
-		} else {
-			node.HealthStatus = HealthDegraded
-		}
 	}
+	node.HealthStatus = healthStatusForCounters(node.ConsecutiveFailures, node.ConsecutiveSuccesses, DefaultPolicyConfig().FailureThreshold)
 	h.Nodes[result.NodeID] = node
+}
+
+func healthStatusForCounters(failures, successes, threshold int) HealthStatus {
+	if threshold <= 0 {
+		threshold = DefaultPolicyConfig().FailureThreshold
+	}
+	if failures >= threshold {
+		return HealthFailed
+	}
+	if failures > 0 {
+		return HealthDegraded
+	}
+	if successes > 0 {
+		return HealthHealthy
+	}
+	return HealthUnknown
 }
 
 func (h *HealthTracker) Snapshot() []Node {

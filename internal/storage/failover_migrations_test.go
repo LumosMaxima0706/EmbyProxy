@@ -142,3 +142,75 @@ func TestFailoverTransactionRollsBackRunAndEventWhenStateFails(t *testing.T) {
 		t.Fatalf("events after rollback = %d", count)
 	}
 }
+
+func TestFailoverTransitionDoesNotWriteStateWhenEventFails(t *testing.T) {
+	store, err := New(filepath.Join(t.TempDir(), "proxy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	if _, err := store.db.ExecContext(ctx, `CREATE TRIGGER failover_event_block BEFORE INSERT ON failover_events BEGIN SELECT RAISE(ABORT, 'blocked'); END`); err != nil {
+		t.Fatal(err)
+	}
+	err = store.CommitFailoverTransition(ctx, FailoverStateRecord{ActiveNodeID: "fallback", Mode: "auto"}, FailoverEventRecord{CreatedAt: 2, EventType: "switch", Mode: "auto", Success: true})
+	if err == nil {
+		t.Fatal("expected transaction failure")
+	}
+	var count int
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM failover_state`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("state rows after rollback = %d", count)
+	}
+}
+
+func TestDNSCommitRollsBackEventAndStateWhenRunFails(t *testing.T) {
+	store, err := New(filepath.Join(t.TempDir(), "proxy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	if _, err := store.db.ExecContext(ctx, `CREATE TRIGGER dns_run_block BEFORE INSERT ON dns_update_runs BEGIN SELECT RAISE(ABORT, 'blocked'); END`); err != nil {
+		t.Fatal(err)
+	}
+	err = store.CommitDNSUpdate(ctx, DNSUpdateRunRecord{StartedAt: 1, CompletedAt: 2, ProviderKind: "mock", RecordName: "record.test", RecordType: "A", Success: true}, FailoverStateRecord{ActiveNodeID: "fallback", Mode: "auto"}, FailoverEventRecord{CreatedAt: 2, EventType: "switch", Mode: "auto", Success: true})
+	if err == nil {
+		t.Fatal("expected transaction failure")
+	}
+	for _, table := range []string{"failover_events", "failover_state"} {
+		var count int
+		if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+table).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 0 {
+			t.Fatalf("%s rows after rollback = %d", table, count)
+		}
+	}
+}
+
+func TestLatestDNSRunSurvivesStoreReopen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "proxy.db")
+	store, err := New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := store.RecordDNSUpdateRun(ctx, "mock", "record.test", "A", true, true, "mock", "dry_run"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	run, ok, err := reopened.LoadLatestDNSUpdateRun(ctx)
+	if err != nil || !ok || !run.DryRun || !run.Success || run.PropagationResult != "dry_run" {
+		t.Fatalf("run=%+v ok=%v err=%v", run, ok, err)
+	}
+}

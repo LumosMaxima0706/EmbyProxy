@@ -46,6 +46,7 @@ type MockDNSProvider struct {
 	records    map[string]DNSRecord
 	FailApply  bool
 	FailVerify bool
+	FailDryRun bool
 	ApplyCount int
 }
 
@@ -87,6 +88,9 @@ func (m *MockDNSProvider) UpdateCNAMERecord(ctx context.Context, name, value str
 }
 
 func (m *MockDNSProvider) DryRunUpdate(_ context.Context, change DNSChange) (DNSPlan, error) {
+	if m.FailDryRun {
+		return DNSPlan{}, errors.New("mock_dry_run_failed")
+	}
 	return DNSPlan{Change: change, Note: "mock provider; no remote mutation"}, nil
 }
 

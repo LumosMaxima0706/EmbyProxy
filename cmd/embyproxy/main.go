@@ -150,7 +150,7 @@ func main() {
 	if runtimes, loadErr := store.LoadFailoverNodeRuntime(context.Background()); loadErr == nil {
 		for nodeID, runtime := range runtimes {
 			traffic := trafficSampleFromRecord(runtime.Traffic)
-			failoverController.RestoreNodeRuntime(nodeID, failover.HealthStatus(runtime.HealthStatus), runtime.ConsecutiveFailures, runtime.ConsecutiveSuccesses, traffic)
+			failoverController.RestoreNodeRuntime(nodeID, runtime.ConsecutiveFailures, runtime.ConsecutiveSuccesses, traffic)
 		}
 	}
 	adminHandler.SetFailoverController(failoverController)
