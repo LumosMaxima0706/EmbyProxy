@@ -217,6 +217,38 @@ func TestEntryRoutesSetTrafficCaptureStage(t *testing.T) {
 	assertCaptureRouteMeta(t, records[1], "admin", "favicon", "/favicon.ico", http.StatusNoContent)
 }
 
+func TestSeparateListenersKeepAdminAndProxyRoutesIsolated(t *testing.T) {
+	adminMux := http.NewServeMux()
+	registerAdminRoutes(adminMux, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	proxyMux := http.NewServeMux()
+	registerProxyRoutes(proxyMux, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+	}))
+
+	adminResponse := httptest.NewRecorder()
+	adminMux.ServeHTTP(adminResponse, httptest.NewRequest(http.MethodGet, "/api/admin/failover/status", nil))
+	if adminResponse.Code != http.StatusNoContent {
+		t.Fatalf("admin status=%d", adminResponse.Code)
+	}
+	adminProxyResponse := httptest.NewRecorder()
+	adminMux.ServeHTTP(adminProxyResponse, httptest.NewRequest(http.MethodGet, "/node/emby", nil))
+	if adminProxyResponse.Code != http.StatusNotFound {
+		t.Fatalf("admin listener proxy status=%d", adminProxyResponse.Code)
+	}
+	proxyResponse := httptest.NewRecorder()
+	proxyMux.ServeHTTP(proxyResponse, httptest.NewRequest(http.MethodGet, "/node/emby", nil))
+	if proxyResponse.Code != http.StatusAccepted {
+		t.Fatalf("proxy status=%d", proxyResponse.Code)
+	}
+	proxyAdminResponse := httptest.NewRecorder()
+	proxyMux.ServeHTTP(proxyAdminResponse, httptest.NewRequest(http.MethodGet, "/admin", nil))
+	if proxyAdminResponse.Code != http.StatusNotFound {
+		t.Fatalf("proxy listener admin status=%d", proxyAdminResponse.Code)
+	}
+}
+
 func TestProxyRouteHandlerDefaultsToLegacyProxy(t *testing.T) {
 	store, err := storage.New(filepath.Join(t.TempDir(), "proxy.db"))
 	if err != nil {

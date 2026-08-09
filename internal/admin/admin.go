@@ -1148,7 +1148,7 @@ func (h *Handler) checkStatus(ctx context.Context, uid string, body map[string]a
 		if node.Secret != "" {
 			proxyPath += "/" + urlPathEscape(node.Secret)
 		}
-		checked := fmt.Sprintf("http://127.0.0.1:%d%s/emby/System/Info/Public", h.cfg.Port, proxyPath)
+		checked := fmt.Sprintf("http://127.0.0.1:%d%s/emby/System/Info/Public", h.cfg.ProxyPort(), proxyPath)
 		started := time.Now()
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, checked, nil)
 		req.Header.Set("User-Agent", "emby-proxy-check/1.0")

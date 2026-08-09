@@ -164,34 +164,56 @@ func main() {
 
 	scheduler.New(log, tg, proxyHandler.CleanupTTLMaps).Start(ctx)
 
-	mux := http.NewServeMux()
-	registerRoutes(mux, adminHandler, proxyRouteHandler(cfg, store, proxyHandler))
-
-	var handler http.Handler = mux
-	handler = capture.New(cfg, store, log).Middleware(handler)
-	handler = requestMiddleware(log, store, handler)
-
-	server := &http.Server{Addr: cfg.Addr(), Handler: handler}
-	go func() {
-		listener, err := net.Listen("tcp", cfg.Addr())
-		if err != nil {
-			log.Error("startup", "server failed", map[string]any{"event": "serverFailed", "error": err.Error()})
-			stop()
-			return
-		}
-		log.Info("startup", "server listening", map[string]any{"event": "serverListening", "addr": cfg.Addr(), "db": cfg.DBPath})
-		logIdentityProfiles(log, ids)
-		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Error("startup", "server failed", map[string]any{"event": "serverFailed", "error": err.Error()})
-			stop()
-		}
-	}()
+	proxyRoute := proxyRouteHandler(cfg, store, proxyHandler)
+	type serverSpec struct {
+		server      *http.Server
+		logProfiles bool
+	}
+	var serverSpecs []serverSpec
+	if cfg.AdminAddr() == "" {
+		mux := http.NewServeMux()
+		registerRoutes(mux, adminHandler, proxyRoute)
+		serverSpecs = append(serverSpecs, serverSpec{
+			server:      &http.Server{Addr: cfg.Addr(), Handler: wrapHTTPHandler(cfg, store, log, mux)},
+			logProfiles: true,
+		})
+	} else {
+		proxyMux := http.NewServeMux()
+		registerProxyRoutes(proxyMux, proxyRoute)
+		adminMux := http.NewServeMux()
+		registerAdminRoutes(adminMux, adminHandler)
+		serverSpecs = append(serverSpecs,
+			serverSpec{server: &http.Server{Addr: cfg.Addr(), Handler: wrapHTTPHandler(cfg, store, log, proxyMux)}, logProfiles: true},
+			serverSpec{server: &http.Server{Addr: cfg.AdminAddr(), Handler: wrapHTTPHandler(cfg, store, log, adminMux)}},
+		)
+	}
+	for _, spec := range serverSpecs {
+		spec := spec
+		go func() {
+			listener, err := net.Listen("tcp", spec.server.Addr)
+			if err != nil {
+				log.Error("startup", "server failed", map[string]any{"event": "serverFailed", "error": err.Error()})
+				stop()
+				return
+			}
+			log.Info("startup", "server listening", map[string]any{"event": "serverListening", "addr": spec.server.Addr, "db": cfg.DBPath})
+			if spec.logProfiles {
+				logIdentityProfiles(log, ids)
+			}
+			if err := spec.server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Error("startup", "server failed", map[string]any{"event": "serverFailed", "error": err.Error()})
+				stop()
+			}
+		}()
+	}
 
 	<-ctx.Done()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := server.Shutdown(shutdownCtx); err != nil {
-		log.Error("shutdown", "server shutdown failed", map[string]any{"event": "serverShutdownFailed", "error": err.Error()})
+	for _, spec := range serverSpecs {
+		if err := spec.server.Shutdown(shutdownCtx); err != nil {
+			log.Error("shutdown", "server shutdown failed", map[string]any{"event": "serverShutdownFailed", "error": err.Error()})
+		}
 	}
 }
 
@@ -242,14 +264,7 @@ func trafficSampleFromRecord(record storage.TrafficSampleRecord) failover.Traffi
 }
 
 func registerRoutes(mux *http.ServeMux, adminHandler http.Handler, proxyHandler http.Handler) {
-	mux.Handle("/admin", adminHandler)
-	mux.Handle("/admin/", adminHandler)
-	mux.Handle("/api/admin", adminHandler)
-	mux.Handle("/api/admin/", adminHandler)
-	mux.HandleFunc("/favicon.ico", func(w http.ResponseWriter, r *http.Request) {
-		capture.SetMeta(r, map[string]any{"mode": "admin", "stage": "favicon"})
-		w.WriteHeader(http.StatusNoContent)
-	})
+	registerAdminEndpoints(mux, adminHandler)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" {
 			capture.SetMeta(r, map[string]any{"mode": "admin", "stage": "admin-redirect"})
@@ -258,6 +273,41 @@ func registerRoutes(mux *http.ServeMux, adminHandler http.Handler, proxyHandler 
 		}
 		proxyHandler.ServeHTTP(w, r)
 	})
+}
+
+func registerAdminRoutes(mux *http.ServeMux, adminHandler http.Handler) {
+	registerAdminEndpoints(mux, adminHandler)
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
+			return
+		}
+		capture.SetMeta(r, map[string]any{"mode": "admin", "stage": "admin-redirect"})
+		http.Redirect(w, r, "/admin", http.StatusFound)
+	})
+}
+
+func registerProxyRoutes(mux *http.ServeMux, proxyHandler http.Handler) {
+	for _, path := range []string{"/admin", "/admin/", "/api/admin", "/api/admin/", "/favicon.ico"} {
+		mux.Handle(path, http.NotFoundHandler())
+	}
+	mux.Handle("/", proxyHandler)
+}
+
+func registerAdminEndpoints(mux *http.ServeMux, adminHandler http.Handler) {
+	mux.Handle("/admin", adminHandler)
+	mux.Handle("/admin/", adminHandler)
+	mux.Handle("/api/admin", adminHandler)
+	mux.Handle("/api/admin/", adminHandler)
+	mux.HandleFunc("/favicon.ico", func(w http.ResponseWriter, r *http.Request) {
+		capture.SetMeta(r, map[string]any{"mode": "admin", "stage": "favicon"})
+		w.WriteHeader(http.StatusNoContent)
+	})
+}
+
+func wrapHTTPHandler(cfg config.Config, store *storage.Store, log *logging.Logger, next http.Handler) http.Handler {
+	handler := capture.New(cfg, store, log).Middleware(next)
+	return requestMiddleware(log, store, handler)
 }
 
 func proxyRouteHandler(cfg config.Config, store *storage.Store, fallback http.Handler) http.Handler {

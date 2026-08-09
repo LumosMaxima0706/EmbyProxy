@@ -106,6 +106,11 @@ ADMIN_TOKEN=用于访问面板的管理密钥
 | `ADMIN_TOKEN` | 无 | 管理界面和管理 API Token，建议改为足够长的随机字符串；启用 2FA 后更改时需重新设置 2FA |
 | `ADMIN_2FA_DISABLED` | `false` | 验证器丢失或轮换 `ADMIN_TOKEN` 时临时停用管理员 2FA；修改后需重启，恢复完成后应立即改回 `false` |
 | `PORT` | `8787` | HTTP 服务监听端口，程序默认绑定 `0.0.0.0` |
+| `LISTEN_ADDR` | 无 | 显式代理监听地址，优先于 `HOST` + `PORT`，例如 `127.0.0.1:19080` |
+| `HOST` | 无 | 与 `PORT` 组合设置代理监听地址；未设置时保留原有 `0.0.0.0:PORT` 行为 |
+| `ADMIN_LISTEN_ADDR` | 无 | 可选的独立管理监听地址，例如 `127.0.0.1:19081` |
+| `ADMIN_HOST` | 无 | 与 `ADMIN_PORT` 组合设置独立管理监听；`DYNDNS_PORT` 可作为兼容端口变量 |
+| `ADMIN_PORT` | 无 | 独立管理监听端口 |
 | `DB_PATH` | `./data/proxy.db` | SQLite 数据库路径 |
 
 Docker 运行时建议把 `/app/data` 挂载到宿主机目录，避免容器删除后丢失数据库。
