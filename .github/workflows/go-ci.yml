@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - feature/mediaproxy-core-poc
+      - feature/failover-phase2-local
+      - "feature/**"
   workflow_dispatch:
 
 permissions:
