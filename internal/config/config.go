@@ -21,15 +21,18 @@ type Defaults struct {
 }
 
 type Config struct {
-	CWD              string
-	DBPath           string
-	Port             int
-	ListenAddr       string
-	AdminListenAddr  string
-	AdminToken       string
-	Admin2FADisabled bool
-	MediaProxyRoutes bool
-	Defaults         Defaults
+	CWD                       string
+	DBPath                    string
+	Port                      int
+	ListenAddr                string
+	AdminListenAddr           string
+	AdminToken                string
+	Admin2FADisabled          bool
+	MediaProxyRoutes          bool
+	FailoverDNSProviderMode   string
+	FailoverDNSAllowedRecords string
+	FailoverDNSRealApply      bool
+	Defaults                  Defaults
 }
 
 type ProxyEnv struct {
@@ -69,14 +72,17 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("ADMIN_LISTEN_ADDR must differ from the proxy listen address")
 	}
 	cfg := Config{
-		CWD:              cwd,
-		DBPath:           envString("DB_PATH", filepath.Join(cwd, "data", "proxy.db")),
-		Port:             port,
-		ListenAddr:       listenAddr,
-		AdminListenAddr:  adminListenAddr,
-		AdminToken:       os.Getenv("ADMIN_TOKEN"),
-		Admin2FADisabled: envBool("ADMIN_2FA_DISABLED", false),
-		MediaProxyRoutes: envBool("MEDIAPROXY_ROUTES_ENABLED", false),
+		CWD:                       cwd,
+		DBPath:                    envString("DB_PATH", filepath.Join(cwd, "data", "proxy.db")),
+		Port:                      port,
+		ListenAddr:                listenAddr,
+		AdminListenAddr:           adminListenAddr,
+		AdminToken:                os.Getenv("ADMIN_TOKEN"),
+		Admin2FADisabled:          envBool("ADMIN_2FA_DISABLED", false),
+		MediaProxyRoutes:          envBool("MEDIAPROXY_ROUTES_ENABLED", false),
+		FailoverDNSProviderMode:   strings.ToLower(strings.TrimSpace(os.Getenv("FAILOVER_DNS_PROVIDER_MODE"))),
+		FailoverDNSAllowedRecords: strings.TrimSpace(os.Getenv("FAILOVER_DNS_ALLOWED_RECORDS")),
+		FailoverDNSRealApply:      envBool("FAILOVER_DNS_REAL_APPLY_ENABLED", false),
 		Defaults: Defaults{
 			CacheTTL:           10000,
 			ListCacheTTL:       180000,

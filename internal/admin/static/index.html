@@ -3253,9 +3253,14 @@ async function pauseFailoverAutomation() {
 }
 
 async function dryRunFailoverDNS() {
+	const targetNode = failoverSnapshot?.state?.active_node_id;
+	if (!targetNode) {
+		toast('当前节点状态不可用', 'err');
+		return;
+	}
   const result = await failoverRequest('/api/admin/dns/dry-run', {
 	method: 'POST',
-	body: JSON.stringify({ name: 'stream.mock.invalid', type: 'A', value: '192.0.2.1', ttl: 60 }),
+	body: JSON.stringify({ node_id: targetNode, name: 'stream.mock.invalid', type: 'A', value: '192.0.2.1', ttl: 60 }),
   });
   toast(result.ok ? 'DNS dry-run 已完成' : 'DNS dry-run 失败', result.ok ? 'ok' : 'err');
 }

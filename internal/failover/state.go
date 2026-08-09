@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -35,6 +36,8 @@ type Controller struct {
 	dnsCommitWriter  DNSCommitWriter
 	now              func() time.Time
 	dns              DNSProvider
+	dnsGuard         DNSGuardConfig
+	pendingDNS       map[string]pendingDNSApply
 	record           string
 }
 
@@ -100,12 +103,13 @@ func NewController(nodes []Node, cfg PolicyConfig, dns DNSProvider) *Controller 
 		}
 	}
 	return &Controller{
-		nodes:  byID,
-		state:  State{Mode: ModeAuto, ActiveNodeID: active},
-		config: cfg,
-		now:    time.Now,
-		dns:    dns,
-		record: "stream",
+		nodes:      byID,
+		state:      State{Mode: ModeAuto, ActiveNodeID: active},
+		config:     cfg,
+		now:        time.Now,
+		dns:        dns,
+		pendingDNS: make(map[string]pendingDNSApply),
+		record:     "stream",
 	}
 }
 
@@ -113,35 +117,120 @@ func (c *Controller) SetDNSProvider(provider DNSProvider) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.dns = provider
+	c.pendingDNS = make(map[string]pendingDNSApply)
 }
 
-func (c *Controller) DryRunDNS(ctx context.Context, change DNSChange) (DNSPlan, error) {
+func (c *Controller) PrepareDNSApply(ctx context.Context, change DNSChange, nodeID string) (DNSPlan, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.dns == nil {
 		return DNSPlan{}, errors.New("dns_provider_unavailable")
 	}
-	if err := validateDNSChange(change); err != nil {
+	if err := c.dnsProviderAllowedLocked(); err != nil {
 		return DNSPlan{}, err
 	}
+	node, ok := c.nodes[nodeID]
+	if !ok {
+		return DNSPlan{}, ErrUnknownNode
+	}
+	if !node.Enabled || node.Maintenance {
+		return DNSPlan{}, ErrNodeNotEligible
+	}
+	normalized, err := c.normalizeAllowedChangeLocked(change)
+	if err != nil {
+		return DNSPlan{}, err
+	}
+	change = normalized
 	change.DryRun = true
-	plan, err := c.dns.DryRunUpdate(ctx, change)
+	change.ProviderMode = c.dnsGuard.ProviderMode
+	previous, previousErr := c.dns.GetRecord(ctx, change.Name, change.Type)
+	if previousErr == nil {
+		change.PreviousValue = previous.Value
+		change.PreviousValueKnown = true
+	}
+	if (change.ProviderMode == DNSProviderModeReal || change.ProviderMode == DNSProviderModeExternal) && previousErr != nil {
+		return DNSPlan{}, ErrDNSRollbackMetadataRequired
+	}
+	providerPlan, providerErr := c.dns.DryRunUpdate(ctx, change)
 	if c.dnsRunWriter != nil {
-		if writeErr := c.dnsRunWriter(change, err == nil); writeErr != nil {
-			return DNSPlan{}, errors.Join(err, writeErr)
+		if writeErr := c.dnsRunWriter(change, providerErr == nil); writeErr != nil {
+			return DNSPlan{}, errors.Join(providerErr, writeErr)
 		}
 	}
-	return plan, err
+	if providerErr != nil {
+		return DNSPlan{}, providerErr
+	}
+	id, err := newDNSDryRunID()
+	if err != nil {
+		return DNSPlan{}, err
+	}
+	now := c.now()
+	expiresAt := now.Add(c.dnsGuard.DryRunTTL)
+	plan := DNSPlan{
+		ID:           id,
+		TargetNodeID: nodeID,
+		ProviderMode: change.ProviderMode,
+		GeneratedAt:  now,
+		ExpiresAt:    expiresAt,
+		Change:       change,
+		Note:         providerPlan.Note,
+	}
+	if previousErr == nil {
+		plan.PreviousRecord = &previous
+	}
+	if c.pendingDNS == nil {
+		c.pendingDNS = make(map[string]pendingDNSApply)
+	}
+	for existingID, pending := range c.pendingDNS {
+		if !now.Before(pending.ExpiresAt) {
+			delete(c.pendingDNS, existingID)
+		}
+	}
+	c.pendingDNS[id] = pendingDNSApply{
+		ID:             id,
+		TargetNodeID:   nodeID,
+		ProviderMode:   change.ProviderMode,
+		Change:         change,
+		PreviousRecord: previous,
+		PreviousKnown:  previousErr == nil,
+		GeneratedAt:    now,
+		ExpiresAt:      expiresAt,
+	}
+	return plan, nil
 }
 
-// ApplyDNSAndCommit demonstrates the safe transaction boundary: local active
-// state changes only after the mock provider applies and verifies propagation.
-func (c *Controller) ApplyDNSAndCommit(ctx context.Context, change DNSChange, nodeID string) error {
+// ApplyDNSAndCommit consumes a matching one-time dry-run before calling the
+// configured provider. Real/external modes remain blocked until explicitly
+// enabled with verified rollback metadata support.
+func (c *Controller) ApplyDNSAndCommit(ctx context.Context, change DNSChange, nodeID, dryRunID string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if strings.TrimSpace(dryRunID) == "" {
+		return ErrDNSDryRunRequired
+	}
 	if c.dns == nil {
 		return errors.New("dns_provider_unavailable")
 	}
+	if err := c.dnsProviderAllowedLocked(); err != nil {
+		return err
+	}
+	pending, ok := c.pendingDNS[dryRunID]
+	if !ok {
+		return ErrDNSDryRunRequired
+	}
+	delete(c.pendingDNS, dryRunID)
+	if !c.now().Before(pending.ExpiresAt) {
+		return ErrDNSDryRunExpired
+	}
+	normalized, err := c.normalizeAllowedChangeLocked(change)
+	if err != nil {
+		return err
+	}
+	if pending.TargetNodeID != nodeID || pending.ProviderMode != c.dnsGuard.ProviderMode || !sameDNSChange(pending.Change, normalized) {
+		return ErrDNSDryRunMismatch
+	}
+	change = pending.Change
+	change.DryRun = false
 	if _, ok := c.nodes[nodeID]; !ok {
 		return ErrUnknownNode
 	}

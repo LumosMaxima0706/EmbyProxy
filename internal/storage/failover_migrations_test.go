@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"testing"
 )
@@ -198,7 +199,11 @@ func TestLatestDNSRunSurvivesStoreReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	if err := store.RecordDNSUpdateRun(ctx, "mock", "record.test", "A", true, true, "mock", "dry_run"); err != nil {
+	if err := store.RecordDNSUpdateRunRecord(ctx, DNSUpdateRunRecord{
+		StartedAt: 1, CompletedAt: 2, ProviderKind: "mock", RecordName: "record.test", RecordType: "A",
+		PreviousValue: "192.0.2.9", DesiredValue: "192.0.2.10", RollbackReady: true,
+		DryRun: true, Success: true, ProviderResult: "mock", PropagationResult: "dry_run",
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Close(); err != nil {
@@ -210,7 +215,48 @@ func TestLatestDNSRunSurvivesStoreReopen(t *testing.T) {
 	}
 	defer reopened.Close()
 	run, ok, err := reopened.LoadLatestDNSUpdateRun(ctx)
-	if err != nil || !ok || !run.DryRun || !run.Success || run.PropagationResult != "dry_run" {
+	if err != nil || !ok || !run.DryRun || !run.Success || run.PropagationResult != "dry_run" || !run.RollbackReady || run.PreviousValue != "192.0.2.9" || run.DesiredValue != "192.0.2.10" {
 		t.Fatalf("run=%+v ok=%v err=%v", run, ok, err)
+	}
+}
+
+func TestFailoverSchemaUpgradesDNSRollbackMetadataColumns(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "proxy.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`CREATE TABLE dns_update_runs (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		started_at INTEGER NOT NULL,
+		completed_at INTEGER,
+		provider_kind TEXT NOT NULL,
+		record_name TEXT NOT NULL,
+		record_type TEXT NOT NULL,
+		from_value_redacted TEXT NOT NULL DEFAULT '',
+		to_value_redacted TEXT NOT NULL DEFAULT '',
+		dry_run INTEGER NOT NULL DEFAULT 1,
+		provider_result TEXT NOT NULL DEFAULT '',
+		propagation_result TEXT NOT NULL DEFAULT '',
+		success INTEGER NOT NULL DEFAULT 0,
+		error_summary TEXT NOT NULL DEFAULT ''
+	)`)
+	if err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err := New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	for _, column := range []string{"previous_value", "desired_value", "rollback_metadata_ready"} {
+		var count int
+		if err := store.db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('dns_update_runs') WHERE name = ?`, column).Scan(&count); err != nil || count != 1 {
+			t.Fatalf("column %s count=%d err=%v", column, count, err)
+		}
 	}
 }

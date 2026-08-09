@@ -144,6 +144,30 @@ func TestLegacyDyndnsPortAloneDoesNotEnableAdminListener(t *testing.T) {
 	}
 }
 
+func TestFailoverDNSGuardEnvironmentDefaultsFailClosedAndReadsExplicitValues(t *testing.T) {
+	clearListenEnv(t)
+	for _, key := range []string{"FAILOVER_DNS_PROVIDER_MODE", "FAILOVER_DNS_ALLOWED_RECORDS", "FAILOVER_DNS_REAL_APPLY_ENABLED"} {
+		t.Setenv(key, "")
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.FailoverDNSProviderMode != "" || cfg.FailoverDNSAllowedRecords != "" || cfg.FailoverDNSRealApply {
+		t.Fatalf("default DNS guard mode=%q allowlist=%q real=%v", cfg.FailoverDNSProviderMode, cfg.FailoverDNSAllowedRecords, cfg.FailoverDNSRealApply)
+	}
+	t.Setenv("FAILOVER_DNS_PROVIDER_MODE", " MOCK ")
+	t.Setenv("FAILOVER_DNS_ALLOWED_RECORDS", " stream.example:A ")
+	t.Setenv("FAILOVER_DNS_REAL_APPLY_ENABLED", "true")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.FailoverDNSProviderMode != "mock" || cfg.FailoverDNSAllowedRecords != "stream.example:A" || !cfg.FailoverDNSRealApply {
+		t.Fatalf("explicit DNS guard config mode=%q allowlist=%q real=%v", cfg.FailoverDNSProviderMode, cfg.FailoverDNSAllowedRecords, cfg.FailoverDNSRealApply)
+	}
+}
+
 func TestInvalidListenAddressesFailFastWithoutLeakingCredentials(t *testing.T) {
 	for _, test := range []struct {
 		name  string

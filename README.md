@@ -111,9 +111,14 @@ ADMIN_TOKEN=用于访问面板的管理密钥
 | `ADMIN_LISTEN_ADDR` | 无 | 可选的独立管理监听地址，例如 `127.0.0.1:19081` |
 | `ADMIN_HOST` | 无 | 与 `ADMIN_PORT` 组合设置独立管理监听；`DYNDNS_PORT` 可作为兼容端口变量 |
 | `ADMIN_PORT` | 无 | 独立管理监听端口 |
+| `FAILOVER_DNS_PROVIDER_MODE` | 无 | DNS apply provider mode；空值/未知值默认拒绝，当前仅用于显式选择 `mock`/`noop`/`local-only` |
+| `FAILOVER_DNS_ALLOWED_RECORDS` | 无 | DNS apply 精确 allowlist，格式为 `fqdn:type`，多个值用逗号分隔；空值拒绝 apply |
+| `FAILOVER_DNS_REAL_APPLY_ENABLED` | `false` | 真实 provider 的附加显式开关；当前版本仍因缺少完整 rollback 能力而拒绝真实 apply |
 | `DB_PATH` | `./data/proxy.db` | SQLite 数据库路径 |
 
 Docker 运行时建议把 `/app/data` 挂载到宿主机目录，避免容器删除后丢失数据库。
+
+Failover DNS apply 还要求 `confirm=true` 和一个未过期、未使用且内容完全匹配的 dry-run ID；ID 仅保存在进程内存中，进程重启后自动失效。当前没有 rollback endpoint；`dns_update_runs` 只能作为审计和 reconciliation 依据，不能视为可靠的一键 rollback 来源。真实 DNS provider 在可验证的 previous-record metadata 和 rollback 流程完成前保持 fail-closed。
 
 ## 管理员双重验证
 

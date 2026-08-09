@@ -35,6 +35,9 @@ type DNSUpdateRunRecord struct {
 	ProviderKind      string
 	RecordName        string
 	RecordType        string
+	PreviousValue     string
+	DesiredValue      string
+	RollbackReady     bool
 	DryRun            bool
 	ProviderResult    string
 	PropagationResult string
@@ -377,29 +380,41 @@ func (s *Store) RecordDNSUpdateRun(ctx context.Context, provider, name, recordTy
 	return recordDNSUpdateRunTx(ctx, s.db, DNSUpdateRunRecord{StartedAt: now, CompletedAt: now, ProviderKind: provider, RecordName: name, RecordType: recordType, DryRun: dryRun, ProviderResult: providerResult, PropagationResult: propagationResult, Success: success})
 }
 
+func (s *Store) RecordDNSUpdateRunRecord(ctx context.Context, run DNSUpdateRunRecord) error {
+	return recordDNSUpdateRunTx(ctx, s.db, run)
+}
+
 func (s *Store) LoadLatestDNSUpdateRun(ctx context.Context) (DNSUpdateRunRecord, bool, error) {
 	var run DNSUpdateRunRecord
-	var dryRun, success int
+	var dryRun, success, rollbackReady int
 	err := s.db.QueryRowContext(ctx, `
-		SELECT started_at, completed_at, provider_kind, record_name, record_type, dry_run, provider_result, propagation_result, success
+		SELECT started_at, completed_at, provider_kind, record_name, record_type,
+		previous_value, desired_value, rollback_metadata_ready,
+		dry_run, provider_result, propagation_result, success
 		FROM dns_update_runs ORDER BY id DESC LIMIT 1
-	`).Scan(&run.StartedAt, &run.CompletedAt, &run.ProviderKind, &run.RecordName, &run.RecordType, &dryRun, &run.ProviderResult, &run.PropagationResult, &success)
+	`).Scan(&run.StartedAt, &run.CompletedAt, &run.ProviderKind, &run.RecordName, &run.RecordType,
+		&run.PreviousValue, &run.DesiredValue, &rollbackReady,
+		&dryRun, &run.ProviderResult, &run.PropagationResult, &success)
 	if err == sql.ErrNoRows {
 		return DNSUpdateRunRecord{}, false, nil
 	}
 	if err != nil {
 		return DNSUpdateRunRecord{}, false, err
 	}
-	run.DryRun, run.Success = dryRun != 0, success != 0
+	run.DryRun, run.Success, run.RollbackReady = dryRun != 0, success != 0, rollbackReady != 0
 	return run, true, nil
 }
 
 func recordDNSUpdateRunTx(ctx context.Context, exec sqlFailoverExecutor, run DNSUpdateRunRecord) error {
 	_, err := exec.ExecContext(ctx, `
 		INSERT INTO dns_update_runs
-		(started_at, completed_at, provider_kind, record_name, record_type, dry_run, provider_result, propagation_result, success)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, run.StartedAt, run.CompletedAt, run.ProviderKind, run.RecordName, run.RecordType, run.DryRun, run.ProviderResult, run.PropagationResult, run.Success)
+		(started_at, completed_at, provider_kind, record_name, record_type,
+		previous_value, desired_value, rollback_metadata_ready,
+		dry_run, provider_result, propagation_result, success)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, run.StartedAt, run.CompletedAt, run.ProviderKind, run.RecordName, run.RecordType,
+		run.PreviousValue, run.DesiredValue, run.RollbackReady,
+		run.DryRun, run.ProviderResult, run.PropagationResult, run.Success)
 	return err
 }
 

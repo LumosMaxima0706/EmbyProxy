@@ -3,8 +3,8 @@ package failover
 import (
 	"context"
 	"errors"
-	"strings"
 	"sync"
+	"time"
 )
 
 type DNSRecord struct {
@@ -15,16 +15,25 @@ type DNSRecord struct {
 }
 
 type DNSChange struct {
-	Name   string
-	Type   string
-	Value  string
-	TTL    int
-	DryRun bool
+	Name               string
+	Type               string
+	Value              string
+	TTL                int
+	DryRun             bool
+	ProviderMode       DNSProviderMode `json:"-"`
+	PreviousValue      string          `json:"-"`
+	PreviousValueKnown bool            `json:"-"`
 }
 
 type DNSPlan struct {
-	Change DNSChange `json:"change"`
-	Note   string    `json:"note"`
+	ID             string          `json:"dry_run_id"`
+	TargetNodeID   string          `json:"target_node_id"`
+	ProviderMode   DNSProviderMode `json:"provider_mode"`
+	GeneratedAt    time.Time       `json:"generated_at"`
+	ExpiresAt      time.Time       `json:"expires_at"`
+	PreviousRecord *DNSRecord      `json:"-"`
+	Change         DNSChange       `json:"change"`
+	Note           string          `json:"note"`
 }
 
 type DNSPropagation struct {
@@ -53,6 +62,8 @@ type MockDNSProvider struct {
 func NewMockDNSProvider() *MockDNSProvider {
 	return &MockDNSProvider{records: make(map[string]DNSRecord)}
 }
+
+func (m *MockDNSProvider) ProviderMode() DNSProviderMode { return DNSProviderModeMock }
 
 func (m *MockDNSProvider) key(name, recordType string) string { return name + "|" + recordType }
 
@@ -111,14 +122,16 @@ func ApplyDNS(ctx context.Context, provider DNSProvider, change DNSChange) (DNSP
 	if provider == nil {
 		return DNSPropagation{}, errors.New("dns_provider_unavailable")
 	}
-	if err := validateDNSChange(change); err != nil {
+	normalized, err := normalizeDNSChange(change)
+	if err != nil {
 		return DNSPropagation{Verified: false, Detail: "invalid_change"}, err
 	}
+	change = normalized
 	if change.DryRun {
 		_, err := provider.DryRunUpdate(ctx, change)
 		return DNSPropagation{Verified: false, Detail: "dry_run"}, err
 	}
-	var err error
+	err = nil
 	switch change.Type {
 	case "A":
 		err = provider.UpdateARecord(ctx, change.Name, change.Value, change.TTL)
@@ -136,19 +149,6 @@ func ApplyDNS(ctx context.Context, provider DNSProvider, change DNSChange) (DNSP
 }
 
 func validateDNSChange(change DNSChange) error {
-	if strings.TrimSpace(change.Name) == "" || strings.ContainsAny(change.Name, "?&#= \t\r\n") {
-		return errors.New("invalid_record_name")
-	}
-	if change.TTL < 0 || change.TTL > 86400 {
-		return errors.New("invalid_ttl")
-	}
-	switch change.Type {
-	case "A", "AAAA", "CNAME":
-	default:
-		return errors.New("unsupported_record_type")
-	}
-	if strings.TrimSpace(change.Value) == "" || strings.ContainsAny(change.Value, "?&#=\r\n") {
-		return errors.New("invalid_record_value")
-	}
-	return nil
+	_, err := normalizeDNSChange(change)
+	return err
 }

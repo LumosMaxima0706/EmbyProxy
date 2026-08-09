@@ -78,7 +78,19 @@ func main() {
 	// Failover nodes are intentionally not seeded during normal startup. Local
 	// tests and explicit mock fixtures provide their own node registry.
 	failoverNodes := []failover.Node{}
+	dnsAllowlist, err := failover.ParseDNSRecordAllowlist(cfg.FailoverDNSAllowedRecords)
+	if err != nil {
+		log.Error("startup", "failover DNS guard config invalid", map[string]any{"event": "failoverDNSGuardConfigInvalid"})
+		os.Exit(1)
+	}
 	failoverController := failover.NewController(failoverNodes, failover.DefaultPolicyConfig(), failover.NewMockDNSProvider())
+	failoverController.ConfigureDNSGuard(failover.DNSGuardConfig{
+		ProviderMode:          failover.DNSProviderMode(cfg.FailoverDNSProviderMode),
+		AllowRealProvider:     cfg.FailoverDNSRealApply,
+		RollbackMetadataReady: false,
+		Allowlist:             dnsAllowlist,
+		DryRunTTL:             5 * time.Minute,
+	})
 	failoverController.SetEventWriter(func(event failover.Event) error {
 		return store.AppendRedactedFailoverEvent(context.Background(), event.CreatedAt.Unix(), event.EventType, event.FromNodeID, event.ToNodeID, string(event.Mode), event.ReasonCode, event.Success)
 	})
@@ -89,10 +101,24 @@ func main() {
 		} else if !success {
 			propagation = "failed"
 		}
-		return store.RecordDNSUpdateRun(context.Background(), "mock", change.Name, change.Type, change.DryRun, success, "mock", propagation)
+		now := time.Now().Unix()
+		return store.RecordDNSUpdateRunRecord(context.Background(), storage.DNSUpdateRunRecord{
+			StartedAt: now, CompletedAt: now, ProviderKind: string(change.ProviderMode),
+			RecordName: change.Name, RecordType: change.Type,
+			PreviousValue: change.PreviousValue, DesiredValue: change.Value,
+			RollbackReady: change.PreviousValueKnown, DryRun: change.DryRun,
+			ProviderResult: "mock", PropagationResult: propagation, Success: success,
+		})
 	})
 	failoverController.SetDNSPendingWriter(func(change failover.DNSChange) error {
-		return store.RecordDNSUpdateRun(context.Background(), "mock", change.Name, change.Type, false, false, "pending", "pending")
+		now := time.Now().Unix()
+		return store.RecordDNSUpdateRunRecord(context.Background(), storage.DNSUpdateRunRecord{
+			StartedAt: now, CompletedAt: now, ProviderKind: string(change.ProviderMode),
+			RecordName: change.Name, RecordType: change.Type,
+			PreviousValue: change.PreviousValue, DesiredValue: change.Value,
+			RollbackReady:  change.PreviousValueKnown,
+			ProviderResult: "pending", PropagationResult: "pending",
+		})
 	})
 	failoverController.SetStateWriter(func(state failover.State) error {
 		return store.SaveFailoverState(context.Background(), state.ActiveNodeID, state.DesiredNodeID, state.ObservedDNSNodeID, string(state.Mode), state.CurrentCycleKey, unixOrZero(state.CooldownUntil), unixOrZero(state.LastTransitionAt), unixOrZero(state.LastEvaluationAt), state.ReconciliationRequired)
@@ -106,8 +132,9 @@ func main() {
 			propagation = "verified"
 		}
 		return store.CommitDNSUpdate(context.Background(), storage.DNSUpdateRunRecord{
-			StartedAt: time.Now().Unix(), CompletedAt: time.Now().Unix(), ProviderKind: "mock",
+			StartedAt: time.Now().Unix(), CompletedAt: time.Now().Unix(), ProviderKind: string(change.ProviderMode),
 			RecordName: change.Name, RecordType: change.Type, DryRun: change.DryRun,
+			PreviousValue: change.PreviousValue, DesiredValue: change.Value, RollbackReady: change.PreviousValueKnown,
 			ProviderResult: "mock", PropagationResult: propagation, Success: success,
 		}, failoverStateRecord(state), failoverEventRecord(event))
 	})
@@ -159,7 +186,7 @@ func main() {
 		if err != nil || !ok {
 			return map[string]any{"available": false}
 		}
-		return map[string]any{"available": true, "dry_run": run.DryRun, "success": run.Success, "provider": run.ProviderKind, "propagation": run.PropagationResult, "completed_at": run.CompletedAt}
+		return map[string]any{"available": true, "dry_run": run.DryRun, "success": run.Success, "provider": run.ProviderKind, "propagation": run.PropagationResult, "rollback_ready": run.RollbackReady, "completed_at": run.CompletedAt}
 	})
 
 	scheduler.New(log, tg, proxyHandler.CleanupTTLMaps).Start(ctx)

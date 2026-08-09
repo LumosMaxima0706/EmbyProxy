@@ -1,7 +1,6 @@
 package admin
 
 import (
-	"context"
 	"encoding/json"
 	"math"
 	"net/http"
@@ -12,6 +11,7 @@ import (
 )
 
 func (h *Handler) handleFailoverAPI(w http.ResponseWriter, r *http.Request, path string) {
+	w.Header().Set("Cache-Control", "no-store")
 	if h.failover == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "error": "FAILOVER_UNAVAILABLE"})
 		return
@@ -56,6 +56,10 @@ func (h *Handler) handleFailoverAPI(w http.ResponseWriter, r *http.Request, path
 	case r.Method == http.MethodPost && path == "/api/admin/failover/switch":
 		body, ok := decodeFailoverJSON(w, r)
 		if !ok {
+			return
+		}
+		if confirmed, ok := body["confirm"].(bool); !ok || !confirmed {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "CONFIRMATION_REQUIRED"})
 			return
 		}
 		reason := failover.RedactReason(asString(body["reason"]))
@@ -104,7 +108,7 @@ func (h *Handler) handleFailoverAPI(w http.ResponseWriter, r *http.Request, path
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	case r.Method == http.MethodGet && path == "/api/admin/dns/status":
 		state, _ := h.failover.Status()
-		response := map[string]any{"ok": true, "provider": "mock", "state": map[string]any{"observed_node_id": state.ObservedDNSNodeID, "reconciliation_required": state.ReconciliationRequired}}
+		response := map[string]any{"ok": true, "provider": h.failover.DNSProviderMode(), "state": map[string]any{"observed_node_id": state.ObservedDNSNodeID, "reconciliation_required": state.ReconciliationRequired}}
 		if h.dnsStatusReader != nil {
 			response["last_run"] = h.dnsStatusReader()
 		}
@@ -119,16 +123,32 @@ func (h *Handler) handleFailoverAPI(w http.ResponseWriter, r *http.Request, path
 			change.TTL = 60
 		}
 		if change.DryRun {
-			plan, err := h.failover.DryRunDNS(r.Context(), change)
+			nodeID := strings.TrimSpace(asString(body["node_id"]))
+			plan, err := h.failover.PrepareDNSApply(r.Context(), change, nodeID)
 			if err != nil {
-				writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": "DNS_DRY_RUN_FAILED"})
+				writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "error": "DNS_DRY_RUN_REJECTED"})
 				return
 			}
-			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "dry_run": true, "change": map[string]any{"name": plan.Change.Name, "type": plan.Change.Type, "ttl": plan.Change.TTL}, "note": plan.Note})
+			writeJSON(w, http.StatusOK, map[string]any{
+				"ok": true, "dry_run": true, "dry_run_id": plan.ID,
+				"target_node_id": plan.TargetNodeID, "provider_mode": plan.ProviderMode,
+				"generated_at": plan.GeneratedAt, "expires_at": plan.ExpiresAt,
+				"change": map[string]any{"name": plan.Change.Name, "type": plan.Change.Type, "ttl": plan.Change.TTL},
+				"note":   plan.Note,
+			})
+			return
+		}
+		if confirmed, ok := body["confirm"].(bool); !ok || !confirmed {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "CONFIRMATION_REQUIRED"})
 			return
 		}
 		nodeID := asString(body["node_id"])
-		if err := h.failover.ApplyDNSAndCommit(context.Background(), change, nodeID); err != nil {
+		dryRunID := strings.TrimSpace(asString(body["dry_run_id"]))
+		if dryRunID == "" {
+			writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "error": "DNS_DRY_RUN_REQUIRED"})
+			return
+		}
+		if err := h.failover.ApplyDNSAndCommit(r.Context(), change, nodeID, dryRunID); err != nil {
 			writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": "DNS_APPLY_NOT_COMMITTED"})
 			return
 		}

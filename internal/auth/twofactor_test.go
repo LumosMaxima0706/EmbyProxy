@@ -88,13 +88,20 @@ func TestSessionCookieAndAbsoluteExpiry(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	SetSessionCookie(recorder, req, session)
 	cookies := recorder.Result().Cookies()
-	if len(cookies) != 1 {
-		t.Fatalf("cookies len = %d, want 1", len(cookies))
+	if len(cookies) != 2 {
+		t.Fatalf("cookies len = %d, want 2", len(cookies))
+	}
+	paths := map[string]bool{}
+	for _, cookie := range cookies {
+		paths[cookie.Path] = true
+		if !cookie.HttpOnly || !cookie.Secure || cookie.SameSite != http.SameSiteStrictMode || cookie.MaxAge != int(SessionTTL/time.Second) {
+			t.Fatalf("cookie attributes invalid for path %q", cookie.Path)
+		}
+	}
+	if !paths["/admin"] || !paths["/api/admin"] {
+		t.Fatalf("cookie paths = %v", paths)
 	}
 	cookie := cookies[0]
-	if !cookie.HttpOnly || !cookie.Secure || cookie.SameSite != http.SameSiteStrictMode || cookie.Path != "/admin" || cookie.MaxAge != int(SessionTTL/time.Second) {
-		t.Fatalf("cookie = %+v", cookie)
-	}
 	protected := newAuthRequest(http.MethodPost, "/admin/api")
 	protected.AddCookie(cookie)
 	if got := checker.Check(protected); !got.OK || got.AuthMethod != "session" {

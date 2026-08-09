@@ -31,9 +31,12 @@ func TestDNSFailureDoesNotCommitActiveState(t *testing.T) {
 	mock := NewMockDNSProvider()
 	mock.FailApply = true
 	c := NewController(testNodes(), DefaultPolicyConfig(), mock)
+	configureMockDNSGuard(t, c, "stream.example", "A")
 	c.RestoreState(State{Mode: ModeAuto, ActiveNodeID: "nosla", CurrentCycleKey: "old-cycle"})
 	before, _ := c.Status()
-	err := c.ApplyDNSAndCommit(context.Background(), DNSChange{Name: "stream.example", Type: "A", Value: "192.0.2.11", TTL: 60}, "bwg")
+	change := DNSChange{Name: "stream.example", Type: "A", Value: "192.0.2.11", TTL: 60}
+	dryRunID := prepareDNSApply(t, c, change, "bwg")
+	err := c.ApplyDNSAndCommit(context.Background(), change, "bwg", dryRunID)
 	if err == nil {
 		t.Fatal("expected apply failure")
 	}
@@ -47,9 +50,12 @@ func TestDNSVerifyFailureDoesNotCommitActiveState(t *testing.T) {
 	mock := NewMockDNSProvider()
 	mock.FailVerify = true
 	c := NewController(testNodes(), DefaultPolicyConfig(), mock)
+	configureMockDNSGuard(t, c, "stream.example", "A")
 	c.RestoreState(State{Mode: ModeAuto, ActiveNodeID: "nosla", CurrentCycleKey: "old-cycle"})
 	before, _ := c.Status()
-	err := c.ApplyDNSAndCommit(context.Background(), DNSChange{Name: "stream.example", Type: "A", Value: "192.0.2.12", TTL: 60}, "bwg")
+	change := DNSChange{Name: "stream.example", Type: "A", Value: "192.0.2.12", TTL: 60}
+	dryRunID := prepareDNSApply(t, c, change, "bwg")
+	err := c.ApplyDNSAndCommit(context.Background(), change, "bwg", dryRunID)
 	if err == nil {
 		t.Fatal("expected verification failure")
 	}
@@ -63,6 +69,7 @@ func TestControllerDryRunRecordsWithoutChangingState(t *testing.T) {
 	provider := NewMockDNSProvider()
 	var recorded int
 	c := NewController(testNodes(), DefaultPolicyConfig(), provider)
+	configureMockDNSGuard(t, c, "stream.example", "A")
 	c.RestoreState(State{Mode: ModeAuto, ActiveNodeID: "bwg", CurrentCycleKey: "old-cycle"})
 	c.SetDNSRunWriter(func(change DNSChange, success bool) error {
 		recorded++
@@ -72,7 +79,7 @@ func TestControllerDryRunRecordsWithoutChangingState(t *testing.T) {
 		return nil
 	})
 	before, _ := c.Status()
-	plan, err := c.DryRunDNS(context.Background(), DNSChange{Name: "stream.example", Type: "A", Value: "192.0.2.10", TTL: 60})
+	plan, err := c.PrepareDNSApply(context.Background(), DNSChange{Name: "stream.example", Type: "A", Value: "192.0.2.10", TTL: 60}, "bwg")
 	if err != nil || !plan.Change.DryRun || recorded != 1 {
 		t.Fatalf("plan=%+v err=%v recorded=%d", plan, err, recorded)
 	}
@@ -101,10 +108,13 @@ func TestDNSCommitWriterFailureDoesNotPublishState(t *testing.T) {
 	nodes := testNodes()
 	nodes[0].Traffic = TrafficSample{NodeID: "nosla", CycleKey: "new-cycle", Quality: TrafficKnown}
 	c := NewController(nodes, DefaultPolicyConfig(), provider)
+	configureMockDNSGuard(t, c, "stream.example", "A")
 	c.RestoreState(State{Mode: ModeAuto, ActiveNodeID: "nosla", CurrentCycleKey: "old-cycle"})
 	c.SetDNSCommitWriter(func(DNSChange, State, Event, bool) error { return errors.New("sqlite failure") })
 	before, _ := c.Status()
-	err := c.ApplyDNSAndCommit(context.Background(), DNSChange{Name: "stream.example", Type: "A", Value: "192.0.2.20", TTL: 60}, "bwg")
+	change := DNSChange{Name: "stream.example", Type: "A", Value: "192.0.2.20", TTL: 60}
+	dryRunID := prepareDNSApply(t, c, change, "bwg")
+	err := c.ApplyDNSAndCommit(context.Background(), change, "bwg", dryRunID)
 	if err == nil {
 		t.Fatal("expected commit failure")
 	}
@@ -117,8 +127,11 @@ func TestDNSCommitWriterFailureDoesNotPublishState(t *testing.T) {
 func TestDNSPendingRunFailurePreventsProviderCall(t *testing.T) {
 	provider := NewMockDNSProvider()
 	c := NewController(testNodes(), DefaultPolicyConfig(), provider)
+	configureMockDNSGuard(t, c, "stream.example", "A")
 	c.SetDNSPendingWriter(func(DNSChange) error { return errors.New("pending write failed") })
-	if err := c.ApplyDNSAndCommit(context.Background(), DNSChange{Name: "stream.example", Type: "A", Value: "192.0.2.22", TTL: 60}, "bwg"); err == nil {
+	change := DNSChange{Name: "stream.example", Type: "A", Value: "192.0.2.22", TTL: 60}
+	dryRunID := prepareDNSApply(t, c, change, "bwg")
+	if err := c.ApplyDNSAndCommit(context.Background(), change, "bwg", dryRunID); err == nil {
 		t.Fatal("expected pending writer failure")
 	}
 	if provider.ApplyCount != 0 {
@@ -129,9 +142,10 @@ func TestDNSPendingRunFailurePreventsProviderCall(t *testing.T) {
 func TestDNSRunWriterFailureDoesNotPublishState(t *testing.T) {
 	provider := NewMockDNSProvider()
 	c := NewController(testNodes(), DefaultPolicyConfig(), provider)
+	configureMockDNSGuard(t, c, "stream.example", "A")
 	c.SetDNSRunWriter(func(DNSChange, bool) error { return errors.New("run write failed") })
 	before, _ := c.Status()
-	if err := c.ApplyDNSAndCommit(context.Background(), DNSChange{Name: "stream.example", Type: "A", Value: "192.0.2.23", TTL: 60}, "bwg"); err == nil {
+	if _, err := c.PrepareDNSApply(context.Background(), DNSChange{Name: "stream.example", Type: "A", Value: "192.0.2.23", TTL: 60}, "bwg"); err == nil {
 		t.Fatal("expected run writer failure")
 	}
 	after, _ := c.Status()
@@ -146,12 +160,16 @@ func TestDNSRunWriterFailureDoesNotPublishState(t *testing.T) {
 func TestDNSLegacyWritersRequireAtomicCommitBeforeProviderCall(t *testing.T) {
 	provider := NewMockDNSProvider()
 	c := NewController(testNodes(), DefaultPolicyConfig(), provider)
+	configureMockDNSGuard(t, c, "stream.example", "A")
 	runWrites, eventWrites, stateWrites := 0, 0, 0
 	c.SetDNSRunWriter(func(DNSChange, bool) error { runWrites++; return nil })
 	c.SetEventWriter(func(Event) error { eventWrites++; return errors.New("event failed") })
 	c.SetStateWriter(func(State) error { stateWrites++; return nil })
 	before, _ := c.Status()
-	err := c.ApplyDNSAndCommit(context.Background(), DNSChange{Name: "stream.example", Type: "A", Value: "192.0.2.24", TTL: 60}, "bwg")
+	change := DNSChange{Name: "stream.example", Type: "A", Value: "192.0.2.24", TTL: 60}
+	dryRunID := prepareDNSApply(t, c, change, "bwg")
+	runWrites = 0
+	err := c.ApplyDNSAndCommit(context.Background(), change, "bwg", dryRunID)
 	if err != ErrAtomicPersistenceRequired {
 		t.Fatalf("err = %v", err)
 	}
@@ -165,8 +183,9 @@ func TestDNSDryRunReturnsProviderAndRunWriterFailures(t *testing.T) {
 	provider := NewMockDNSProvider()
 	provider.FailDryRun = true
 	c := NewController(testNodes(), DefaultPolicyConfig(), provider)
+	configureMockDNSGuard(t, c, "stream.example", "A")
 	c.SetDNSRunWriter(func(DNSChange, bool) error { return errors.New("run write failed") })
-	_, err := c.DryRunDNS(context.Background(), DNSChange{Name: "stream.example", Type: "A", Value: "192.0.2.25", TTL: 60})
+	_, err := c.PrepareDNSApply(context.Background(), DNSChange{Name: "stream.example", Type: "A", Value: "192.0.2.25", TTL: 60}, "bwg")
 	if err == nil || !strings.Contains(err.Error(), "mock_dry_run_failed") || !strings.Contains(err.Error(), "run write failed") {
 		t.Fatalf("err = %v", err)
 	}
@@ -177,8 +196,9 @@ func TestDNSCommitRejectsDisabledAndMaintenanceTargets(t *testing.T) {
 		nodes := testNodes()
 		mutate(&nodes[1])
 		c := NewController(nodes, DefaultPolicyConfig(), NewMockDNSProvider())
+		configureMockDNSGuard(t, c, "stream.example", "A")
 		before, _ := c.Status()
-		if err := c.ApplyDNSAndCommit(context.Background(), DNSChange{Name: "stream.example", Type: "A", Value: "192.0.2.21", TTL: 60}, "bwg"); err != ErrNodeNotEligible {
+		if _, err := c.PrepareDNSApply(context.Background(), DNSChange{Name: "stream.example", Type: "A", Value: "192.0.2.21", TTL: 60}, "bwg"); err != ErrNodeNotEligible {
 			t.Fatalf("err = %v", err)
 		}
 		after, _ := c.Status()
@@ -186,4 +206,21 @@ func TestDNSCommitRejectsDisabledAndMaintenanceTargets(t *testing.T) {
 			t.Fatalf("state changed: before=%+v after=%+v", before, after)
 		}
 	}
+}
+
+func configureMockDNSGuard(t *testing.T, controller *Controller, name, recordType string) {
+	t.Helper()
+	controller.ConfigureDNSGuard(DNSGuardConfig{
+		ProviderMode: DNSProviderModeMock,
+		Allowlist:    []DNSRecordRule{{Name: name, Type: recordType}},
+	})
+}
+
+func prepareDNSApply(t *testing.T, controller *Controller, change DNSChange, nodeID string) string {
+	t.Helper()
+	plan, err := controller.PrepareDNSApply(context.Background(), change, nodeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return plan.ID
 }

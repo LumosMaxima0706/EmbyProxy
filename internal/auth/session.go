@@ -16,6 +16,8 @@ const (
 	SessionTTL        = 12 * time.Hour
 )
 
+var sessionCookiePaths = []string{"/admin", "/api/admin"}
+
 type Session struct {
 	Token     string
 	Key       string
@@ -169,29 +171,33 @@ func (c *Checker) cleanupSessionsLocked(now time.Time) {
 }
 
 func SetSessionCookie(w http.ResponseWriter, r *http.Request, session Session) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     SessionCookieName,
-		Value:    session.Token,
-		Path:     "/admin",
-		Expires:  session.ExpiresAt,
-		MaxAge:   int(SessionTTL / time.Second),
-		HttpOnly: true,
-		Secure:   requestIsSecure(r),
-		SameSite: http.SameSiteStrictMode,
-	})
+	for _, path := range sessionCookiePaths {
+		http.SetCookie(w, &http.Cookie{
+			Name:     SessionCookieName,
+			Value:    session.Token,
+			Path:     path,
+			Expires:  session.ExpiresAt,
+			MaxAge:   int(SessionTTL / time.Second),
+			HttpOnly: true,
+			Secure:   requestIsSecure(r),
+			SameSite: http.SameSiteStrictMode,
+		})
+	}
 }
 
 func ClearSessionCookie(w http.ResponseWriter, r *http.Request) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     SessionCookieName,
-		Value:    "",
-		Path:     "/admin",
-		Expires:  time.Unix(1, 0),
-		MaxAge:   -1,
-		HttpOnly: true,
-		Secure:   requestIsSecure(r),
-		SameSite: http.SameSiteStrictMode,
-	})
+	for _, path := range sessionCookiePaths {
+		http.SetCookie(w, &http.Cookie{
+			Name:     SessionCookieName,
+			Value:    "",
+			Path:     path,
+			Expires:  time.Unix(1, 0),
+			MaxAge:   -1,
+			HttpOnly: true,
+			Secure:   requestIsSecure(r),
+			SameSite: http.SameSiteStrictMode,
+		})
+	}
 }
 
 func requestIsSecure(r *http.Request) bool {

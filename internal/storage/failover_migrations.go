@@ -1,6 +1,9 @@
 package storage
 
-import "context"
+import (
+	"context"
+	"database/sql"
+)
 
 // InitFailoverSchema is additive and idempotent. It is intentionally separate
 // from the legacy proxy schema so migration review can remain scoped.
@@ -92,6 +95,9 @@ func (s *Store) InitFailoverSchema(ctx context.Context) error {
 			record_type TEXT NOT NULL,
 			from_value_redacted TEXT NOT NULL DEFAULT '',
 			to_value_redacted TEXT NOT NULL DEFAULT '',
+			previous_value TEXT NOT NULL DEFAULT '',
+			desired_value TEXT NOT NULL DEFAULT '',
+			rollback_metadata_ready INTEGER NOT NULL DEFAULT 0,
 			dry_run INTEGER NOT NULL DEFAULT 1,
 			provider_result TEXT NOT NULL DEFAULT '',
 			propagation_result TEXT NOT NULL DEFAULT '',
@@ -120,5 +126,54 @@ func (s *Store) InitFailoverSchema(ctx context.Context) error {
 			return err
 		}
 	}
+	for _, column := range []struct {
+		name       string
+		definition string
+	}{
+		{name: "previous_value", definition: "TEXT NOT NULL DEFAULT ''"},
+		{name: "desired_value", definition: "TEXT NOT NULL DEFAULT ''"},
+		{name: "rollback_metadata_ready", definition: "INTEGER NOT NULL DEFAULT 0"},
+	} {
+		if err := ensureDNSUpdateRunColumn(ctx, tx, column.name, column.definition); err != nil {
+			return err
+		}
+	}
 	return tx.Commit()
+}
+
+func ensureDNSUpdateRunColumn(ctx context.Context, tx *sql.Tx, column, definition string) error {
+	rows, err := tx.QueryContext(ctx, `PRAGMA table_info(dns_update_runs)`)
+	if err != nil {
+		return err
+	}
+	found := false
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, dataType string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &dataType, &notNull, &defaultValue, &primaryKey); err != nil {
+			rows.Close()
+			return err
+		}
+		if name == column {
+			found = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if found {
+		return nil
+	}
+	switch column {
+	case "previous_value", "desired_value", "rollback_metadata_ready":
+		_, err = tx.ExecContext(ctx, `ALTER TABLE dns_update_runs ADD COLUMN `+column+` `+definition)
+		return err
+	default:
+		return nil
+	}
 }
