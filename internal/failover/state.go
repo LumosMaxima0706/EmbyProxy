@@ -184,6 +184,10 @@ func (c *Controller) ApplyDNSAndCommit(ctx context.Context, change DNSChange, no
 	next.DesiredNodeID = nodeID
 	next.ReconciliationRequired = false
 	next.LastTransitionAt = c.now()
+	next.LastEvaluationAt = next.LastTransitionAt
+	if nodeID != c.state.ActiveNodeID {
+		c.advanceCycleForTransitionLocked(&next)
+	}
 	event := Event{EventType: "dns_switch_committed", ToNodeID: nodeID, Mode: next.Mode, ReasonCode: "dns_apply_verified", Success: true}
 	if c.dnsCommitWriter != nil {
 		event = appendEventCopy(c.events, event, c.now())[len(c.events)]
@@ -241,6 +245,21 @@ func (c *Controller) RestoreNodeRuntime(nodeID string, failures, successes int, 
 func (c *Controller) Status() (State, []Node) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
+	return c.statusLocked()
+}
+
+func (c *Controller) StatusWithEligibility() (State, []Node, map[string]bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	state, nodes := c.statusLocked()
+	eligibility := make(map[string]bool, len(nodes))
+	for _, node := range nodes {
+		eligibility[node.ID] = failoverEligible(node, state, c.config)
+	}
+	return state, nodes, eligibility
+}
+
+func (c *Controller) statusLocked() (State, []Node) {
 	state := c.state
 	nodes := make([]Node, 0, len(c.nodes))
 	for _, node := range c.nodes {
@@ -351,8 +370,8 @@ func (c *Controller) SetMaintenance(nodeID string, maintenance bool) error {
 }
 
 func (c *Controller) Evaluate() (Decision, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	now := c.now()
 	state := c.state
 	nodes := make([]Node, 0, len(c.nodes))
@@ -367,18 +386,9 @@ func (c *Controller) Evaluate() (Decision, error) {
 		policyState.CurrentCycleKey = observedCycle
 	}
 	decision := Evaluate(nodes, policyState, c.config, now)
-	next := state
-	next.LastEvaluationAt = now
-	if observedCycle != "" {
-		next.CurrentCycleKey = observedCycle
-	}
 	if decision.Change && c.switchLimitReachedLocked(now) {
 		decision = Decision{NodeID: state.ActiveNodeID, Reason: "switch_rate_limited"}
 	}
-	if err := c.persistStateLocked(next); err != nil {
-		return Decision{NodeID: state.ActiveNodeID, Reason: "state_persist_failed"}, err
-	}
-	c.state = next
 	return decision, nil
 }
 
@@ -413,7 +423,9 @@ func (c *Controller) ApplyDecision(decision Decision, reason string) error {
 	next.ActiveNodeID = decision.NodeID
 	next.DesiredNodeID = decision.NodeID
 	next.LastTransitionAt = now
+	next.LastEvaluationAt = now
 	next.CooldownUntil = now.Add(c.config.Cooldown)
+	c.advanceCycleForTransitionLocked(&next)
 	event := Event{EventType: "node_switched", CreatedAt: now, FromNodeID: from, ToNodeID: decision.NodeID, Mode: next.Mode, ReasonCode: RedactReason(reason), Success: true}
 	return c.commitTransitionLocked(previous, next, event)
 }
@@ -488,10 +500,25 @@ func (c *Controller) FailoverEligible(nodeID string) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	node, ok := c.nodes[nodeID]
-	if !ok || c.state.Mode != ModeAuto {
+	if !ok {
 		return false
 	}
-	return node.Enabled && !node.Maintenance && node.HealthStatus == HealthFailed && node.ConsecutiveFailures >= c.config.FailureThreshold
+	return failoverEligible(node, c.state, c.config)
+}
+
+func failoverEligible(node Node, state State, cfg PolicyConfig) bool {
+	return state.Mode == ModeAuto && node.Enabled && !node.Maintenance && node.HealthStatus == HealthFailed && node.ConsecutiveFailures >= cfg.FailureThreshold
+}
+
+func (c *Controller) advanceCycleForTransitionLocked(state *State) {
+	nodes := make([]Node, 0, len(c.nodes))
+	for _, node := range c.nodes {
+		nodes = append(nodes, node)
+	}
+	primary, _ := findRoles(nodes)
+	if cycle := knownCycle(primary.Traffic); cycle != "" {
+		state.CurrentCycleKey = cycle
+	}
 }
 
 func knownCycle(sample TrafficSample) string {

@@ -44,12 +44,14 @@ func (m *MockHealthProbe) Check(_ context.Context, node Node) HealthResult {
 }
 
 type HealthTracker struct {
-	mu    sync.RWMutex
-	Nodes map[string]Node
+	mu               sync.RWMutex
+	Nodes            map[string]Node
+	failureThreshold int
 }
 
-func NewHealthTracker(nodes []Node) *HealthTracker {
-	tracker := &HealthTracker{Nodes: make(map[string]Node, len(nodes))}
+func NewHealthTracker(nodes []Node, cfg PolicyConfig) *HealthTracker {
+	cfg = normalizePolicyConfig(cfg)
+	tracker := &HealthTracker{Nodes: make(map[string]Node, len(nodes)), failureThreshold: cfg.FailureThreshold}
 	for _, node := range nodes {
 		tracker.Nodes[node.ID] = node
 	}
@@ -74,7 +76,7 @@ func (h *HealthTracker) Record(result HealthResult) {
 		node.ConsecutiveFailures++
 		node.ConsecutiveSuccesses = 0
 	}
-	node.HealthStatus = healthStatusForCounters(node.ConsecutiveFailures, node.ConsecutiveSuccesses, DefaultPolicyConfig().FailureThreshold)
+	node.HealthStatus = healthStatusForCounters(node.ConsecutiveFailures, node.ConsecutiveSuccesses, h.failureThreshold)
 	h.Nodes[result.NodeID] = node
 }
 

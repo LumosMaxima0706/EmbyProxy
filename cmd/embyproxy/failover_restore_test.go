@@ -149,8 +149,17 @@ func TestSQLiteRestorePreservesQuotaCycleAndNewCycleRecovery(t *testing.T) {
 			controller := restoreControllerFromSQLite(t, path, sqliteRestoreNodes(), test.now)
 			decision, err := controller.Evaluate()
 			state, _ := controller.Status()
-			if err != nil || decision.NodeID != test.wantNode || state.CurrentCycleKey != test.wantStateKey {
+			if err != nil || decision.NodeID != test.wantNode || state.CurrentCycleKey != test.stateCycle {
 				t.Fatalf("decision=%+v state=%+v err=%v", decision, state, err)
+			}
+			if decision.Change {
+				if err := controller.ApplyDecision(decision, "cycle_recovery"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			state, _ = controller.Status()
+			if state.CurrentCycleKey != test.wantStateKey || state.ActiveNodeID != test.wantNode {
+				t.Fatalf("applied state=%+v decision=%+v", state, decision)
 			}
 		})
 	}

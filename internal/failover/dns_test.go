@@ -31,13 +31,14 @@ func TestDNSFailureDoesNotCommitActiveState(t *testing.T) {
 	mock := NewMockDNSProvider()
 	mock.FailApply = true
 	c := NewController(testNodes(), DefaultPolicyConfig(), mock)
+	c.RestoreState(State{Mode: ModeAuto, ActiveNodeID: "nosla", CurrentCycleKey: "old-cycle"})
 	before, _ := c.Status()
 	err := c.ApplyDNSAndCommit(context.Background(), DNSChange{Name: "stream.example", Type: "A", Value: "192.0.2.11", TTL: 60}, "bwg")
 	if err == nil {
 		t.Fatal("expected apply failure")
 	}
 	after, _ := c.Status()
-	if after.ActiveNodeID != before.ActiveNodeID || !after.ReconciliationRequired {
+	if after.ActiveNodeID != before.ActiveNodeID || after.CurrentCycleKey != before.CurrentCycleKey || !after.ReconciliationRequired {
 		t.Fatalf("state changed unexpectedly: before=%+v after=%+v", before, after)
 	}
 }
@@ -46,13 +47,14 @@ func TestDNSVerifyFailureDoesNotCommitActiveState(t *testing.T) {
 	mock := NewMockDNSProvider()
 	mock.FailVerify = true
 	c := NewController(testNodes(), DefaultPolicyConfig(), mock)
+	c.RestoreState(State{Mode: ModeAuto, ActiveNodeID: "nosla", CurrentCycleKey: "old-cycle"})
 	before, _ := c.Status()
 	err := c.ApplyDNSAndCommit(context.Background(), DNSChange{Name: "stream.example", Type: "A", Value: "192.0.2.12", TTL: 60}, "bwg")
 	if err == nil {
 		t.Fatal("expected verification failure")
 	}
 	after, _ := c.Status()
-	if after.ActiveNodeID != before.ActiveNodeID || !after.ReconciliationRequired {
+	if after.ActiveNodeID != before.ActiveNodeID || after.CurrentCycleKey != before.CurrentCycleKey || !after.ReconciliationRequired {
 		t.Fatalf("state changed unexpectedly: before=%+v after=%+v", before, after)
 	}
 }
@@ -61,6 +63,7 @@ func TestControllerDryRunRecordsWithoutChangingState(t *testing.T) {
 	provider := NewMockDNSProvider()
 	var recorded int
 	c := NewController(testNodes(), DefaultPolicyConfig(), provider)
+	c.RestoreState(State{Mode: ModeAuto, ActiveNodeID: "bwg", CurrentCycleKey: "old-cycle"})
 	c.SetDNSRunWriter(func(change DNSChange, success bool) error {
 		recorded++
 		if !change.DryRun || !success {
@@ -74,7 +77,7 @@ func TestControllerDryRunRecordsWithoutChangingState(t *testing.T) {
 		t.Fatalf("plan=%+v err=%v recorded=%d", plan, err, recorded)
 	}
 	after, _ := c.Status()
-	if after.ActiveNodeID != before.ActiveNodeID {
+	if after.ActiveNodeID != before.ActiveNodeID || after.CurrentCycleKey != before.CurrentCycleKey || !after.LastEvaluationAt.Equal(before.LastEvaluationAt) {
 		t.Fatalf("state changed: before=%+v after=%+v", before, after)
 	}
 }
@@ -95,7 +98,10 @@ func TestDNSRejectsUnsafeRecordInput(t *testing.T) {
 
 func TestDNSCommitWriterFailureDoesNotPublishState(t *testing.T) {
 	provider := NewMockDNSProvider()
-	c := NewController(testNodes(), DefaultPolicyConfig(), provider)
+	nodes := testNodes()
+	nodes[0].Traffic = TrafficSample{NodeID: "nosla", CycleKey: "new-cycle", Quality: TrafficKnown}
+	c := NewController(nodes, DefaultPolicyConfig(), provider)
+	c.RestoreState(State{Mode: ModeAuto, ActiveNodeID: "nosla", CurrentCycleKey: "old-cycle"})
 	c.SetDNSCommitWriter(func(DNSChange, State, Event, bool) error { return errors.New("sqlite failure") })
 	before, _ := c.Status()
 	err := c.ApplyDNSAndCommit(context.Background(), DNSChange{Name: "stream.example", Type: "A", Value: "192.0.2.20", TTL: 60}, "bwg")
@@ -103,7 +109,7 @@ func TestDNSCommitWriterFailureDoesNotPublishState(t *testing.T) {
 		t.Fatal("expected commit failure")
 	}
 	after, _ := c.Status()
-	if after.ActiveNodeID != before.ActiveNodeID {
+	if after.ActiveNodeID != before.ActiveNodeID || after.CurrentCycleKey != before.CurrentCycleKey || !after.LastEvaluationAt.Equal(before.LastEvaluationAt) {
 		t.Fatalf("state changed: before=%+v after=%+v", before, after)
 	}
 }

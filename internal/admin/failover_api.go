@@ -18,7 +18,7 @@ func (h *Handler) handleFailoverAPI(w http.ResponseWriter, r *http.Request, path
 	}
 	switch {
 	case r.Method == http.MethodGet && path == "/api/admin/failover/status":
-		state, nodes := h.failover.Status()
+		state, nodes, eligibility := h.failover.StatusWithEligibility()
 		views := make([]map[string]any, 0, len(nodes))
 		for _, node := range nodes {
 			views = append(views, map[string]any{
@@ -29,7 +29,7 @@ func (h *Handler) handleFailoverAPI(w http.ResponseWriter, r *http.Request, path
 				"enabled":                      node.Enabled,
 				"maintenance_mode":             node.Maintenance,
 				"health_status":                node.HealthStatus,
-				"failover_eligible":            h.failover.FailoverEligible(node.ID),
+				"failover_eligible":            eligibility[node.ID],
 				"consecutive_health_failures":  node.ConsecutiveFailures,
 				"consecutive_health_successes": node.ConsecutiveSuccesses,
 				"traffic":                      failoverTrafficView(node.Traffic),

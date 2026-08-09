@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"embyproxy/internal/config"
 	"embyproxy/internal/failover"
@@ -76,6 +77,7 @@ func TestFailoverAPIDNSDryRunUsesMockProvider(t *testing.T) {
 		{ID: "nosla", Name: "NOSLA", Role: failover.RolePrimary, Enabled: true, HealthStatus: failover.HealthHealthy},
 		{ID: "bwg", Name: "BWG", Role: failover.RoleFallback, Enabled: true, HealthStatus: failover.HealthHealthy},
 	}, failover.DefaultPolicyConfig(), failover.NewMockDNSProvider())
+	controller.RestoreState(failover.State{Mode: failover.ModeAuto, ActiveNodeID: "bwg", CurrentCycleKey: "old-cycle"})
 	var writes int
 	controller.SetDNSRunWriter(func(failover.DNSChange, bool) error { writes++; return nil })
 	handler.SetFailoverController(controller)
@@ -88,8 +90,8 @@ func TestFailoverAPIDNSDryRunUsesMockProvider(t *testing.T) {
 		t.Fatalf("status=%d writes=%d body=%s", response.Code, writes, response.Body.String())
 	}
 	state, _ := controller.Status()
-	if state.ActiveNodeID != "nosla" {
-		t.Fatalf("state = %+v", state)
+	if state.ActiveNodeID != "bwg" || state.CurrentCycleKey != "old-cycle" || !state.LastEvaluationAt.IsZero() {
+		t.Fatalf("dry-run changed state: %+v", state)
 	}
 }
 
@@ -157,6 +159,36 @@ func TestFailoverAPIEligibilityUsesControllerPolicy(t *testing.T) {
 	}
 	if eligible := failoverEligibleFromResponse(t, serveAdminJSON(t, handler, http.MethodGet, "/api/admin/failover/status", nil, cookie), "primary"); eligible {
 		t.Fatal("forced mode reported automatic failover eligible")
+	}
+}
+
+func TestFailoverCheckNowDoesNotAdvanceCycle(t *testing.T) {
+	handler := newAuthTestHandler(t, failoverTestConfig())
+	controller := failover.NewController([]failover.Node{
+		{ID: "primary", Role: failover.RolePrimary, Enabled: true, HealthStatus: failover.HealthHealthy, Priority: 1, ResetDay: 21, ResetTimezone: "UTC"},
+		{ID: "fallback", Role: failover.RoleFallback, Enabled: true, HealthStatus: failover.HealthHealthy, Priority: 2},
+	}, failover.DefaultPolicyConfig(), nil)
+	controller.RestoreState(failover.State{Mode: failover.ModeAuto, ActiveNodeID: "fallback", CurrentCycleKey: "2026-08-21"})
+	controller.SetNow(func() time.Time { return time.Date(2026, 9, 22, 0, 0, 0, 0, time.UTC) })
+	for i := 0; i < 3; i++ {
+		if err := controller.SetHealth(failover.HealthResultAt("primary", "mock", true, 200, 0, "")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := controller.SetTraffic(failover.TrafficSample{NodeID: "primary", CycleKey: "2026-09-21", TotalBytes: 1, QuotaBytes: 1000, Quality: failover.TrafficKnown}); err != nil {
+		t.Fatal(err)
+	}
+	handler.SetFailoverController(controller)
+	login := serveAdminJSON(t, handler, http.MethodPost, "/admin/auth/login", map[string]any{"token": "strong-admin-token"}, nil)
+	cookie := login.Result().Cookies()[0]
+	before, _ := controller.Status()
+	response := serveAdminJSON(t, handler, http.MethodPost, "/api/admin/failover/check-now", nil, cookie)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"node_id":"primary"`) {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	after, _ := controller.Status()
+	if after.ActiveNodeID != before.ActiveNodeID || after.CurrentCycleKey != before.CurrentCycleKey || !after.LastEvaluationAt.Equal(before.LastEvaluationAt) {
+		t.Fatalf("check-now changed state: before=%+v after=%+v", before, after)
 	}
 }
 

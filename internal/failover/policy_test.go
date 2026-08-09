@@ -94,13 +94,17 @@ func TestControllerTracksCycleAndRequiresResetBeforeRecovery(t *testing.T) {
 	if err := c.SetTraffic(TrafficSample{NodeID: "nosla", CycleKey: "2026-08-21", Quality: TrafficKnown, TotalBytes: 990, QuotaBytes: 1000}); err != nil {
 		t.Fatal(err)
 	}
-	evaluateController(t, c)
+	decision := evaluateController(t, c)
 	state, _ := c.Status()
-	if state.CurrentCycleKey != "2026-08-21" {
-		t.Fatalf("baseline state = %+v", state)
+	if state.CurrentCycleKey != "" {
+		t.Fatalf("preview advanced cycle: %+v", state)
 	}
-	if err := c.ApplyDecision(Decision{NodeID: "bwg", Change: true}, "quota"); err != nil {
+	if err := c.ApplyDecision(decision, "quota"); err != nil {
 		t.Fatal(err)
+	}
+	state, _ = c.Status()
+	if state.CurrentCycleKey != "2026-08-21" {
+		t.Fatalf("applied state = %+v", state)
 	}
 	for i := 0; i < 3; i++ {
 		if err := c.SetHealth(HealthResultAt("nosla", "mock", true, 200, 0, "")); err != nil {
@@ -114,12 +118,20 @@ func TestControllerTracksCycleAndRequiresResetBeforeRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	now = time.Date(2026, 9, 22, 0, 0, 0, 0, time.UTC)
-	if decision := evaluateController(t, c); decision.NodeID != "nosla" {
+	decision = evaluateController(t, c)
+	if decision.NodeID != "nosla" {
 		t.Fatalf("new-cycle decision = %+v", decision)
 	}
 	state, _ = c.Status()
-	if state.CurrentCycleKey != "2026-09-21" {
-		t.Fatalf("updated state = %+v", state)
+	if state.CurrentCycleKey != "2026-08-21" {
+		t.Fatalf("preview advanced new cycle: %+v", state)
+	}
+	if err := c.ApplyDecision(decision, "new_cycle_recovery"); err != nil {
+		t.Fatal(err)
+	}
+	state, _ = c.Status()
+	if state.CurrentCycleKey != "2026-09-21" || state.ActiveNodeID != "nosla" {
+		t.Fatalf("recovered state = %+v", state)
 	}
 }
 
@@ -360,17 +372,26 @@ func TestEventWriterFailureDoesNotPublishState(t *testing.T) {
 	}
 }
 
-func TestEvaluateReturnsStateWriterFailure(t *testing.T) {
-	c := NewController(testNodes(), DefaultPolicyConfig(), nil)
-	c.SetStateWriter(func(State) error { return errors.New("state write failed") })
-	before, _ := c.Status()
-	decision, err := c.Evaluate()
-	if err == nil || decision.Reason != "state_persist_failed" {
-		t.Fatalf("decision=%+v err=%v", decision, err)
+func TestTransitionFailureDoesNotAdvanceCycle(t *testing.T) {
+	nodes := testNodes()
+	nodes[0].ResetDay = 21
+	nodes[0].ResetTimezone = "UTC"
+	nodes[0].ConsecutiveSuccesses = 3
+	nodes[0].Traffic = TrafficSample{NodeID: "nosla", CycleKey: "2026-09-21", Quality: TrafficKnown, TotalBytes: 1, QuotaBytes: 1000}
+	c := NewController(nodes, DefaultPolicyConfig(), nil)
+	c.RestoreState(State{Mode: ModeAuto, ActiveNodeID: "bwg", CurrentCycleKey: "2026-08-21"})
+	c.SetNow(func() time.Time { return time.Date(2026, 9, 22, 0, 0, 0, 0, time.UTC) })
+	c.SetTransitionWriter(func(State, Event) error { return errors.New("transaction failed") })
+	decision := evaluateController(t, c)
+	if decision.NodeID != "nosla" {
+		t.Fatalf("decision = %+v", decision)
 	}
-	after, _ := c.Status()
-	if !after.LastEvaluationAt.Equal(before.LastEvaluationAt) || after.ActiveNodeID != before.ActiveNodeID {
-		t.Fatalf("state changed: before=%+v after=%+v", before, after)
+	if err := c.ApplyDecision(decision, "new_cycle_recovery"); err == nil {
+		t.Fatal("expected transaction failure")
+	}
+	state, _ := c.Status()
+	if state.ActiveNodeID != "bwg" || state.CurrentCycleKey != "2026-08-21" {
+		t.Fatalf("state changed after failed transaction: %+v", state)
 	}
 }
 
@@ -379,15 +400,19 @@ func TestSchedulerReturnsHealthPersistenceFailureBeforeEvaluation(t *testing.T) 
 	c.SetHealthWriter(func(HealthResult, Node) error { return errors.New("health write failed") })
 	probe := NewMockHealthProbe()
 	probe.Set(HealthResultAt("nosla", "mock", false, 503, 0, "unavailable"))
-	recorded := 0
-	s := Scheduler{Controller: c, Probe: probe, OnError: func(error) { recorded++ }}
-	decision, err := s.RunOnce()
-	if err == nil || decision.Reason != "health_update_failed" || recorded != 1 {
-		t.Fatalf("decision=%+v err=%v recorded=%d", decision, err, recorded)
+	errorsRecorded, decisionsRecorded := 0, 0
+	s := Scheduler{
+		Controller: c,
+		Probe:      probe,
+		OnError:    func(error) { errorsRecorded++ },
+		OnDecision: func(Decision) error {
+			decisionsRecorded++
+			return nil
+		},
 	}
-	state, _ := c.Status()
-	if !state.LastEvaluationAt.IsZero() {
-		t.Fatalf("evaluation continued: %+v", state)
+	decision, err := s.RunOnce()
+	if err == nil || decision.Reason != "health_update_failed" || errorsRecorded != 1 || decisionsRecorded != 0 {
+		t.Fatalf("decision=%+v err=%v errors=%d decisions=%d", decision, err, errorsRecorded, decisionsRecorded)
 	}
 }
 
@@ -396,24 +421,43 @@ func TestSchedulerReturnsTrafficPersistenceFailureBeforeEvaluation(t *testing.T)
 	c.SetTrafficWriter(func(TrafficSample) error { return errors.New("traffic write failed") })
 	source := NewMockTrafficSource()
 	source.Set(TrafficSample{NodeID: "nosla", Quality: TrafficKnown})
-	s := Scheduler{Controller: c, Traffic: source}
-	decision, err := s.RunOnce()
-	if err == nil || decision.Reason != "traffic_update_failed" {
-		t.Fatalf("decision=%+v err=%v", decision, err)
+	decisionsRecorded := 0
+	s := Scheduler{
+		Controller: c,
+		Traffic:    source,
+		OnDecision: func(Decision) error {
+			decisionsRecorded++
+			return nil
+		},
 	}
-	state, _ := c.Status()
-	if !state.LastEvaluationAt.IsZero() {
-		t.Fatalf("evaluation continued: %+v", state)
+	decision, err := s.RunOnce()
+	if err == nil || decision.Reason != "traffic_update_failed" || decisionsRecorded != 0 {
+		t.Fatalf("decision=%+v err=%v decisions=%d", decision, err, decisionsRecorded)
 	}
 }
 
 func TestSchedulerReturnsCallbackFailureAndNeverCallsDNS(t *testing.T) {
 	provider := NewMockDNSProvider()
-	c := NewController(testNodes(), DefaultPolicyConfig(), provider)
+	nodes := testNodes()
+	nodes[0].ResetDay = 21
+	nodes[0].ResetTimezone = "UTC"
+	nodes[0].ConsecutiveSuccesses = 3
+	nodes[0].Traffic = TrafficSample{NodeID: "nosla", CycleKey: "2026-09-21", Quality: TrafficKnown, TotalBytes: 1, QuotaBytes: 1000}
+	c := NewController(nodes, DefaultPolicyConfig(), provider)
+	c.RestoreState(State{Mode: ModeAuto, ActiveNodeID: "bwg", CurrentCycleKey: "2026-08-21"})
+	c.SetNow(func() time.Time { return time.Date(2026, 9, 22, 0, 0, 0, 0, time.UTC) })
 	s := Scheduler{Controller: c, OnDecision: func(Decision) error { return errors.New("callback failed") }}
 	decision, err := s.RunOnce()
-	if err == nil || decision.NodeID != "nosla" {
+	if err == nil || decision.NodeID != "nosla" || !decision.Change {
 		t.Fatalf("decision=%+v err=%v", decision, err)
+	}
+	state, _ := c.Status()
+	if state.ActiveNodeID != "bwg" || state.CurrentCycleKey != "2026-08-21" {
+		t.Fatalf("callback failure changed state: %+v", state)
+	}
+	retry, retryErr := s.RunOnce()
+	if retryErr == nil || retry.NodeID != "nosla" || !retry.Change {
+		t.Fatalf("retry=%+v err=%v", retry, retryErr)
 	}
 	if provider.ApplyCount != 0 {
 		t.Fatalf("DNS provider called %d times", provider.ApplyCount)
