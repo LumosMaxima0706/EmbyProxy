@@ -75,9 +75,11 @@ func main() {
 	checker := auth.NewChecker(cfg, store)
 	proxyHandler := proxy.New(cfg, store, ids, log)
 	adminHandler := admin.New(cfg, store, checker, tg, log, proxyHandler.ResetNodeRoutingState, proxyHandler)
-	// Failover nodes are intentionally not seeded during normal startup. Local
-	// tests and explicit mock fixtures provide their own node registry.
-	failoverNodes := []failover.Node{}
+	failoverNodes, err := isolatedFailoverFixtureNodes(cfg)
+	if err != nil {
+		log.Error("startup", "isolated failover fixture config invalid", map[string]any{"event": "failoverMockFixtureConfigInvalid"})
+		os.Exit(1)
+	}
 	dnsAllowlist, err := failover.ParseDNSRecordAllowlist(cfg.FailoverDNSAllowedRecords)
 	if err != nil {
 		log.Error("startup", "failover DNS guard config invalid", map[string]any{"event": "failoverDNSGuardConfigInvalid"})
@@ -242,6 +244,34 @@ func main() {
 			log.Error("shutdown", "server shutdown failed", map[string]any{"event": "serverShutdownFailed", "error": err.Error()})
 		}
 	}
+}
+
+func isolatedFailoverFixtureNodes(cfg config.Config) ([]failover.Node, error) {
+	if !cfg.FailoverMockFixture {
+		return nil, nil
+	}
+	mode := failover.DNSProviderMode(cfg.FailoverDNSProviderMode)
+	switch mode {
+	case failover.DNSProviderModeMock, failover.DNSProviderModeNoop, failover.DNSProviderModeLocalOnly:
+	default:
+		return nil, errors.New("isolated failover fixture requires an explicit local provider mode")
+	}
+	if !loopbackListenAddress(cfg.Addr()) || !loopbackListenAddress(cfg.AdminAddr()) {
+		return nil, errors.New("isolated failover fixture requires loopback proxy and admin listeners")
+	}
+	return []failover.Node{
+		{ID: "mock-primary", Name: "Mock Primary", Role: failover.RolePrimary, Enabled: true, Priority: 1, HealthStatus: failover.HealthHealthy},
+		{ID: "mock-fallback", Name: "Mock Fallback", Role: failover.RoleFallback, Enabled: true, Priority: 2, HealthStatus: failover.HealthHealthy},
+	}, nil
+}
+
+func loopbackListenAddress(address string) bool {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func unixOrZero(value time.Time) int64 {

@@ -2,6 +2,7 @@ package admin
 
 import (
 	"encoding/json"
+	"errors"
 	"math"
 	"net/http"
 	"strconv"
@@ -149,12 +150,33 @@ func (h *Handler) handleFailoverAPI(w http.ResponseWriter, r *http.Request, path
 			return
 		}
 		if err := h.failover.ApplyDNSAndCommit(r.Context(), change, nodeID, dryRunID); err != nil {
-			writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": "DNS_APPLY_NOT_COMMITTED"})
+			writeDNSApplyError(w, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "verified": true})
 	default:
 		http.NotFound(w, r)
+	}
+}
+
+func writeDNSApplyError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, failover.ErrDNSInvalidRecordName),
+		errors.Is(err, failover.ErrDNSInvalidRecordValue),
+		errors.Is(err, failover.ErrDNSInvalidTTL),
+		errors.Is(err, failover.ErrDNSUnsupportedRecordType):
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "INVALID_DNS_CHANGE"})
+	case errors.Is(err, failover.ErrDNSDryRunRequired),
+		errors.Is(err, failover.ErrDNSDryRunExpired),
+		errors.Is(err, failover.ErrDNSDryRunMismatch),
+		errors.Is(err, failover.ErrDNSRecordNotAllowed),
+		errors.Is(err, failover.ErrDNSProviderModeDenied),
+		errors.Is(err, failover.ErrDNSRollbackMetadataRequired),
+		errors.Is(err, failover.ErrUnknownNode),
+		errors.Is(err, failover.ErrNodeNotEligible):
+		writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "error": "DNS_APPLY_REJECTED"})
+	default:
+		writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": "DNS_APPLY_NOT_COMMITTED"})
 	}
 }
 

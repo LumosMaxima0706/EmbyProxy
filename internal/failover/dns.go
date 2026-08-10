@@ -140,7 +140,7 @@ func ApplyDNS(ctx context.Context, provider DNSProvider, change DNSChange) (DNSP
 	case "CNAME":
 		err = provider.UpdateCNAMERecord(ctx, change.Name, change.Value, change.TTL)
 	default:
-		err = errors.New("unsupported_record_type")
+		err = ErrDNSUnsupportedRecordType
 	}
 	if err != nil {
 		return DNSPropagation{Verified: false, Detail: "apply_failed"}, err

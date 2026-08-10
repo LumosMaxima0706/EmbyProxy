@@ -146,25 +146,26 @@ func TestLegacyDyndnsPortAloneDoesNotEnableAdminListener(t *testing.T) {
 
 func TestFailoverDNSGuardEnvironmentDefaultsFailClosedAndReadsExplicitValues(t *testing.T) {
 	clearListenEnv(t)
-	for _, key := range []string{"FAILOVER_DNS_PROVIDER_MODE", "FAILOVER_DNS_ALLOWED_RECORDS", "FAILOVER_DNS_REAL_APPLY_ENABLED"} {
+	for _, key := range []string{"FAILOVER_DNS_PROVIDER_MODE", "FAILOVER_DNS_ALLOWED_RECORDS", "FAILOVER_DNS_REAL_APPLY_ENABLED", "FAILOVER_MOCK_FIXTURE_ENABLED"} {
 		t.Setenv(key, "")
 	}
 	cfg, err := Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.FailoverDNSProviderMode != "" || cfg.FailoverDNSAllowedRecords != "" || cfg.FailoverDNSRealApply {
-		t.Fatalf("default DNS guard mode=%q allowlist=%q real=%v", cfg.FailoverDNSProviderMode, cfg.FailoverDNSAllowedRecords, cfg.FailoverDNSRealApply)
+	if cfg.FailoverDNSProviderMode != "" || cfg.FailoverDNSAllowedRecords != "" || cfg.FailoverDNSRealApply || cfg.FailoverMockFixture {
+		t.Fatalf("default DNS guard mode=%q allowlist=%q real=%v fixture=%v", cfg.FailoverDNSProviderMode, cfg.FailoverDNSAllowedRecords, cfg.FailoverDNSRealApply, cfg.FailoverMockFixture)
 	}
 	t.Setenv("FAILOVER_DNS_PROVIDER_MODE", " MOCK ")
 	t.Setenv("FAILOVER_DNS_ALLOWED_RECORDS", " stream.example:A ")
 	t.Setenv("FAILOVER_DNS_REAL_APPLY_ENABLED", "true")
+	t.Setenv("FAILOVER_MOCK_FIXTURE_ENABLED", "true")
 	cfg, err = Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.FailoverDNSProviderMode != "mock" || cfg.FailoverDNSAllowedRecords != "stream.example:A" || !cfg.FailoverDNSRealApply {
-		t.Fatalf("explicit DNS guard config mode=%q allowlist=%q real=%v", cfg.FailoverDNSProviderMode, cfg.FailoverDNSAllowedRecords, cfg.FailoverDNSRealApply)
+	if cfg.FailoverDNSProviderMode != "mock" || cfg.FailoverDNSAllowedRecords != "stream.example:A" || !cfg.FailoverDNSRealApply || !cfg.FailoverMockFixture {
+		t.Fatalf("explicit DNS guard config mode=%q allowlist=%q real=%v fixture=%v", cfg.FailoverDNSProviderMode, cfg.FailoverDNSAllowedRecords, cfg.FailoverDNSRealApply, cfg.FailoverMockFixture)
 	}
 }
 

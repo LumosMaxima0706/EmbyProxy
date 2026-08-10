@@ -114,6 +114,7 @@ ADMIN_TOKEN=用于访问面板的管理密钥
 | `FAILOVER_DNS_PROVIDER_MODE` | 无 | DNS apply provider mode；空值/未知值默认拒绝，当前仅用于显式选择 `mock`/`noop`/`local-only` |
 | `FAILOVER_DNS_ALLOWED_RECORDS` | 无 | DNS apply 精确 allowlist，格式为 `fqdn:type`，多个值用逗号分隔；空值拒绝 apply |
 | `FAILOVER_DNS_REAL_APPLY_ENABLED` | `false` | 真实 provider 的附加显式开关；当前版本仍因缺少完整 rollback 能力而拒绝真实 apply |
+| `FAILOVER_MOCK_FIXTURE_ENABLED` | `false` | 仅用于隔离 staging/regression；要求显式 `mock`/`noop`/`local-only` mode 以及独立 loopback proxy/admin listeners，并创建无真实 host/IP/凭据的内存 mock nodes |
 | `DB_PATH` | `./data/proxy.db` | SQLite 数据库路径 |
 
 Docker 运行时建议把 `/app/data` 挂载到宿主机目录，避免容器删除后丢失数据库。

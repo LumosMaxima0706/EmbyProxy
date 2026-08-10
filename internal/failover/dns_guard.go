@@ -27,6 +27,10 @@ var (
 	ErrDNSDryRunExpired            = errors.New("dns dry-run has expired")
 	ErrDNSDryRunMismatch           = errors.New("dns dry-run does not match apply request")
 	ErrDNSRollbackMetadataRequired = errors.New("dns rollback metadata is required")
+	ErrDNSInvalidRecordName        = errors.New("invalid dns record name")
+	ErrDNSInvalidRecordValue       = errors.New("invalid dns record value")
+	ErrDNSInvalidTTL               = errors.New("invalid dns ttl")
+	ErrDNSUnsupportedRecordType    = errors.New("unsupported dns record type")
 )
 
 type DNSRecordRule struct {
@@ -153,38 +157,38 @@ func (c *Controller) normalizeAllowedChangeLocked(change DNSChange) (DNSChange, 
 func normalizeDNSChange(change DNSChange) (DNSChange, error) {
 	name, err := normalizeDNSName(change.Name)
 	if err != nil {
-		return DNSChange{}, errors.New("invalid_record_name")
+		return DNSChange{}, ErrDNSInvalidRecordName
 	}
 	change.Name = name
 	change.Type = strings.ToUpper(strings.TrimSpace(change.Type))
 	change.Value = strings.TrimSpace(change.Value)
 	if change.TTL < 0 || change.TTL > 86400 {
-		return DNSChange{}, errors.New("invalid_ttl")
+		return DNSChange{}, ErrDNSInvalidTTL
 	}
 	switch change.Type {
 	case "A":
 		address, parseErr := netip.ParseAddr(change.Value)
 		if parseErr != nil || !address.Is4() {
-			return DNSChange{}, errors.New("invalid_record_value")
+			return DNSChange{}, ErrDNSInvalidRecordValue
 		}
 		change.Value = address.String()
 	case "AAAA":
 		address, parseErr := netip.ParseAddr(change.Value)
 		if parseErr != nil || !address.Is6() || address.Is4() || address.Zone() != "" {
-			return DNSChange{}, errors.New("invalid_record_value")
+			return DNSChange{}, ErrDNSInvalidRecordValue
 		}
 		change.Value = address.String()
 	case "CNAME":
 		if address, parseErr := netip.ParseAddr(change.Value); parseErr == nil && address.IsValid() {
-			return DNSChange{}, errors.New("invalid_record_value")
+			return DNSChange{}, ErrDNSInvalidRecordValue
 		}
 		value, nameErr := normalizeDNSName(change.Value)
 		if nameErr != nil {
-			return DNSChange{}, errors.New("invalid_record_value")
+			return DNSChange{}, ErrDNSInvalidRecordValue
 		}
 		change.Value = value
 	default:
-		return DNSChange{}, errors.New("unsupported_record_type")
+		return DNSChange{}, ErrDNSUnsupportedRecordType
 	}
 	return change, nil
 }

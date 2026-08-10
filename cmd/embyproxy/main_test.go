@@ -12,11 +12,79 @@ import (
 
 	"embyproxy/internal/capture"
 	"embyproxy/internal/config"
+	"embyproxy/internal/failover"
 	"embyproxy/internal/logging"
 	"embyproxy/internal/proxy"
 	"embyproxy/internal/requestlog"
 	"embyproxy/internal/storage"
 )
+
+func TestIsolatedFailoverFixtureIsExplicitAndLocalOnly(t *testing.T) {
+	localConfig := func(mode string) config.Config {
+		return config.Config{
+			FailoverMockFixture: true, FailoverDNSProviderMode: mode,
+			ListenAddr: "127.0.0.1:19080", AdminListenAddr: "127.0.0.1:19081",
+		}
+	}
+	for _, mode := range []string{"mock", "noop", "local-only"} {
+		t.Run(mode, func(t *testing.T) {
+			nodes, err := isolatedFailoverFixtureNodes(localConfig(mode))
+			if err != nil || len(nodes) != 2 {
+				t.Fatalf("nodes=%+v err=%v", nodes, err)
+			}
+			for _, node := range nodes {
+				if !node.Enabled || node.Maintenance || node.HealthStatus != failover.HealthHealthy || node.PublicHost != "" || node.HealthURL != "" {
+					t.Fatalf("unsafe fixture node: %+v", node)
+				}
+			}
+		})
+	}
+
+	for _, mode := range []string{"", "unknown", "real", "external"} {
+		t.Run("denied_"+mode, func(t *testing.T) {
+			nodes, err := isolatedFailoverFixtureNodes(localConfig(mode))
+			if err == nil || len(nodes) != 0 {
+				t.Fatalf("mode=%q nodes=%+v err=%v", mode, nodes, err)
+			}
+		})
+	}
+
+	nodes, err := isolatedFailoverFixtureNodes(config.Config{FailoverDNSProviderMode: "mock"})
+	if err != nil || len(nodes) != 0 {
+		t.Fatalf("disabled fixture nodes=%+v err=%v", nodes, err)
+	}
+
+	for _, cfg := range []config.Config{
+		{FailoverMockFixture: true, FailoverDNSProviderMode: "mock"},
+		{FailoverMockFixture: true, FailoverDNSProviderMode: "mock", ListenAddr: "0.0.0.0:19080", AdminListenAddr: "127.0.0.1:19081"},
+		{FailoverMockFixture: true, FailoverDNSProviderMode: "mock", ListenAddr: "127.0.0.1:19080", AdminListenAddr: "0.0.0.0:19081"},
+	} {
+		if nodes, err := isolatedFailoverFixtureNodes(cfg); err == nil || len(nodes) != 0 {
+			t.Fatalf("non-local fixture enabled: cfg=%+v nodes=%+v err=%v", cfg, nodes, err)
+		}
+	}
+}
+
+func TestIsolatedMockFixtureCanPrepareDNSApply(t *testing.T) {
+	nodes, err := isolatedFailoverFixtureNodes(config.Config{
+		FailoverMockFixture: true, FailoverDNSProviderMode: "mock",
+		ListenAddr: "127.0.0.1:19080", AdminListenAddr: "127.0.0.1:19081",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller := failover.NewController(nodes, failover.DefaultPolicyConfig(), failover.NewMockDNSProvider())
+	controller.ConfigureDNSGuard(failover.DNSGuardConfig{
+		ProviderMode: failover.DNSProviderModeMock,
+		Allowlist:    []failover.DNSRecordRule{{Name: "stream.mock.invalid", Type: "A"}},
+	})
+	plan, err := controller.PrepareDNSApply(context.Background(), failover.DNSChange{
+		Name: "stream.mock.invalid", Type: "A", Value: "192.0.2.10", TTL: 60,
+	}, "mock-primary")
+	if err != nil || plan.ID == "" || plan.TargetNodeID != "mock-primary" {
+		t.Fatalf("plan=%+v err=%v", plan, err)
+	}
+}
 
 func TestShouldPrintVersion(t *testing.T) {
 	tests := []struct {

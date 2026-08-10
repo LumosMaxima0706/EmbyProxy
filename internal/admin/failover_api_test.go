@@ -129,6 +129,12 @@ func TestFailoverAPIDNSApplyRequiresConfirmationAndBoundDryRun(t *testing.T) {
 	if missingDryRun.Code != http.StatusConflict || !strings.Contains(missingDryRun.Body.String(), "DNS_DRY_RUN_REQUIRED") {
 		t.Fatalf("missing dry-run status=%d body=%s", missingDryRun.Code, missingDryRun.Body.String())
 	}
+	apply["dry_run_id"] = "forged-dry-run-id"
+	forgedDryRun := serveAdminJSON(t, handler, http.MethodPost, "/api/admin/dns/apply", apply, cookie)
+	if forgedDryRun.Code != http.StatusConflict || provider.ApplyCount != 0 {
+		t.Fatalf("forged dry-run status=%d provider calls=%d body=%s", forgedDryRun.Code, provider.ApplyCount, forgedDryRun.Body.String())
+	}
+	delete(apply, "dry_run_id")
 
 	dryRun := serveAdminJSON(t, handler, http.MethodPost, "/api/admin/dns/dry-run", map[string]any{
 		"node_id": "bwg", "name": "stream.example", "type": "A", "value": "192.0.2.10", "ttl": 60,
@@ -151,9 +157,90 @@ func TestFailoverAPIDNSApplyRequiresConfirmationAndBoundDryRun(t *testing.T) {
 		t.Fatalf("apply status=%d provider calls=%d body=%s", accepted.Code, provider.ApplyCount, accepted.Body.String())
 	}
 	reused := serveAdminJSON(t, handler, http.MethodPost, "/api/admin/dns/apply", apply, cookie)
-	if reused.Code != http.StatusBadGateway || provider.ApplyCount != 1 {
+	if reused.Code != http.StatusConflict || provider.ApplyCount != 1 {
 		t.Fatalf("reused status=%d provider calls=%d", reused.Code, provider.ApplyCount)
 	}
+}
+
+func TestFailoverAPIDNSApplyMapsClientErrorsTo400Or409(t *testing.T) {
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	handler := newAuthTestHandler(t, failoverTestConfig())
+	provider := failover.NewMockDNSProvider()
+	controller := failover.NewController([]failover.Node{
+		{ID: "mock-primary", Role: failover.RolePrimary, Enabled: true, HealthStatus: failover.HealthHealthy},
+		{ID: "mock-fallback", Role: failover.RoleFallback, Enabled: true, HealthStatus: failover.HealthHealthy},
+	}, failover.DefaultPolicyConfig(), provider)
+	controller.ConfigureDNSGuard(failover.DNSGuardConfig{
+		ProviderMode: failover.DNSProviderModeMock,
+		Allowlist: []failover.DNSRecordRule{
+			{Name: "a.mock.invalid", Type: "A"},
+			{Name: "aaaa.mock.invalid", Type: "AAAA"},
+			{Name: "cname.mock.invalid", Type: "CNAME"},
+		},
+		DryRunTTL: time.Second,
+	})
+	controller.SetNow(func() time.Time { return now })
+	handler.SetFailoverController(controller)
+	login := serveAdminJSON(t, handler, http.MethodPost, "/admin/auth/login", map[string]any{"token": "strong-admin-token"}, nil)
+	cookie := login.Result().Cookies()[0]
+
+	prepare := func(name, recordType, value string) string {
+		t.Helper()
+		response := serveAdminJSON(t, handler, http.MethodPost, "/api/admin/dns/dry-run", map[string]any{
+			"node_id": "mock-primary", "name": name, "type": recordType, "value": value, "ttl": 60,
+		}, cookie)
+		if response.Code != http.StatusOK {
+			t.Fatalf("prepare %s/%s status=%d body=%s", name, recordType, response.Code, response.Body.String())
+		}
+		var body struct {
+			ID string `json:"dry_run_id"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil || body.ID == "" {
+			t.Fatalf("prepare response err=%v body=%s", err, response.Body.String())
+		}
+		return body.ID
+	}
+	apply := func(name, recordType, value, id string) *httptest.ResponseRecorder {
+		t.Helper()
+		return serveAdminJSON(t, handler, http.MethodPost, "/api/admin/dns/apply", map[string]any{
+			"node_id": "mock-primary", "name": name, "type": recordType, "value": value, "ttl": 60,
+			"confirm": true, "dry_run_id": id,
+		}, cookie)
+	}
+
+	t.Run("mismatch", func(t *testing.T) {
+		id := prepare("a.mock.invalid", "A", "192.0.2.10")
+		if response := apply("a.mock.invalid", "A", "192.0.2.11", id); response.Code != http.StatusConflict {
+			t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+		}
+	})
+	t.Run("record not allowlisted", func(t *testing.T) {
+		id := prepare("a.mock.invalid", "A", "192.0.2.10")
+		if response := apply("outside.mock.invalid", "A", "192.0.2.10", id); response.Code != http.StatusConflict {
+			t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+		}
+	})
+	for _, test := range []struct {
+		name, recordName, recordType, validValue, invalidValue string
+	}{
+		{name: "invalid A", recordName: "a.mock.invalid", recordType: "A", validValue: "192.0.2.10", invalidValue: "not-an-ip"},
+		{name: "invalid AAAA", recordName: "aaaa.mock.invalid", recordType: "AAAA", validValue: "2001:db8::10", invalidValue: "192.0.2.10"},
+		{name: "invalid CNAME", recordName: "cname.mock.invalid", recordType: "CNAME", validValue: "target.mock.invalid", invalidValue: "192.0.2.10"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			id := prepare(test.recordName, test.recordType, test.validValue)
+			if response := apply(test.recordName, test.recordType, test.invalidValue, id); response.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+		})
+	}
+	t.Run("expired", func(t *testing.T) {
+		id := prepare("a.mock.invalid", "A", "192.0.2.10")
+		now = now.Add(2 * time.Second)
+		if response := apply("a.mock.invalid", "A", "192.0.2.10", id); response.Code != http.StatusConflict {
+			t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+		}
+	})
 }
 
 func TestFailoverAPISwitchRequiresConfirmationAndNeverCallsDNS(t *testing.T) {
