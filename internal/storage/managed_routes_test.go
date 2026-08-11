@@ -51,3 +51,56 @@ func TestManagedRoutesSchemaAndQueries(t *testing.T) {
 		t.Fatalf("missing route=%v err=%v", missing, err)
 	}
 }
+
+func TestManagedRouteSaveListUpdateAndDelete(t *testing.T) {
+	ctx := context.Background()
+	store, err := New(filepath.Join(t.TempDir(), "proxy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	route := ManagedRoute{Slug: "demo", NodeName: "node", Enabled: true, Public: true, DefaultLine: "main"}
+	lines := []ManagedRouteLine{
+		{LineSlug: "backup", Target: "https://backup.example", Enabled: true, Position: 2},
+		{LineSlug: "main", Target: "https://media.example/base", Enabled: true, Position: 1},
+	}
+	if err := store.SaveManagedRoute(ctx, route, lines); err != nil {
+		t.Fatal(err)
+	}
+	routes, err := store.ListManagedRoutes(ctx)
+	if err != nil || len(routes) != 1 || routes[0] != route {
+		t.Fatalf("routes=%+v err=%v", routes, err)
+	}
+	gotLines, err := store.ListManagedRouteLines(ctx, route.Slug)
+	if err != nil || len(gotLines) != 2 || gotLines[0].LineSlug != "main" {
+		t.Fatalf("lines=%+v err=%v", gotLines, err)
+	}
+
+	updated := route
+	updated.NodeName = "node-updated"
+	updated.DefaultLine = "backup"
+	if err := store.SaveManagedRoute(ctx, updated, []ManagedRouteLine{{LineSlug: "backup", Target: "https://backup.example/v2", Enabled: true, Position: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.GetManagedRoute(ctx, route.Slug)
+	if err != nil || got == nil || got.NodeName != "node-updated" || got.DefaultLine != "backup" {
+		t.Fatalf("updated route=%+v err=%v", got, err)
+	}
+	gotLines, err = store.ListManagedRouteLines(ctx, route.Slug)
+	if err != nil || len(gotLines) != 1 || gotLines[0].Target != "https://backup.example/v2" {
+		t.Fatalf("updated lines=%+v err=%v", gotLines, err)
+	}
+
+	if err := store.DeleteManagedRoute(ctx, route.Slug); err != nil {
+		t.Fatal(err)
+	}
+	deleted, err := store.GetManagedRoute(ctx, route.Slug)
+	if err != nil || deleted != nil {
+		t.Fatalf("deleted route=%+v err=%v", deleted, err)
+	}
+	gotLines, err = store.ListManagedRouteLines(ctx, route.Slug)
+	if err != nil || len(gotLines) != 0 {
+		t.Fatalf("deleted lines=%+v err=%v", gotLines, err)
+	}
+}
