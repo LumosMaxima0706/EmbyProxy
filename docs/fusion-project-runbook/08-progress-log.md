@@ -484,3 +484,7 @@ Day-2 runbook start and closeout evidence commits are `412987e` and `1d285e9`.
 - Remote feature ref verification and local/BWG temporary bundle/ref cleanup passed.
 - No force push, main/master push, service action, DNS, public traffic, Nginx,
   rathole, or NOSLA action occurred.
+
+The publish-result record retry used a Git-resolved full target hash and passed at
+`a576863`. The failed pre-merge attempt and cleanup are recorded as
+`DAY2-PUBLISH-ISSUE-001`; no unsafe push or runtime action occurred.

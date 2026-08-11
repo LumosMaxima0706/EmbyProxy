@@ -79,3 +79,7 @@ Status: DONE
 
 Status: DONE for target `3419686`. Bundle validation, runbook path whitelist,
 ff-only staging update, feature-only push, remote verification, and cleanup passed.
+
+The subsequent publish-result docs retry is DONE at `a576863`; its initial
+pre-merge hash assertion failure and successful cleanup/retry are recorded in
+`DAY2-PUBLISH-ISSUE-001`.

@@ -315,3 +315,7 @@ with cleanup and sidecar health under `POSTDEPLOY-ISSUE-002`.
 - Fast-forward-only feature push and remote ref verification: PASS at `3419686`.
 - Local and BWG temporary artifacts: CLEANED.
 - Force push, main/master, deploy/restart, DNS/traffic, Nginx/rathole, NOSLA: NOT USED.
+
+Publish-result docs retry at `a576863`: bundle verify, dynamic target equality,
+runbook-only path check, ff-only merge, feature-only push, remote verification,
+and temporary cleanup all PASS.
