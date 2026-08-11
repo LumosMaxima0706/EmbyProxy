@@ -474,6 +474,7 @@ tr:last-child td{border-bottom:0}
       </div>
       <nav class="rail-nav">
         <button class="rail-button active" onclick="switchTab('nodes',this)">节点</button>
+        <button class="rail-button" onclick="switchTab('managedRoutes',this)">路由</button>
         <button class="rail-button" onclick="switchTab('stats',this)">统计</button>
 		<button class="rail-button" onclick="switchTab('failover',this)">切换</button>
         <button class="rail-button" onclick="switchTab('logs',this)">日志</button>
@@ -543,6 +544,39 @@ tr:last-child td{border-bottom:0}
               <p>选择多个节点后可批量操作；拖动行左侧手柄调整顺序，再点击保存排序</p>
             </div>
           </aside>
+        </section>
+
+        <section id="tabManagedRoutes" class="stats-deck" style="display:none">
+          <div class="stats-top">
+            <div>
+              <strong>托管路由</strong>
+              <p class="form-hint">管理公开线路和备用目标；保存操作需要管理员会话。</p>
+            </div>
+            <div class="action-pack">
+              <button class="primary-action" onclick="newManagedRoute()">新增路由</button>
+              <button class="btn" onclick="loadManagedRoutes(true)">刷新</button>
+            </div>
+          </div>
+          <div class="data-table">
+            <table id="managedRoutesTable">
+              <thead><tr><th>Slug</th><th>节点</th><th>状态</th><th>默认线路</th><th>线路数</th><th>操作</th></tr></thead>
+              <tbody id="managedRoutesBody"><tr><td colspan="6" class="table-empty">暂无托管路由</td></tr></tbody>
+            </table>
+          </div>
+          <div class="context-card" id="managedRouteEditor">
+            <div class="sheet-head">
+              <div><h2 id="managedRouteEditorTitle">新增托管路由</h2><p>线路目标只在保存时提交，界面不会保存管理员凭据。</p></div>
+            </div>
+            <div class="form-grid">
+              <div class="form-group"><label for="managedRouteSlug">Slug *</label><input id="managedRouteSlug" type="text" placeholder="media-main"/></div>
+              <div class="form-group"><label for="managedRouteNode">节点名称 *</label><input id="managedRouteNode" type="text" placeholder="bwg-node"/></div>
+              <div class="form-group"><label for="managedRouteDefaultLine">默认线路</label><input id="managedRouteDefaultLine" type="text" placeholder="main"/></div>
+              <div class="form-group"><label>状态</label><div class="action-pack" style="justify-content:flex-start"><label class="log-switch"><input id="managedRouteEnabled" type="checkbox" checked/>启用</label><label class="log-switch"><input id="managedRoutePublic" type="checkbox"/>公开</label></div></div>
+            </div>
+            <div class="form-section" style="margin-top:18px">线路</div>
+            <div id="managedRouteLines" class="form-grid"></div>
+            <div class="action-pack" style="justify-content:flex-start;margin-top:16px"><button class="btn" onclick="addManagedRouteLine()">添加线路</button><button class="primary-action" onclick="saveManagedRoute()">保存路由</button><button class="btn btn-danger" id="managedRouteDelete" onclick="deleteManagedRoute()" hidden>删除路由</button></div>
+          </div>
         </section>
 
         <section id="tabStats" class="stats-deck" style="display:none">
@@ -1168,6 +1202,8 @@ let visibleProxyUrls = new Set();
 let focusedNodeName = '';
 let appBuild = null;
 let currentTab = 'nodes';
+let managedRoutes = [];
+let editingManagedRouteSlug = '';
 let logRefreshTimer = null;
 let lastLogLines = [];
 let currentLogPage = 1;
@@ -1352,6 +1388,12 @@ function showLogin(message = '') {
 function resetProtectedUI() {
   document.querySelectorAll('.sheet-layer').forEach(layer => { layer.style.display = 'none'; });
   editingNode = null;
+  managedRoutes = [];
+  editingManagedRouteSlug = '';
+  const managedRouteBody = document.getElementById('managedRoutesBody');
+  if (managedRouteBody) managedRouteBody.innerHTML = '<tr><td colspan="6" class="table-empty">暂无托管路由</td></tr>';
+  const managedRouteLines = document.getElementById('managedRouteLines');
+  if (managedRouteLines) managedRouteLines.innerHTML = '';
   twoFactorFlowGeneration++;
   TWO_FACTOR_SETUP_ID = '';
   clearNodeForm();
@@ -1390,6 +1432,89 @@ function initApp() {
   const nodeBtn = document.querySelector('.rail-button');
   if (nodeBtn) switchTab('nodes', nodeBtn);
   loadNodes();
+}
+
+const MANAGED_ROUTES_ENDPOINT = '/api/admin/managed-routes';
+
+async function managedRouteFetch(path = '', options = {}) {
+  const generation = authGeneration;
+  const r = await authFetch(MANAGED_ROUTES_ENDPOINT + path, options);
+  if (generation !== authGeneration) return { ok: false, error: '', _status: 401, _stale: true };
+  if (handleSessionAuthFailure(r, generation)) return { ok: false, error: '', _status: 401, _stale: true };
+  return r;
+}
+
+function loadManagedRouteEditor(route = null) {
+  editingManagedRouteSlug = route?.slug || '';
+  document.getElementById('managedRouteEditorTitle').textContent = route ? `编辑托管路由 ${route.slug}` : '新增托管路由';
+  document.getElementById('managedRouteSlug').value = route?.slug || '';
+  document.getElementById('managedRouteSlug').disabled = !!route;
+  document.getElementById('managedRouteNode').value = route?.node_name || '';
+  document.getElementById('managedRouteDefaultLine').value = route?.default_line || '';
+  document.getElementById('managedRouteEnabled').checked = route ? !!route.enabled : true;
+  document.getElementById('managedRoutePublic').checked = route ? !!route.public : false;
+  const lines = document.getElementById('managedRouteLines');
+  lines.innerHTML = '';
+  (route?.lines?.length ? route.lines : [{ line_slug: 'main', target: '', enabled: true, position: 1 }]).forEach(line => addManagedRouteLine(line));
+  document.getElementById('managedRouteDelete').hidden = !route;
+}
+
+function addManagedRouteLine(line = {}) {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'form-group form-full managed-route-line';
+  wrapper.innerHTML = `<div class="action-pack" style="justify-content:flex-start"><label style="flex:1"><span class="form-hint">线路 slug</span><input data-route-line="slug" value="${esc(line.line_slug || '')}" placeholder="main"/></label><label style="flex:3"><span class="form-hint">目标地址</span><input data-route-line="target" value="${esc(line.target || '')}" placeholder="https://media.example/base"/></label><label class="log-switch"><input data-route-line="enabled" type="checkbox" ${line.enabled !== false ? 'checked' : ''}/>启用</label><button type="button" class="btn btn-danger btn-sm" onclick="this.closest('.managed-route-line').remove()">移除</button></div>`;
+  document.getElementById('managedRouteLines').appendChild(wrapper);
+}
+
+function collectManagedRouteLines() {
+  return [...document.querySelectorAll('#managedRouteLines .managed-route-line')].map((row, index) => ({
+    line_slug: row.querySelector('[data-route-line="slug"]').value.trim(),
+    target: row.querySelector('[data-route-line="target"]').value.trim(),
+    enabled: row.querySelector('[data-route-line="enabled"]').checked,
+    position: index + 1,
+  }));
+}
+
+function renderManagedRoutes() {
+  const body = document.getElementById('managedRoutesBody');
+  if (!managedRoutes.length) { body.innerHTML = '<tr><td colspan="6" class="table-empty">暂无托管路由</td></tr>'; return; }
+  body.innerHTML = managedRoutes.map(route => `<tr><td><b>${esc(route.slug)}</b></td><td>${esc(route.node_name)}</td><td>${route.enabled ? '<span class="chip ok">启用</span>' : '<span class="chip warn">停用</span>'} ${route.public ? '<span class="chip blue">公开</span>' : ''}</td><td>${esc(route.default_line || '-')}</td><td>${route.lines?.length || 0}</td><td><button class="btn btn-sm" onclick="editManagedRoute('${esc(route.slug)}')">编辑</button></td></tr>`).join('');
+}
+
+async function loadManagedRoutes(showToast = false) {
+  const r = await managedRouteFetch();
+  if (!r.ok) { if (!r._stale) toast('加载托管路由失败: ' + r.error, 'err'); return; }
+  managedRoutes = r.routes || [];
+  renderManagedRoutes();
+  if (showToast) toast('托管路由已刷新');
+}
+
+function newManagedRoute() { loadManagedRouteEditor(); }
+
+function editManagedRoute(slug) {
+  const route = managedRoutes.find(item => item.slug === slug);
+  if (route) loadManagedRouteEditor(route);
+}
+
+async function saveManagedRoute() {
+  const slug = document.getElementById('managedRouteSlug').value.trim();
+  const body = { node_name: document.getElementById('managedRouteNode').value.trim(), enabled: document.getElementById('managedRouteEnabled').checked, public: document.getElementById('managedRoutePublic').checked, default_line: document.getElementById('managedRouteDefaultLine').value.trim(), lines: collectManagedRouteLines() };
+  if (!slug) { toast('请输入路由 slug', 'err'); return; }
+  const path = '/' + encodeURIComponent(slug);
+  const r = await managedRouteFetch(path, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (!r.ok) { if (!r._stale) toast('保存托管路由失败: ' + r.error, 'err'); return; }
+  await loadManagedRoutes();
+  loadManagedRouteEditor(r.route);
+  toast('托管路由已保存');
+}
+
+async function deleteManagedRoute() {
+  if (!editingManagedRouteSlug || !window.confirm('确认删除当前托管路由？')) return;
+  const r = await managedRouteFetch('/' + encodeURIComponent(editingManagedRouteSlug), { method: 'DELETE' });
+  if (!r.ok) { if (!r._stale) toast('删除托管路由失败: ' + r.error, 'err'); return; }
+  await loadManagedRoutes();
+  loadManagedRouteEditor();
+  toast('托管路由已删除');
 }
 
 async function api(action, data = {}) {
@@ -1489,13 +1614,14 @@ function switchTab(name, btn) {
   document.getElementById('app')?.classList.toggle('logs-active', name === 'logs');
   document.querySelectorAll('.rail-button').forEach(t => t.classList.remove('active'));
   btn.classList.add('active');
-  const tabs = { nodes: 'tabNodes', stats: 'tabStats', failover: 'tabFailover', logs: 'tabLogs' };
+  const tabs = { nodes: 'tabNodes', managedRoutes: 'tabManagedRoutes', stats: 'tabStats', failover: 'tabFailover', logs: 'tabLogs' };
   for (const [key, id] of Object.entries(tabs)) {
     const el = document.getElementById(id);
     if (el) el.style.display = key === name ? '' : 'none';
   }
   const meta = {
     nodes: ['媒体中枢', 'Emby 服务器管理', '统一管理 Emby 服务器访问、线路与策略'],
+    managedRoutes: ['路由编排', '托管路由', '配置节点线路、默认线路与公开状态'],
     stats: ['播放统计', '播放统计', '查看近期播放次数、会话数与客户端分布'],
 	failover: ['本地控制', '故障转移', '节点状态、流量策略与 mock DNS 操作'],
     logs: ['运行日志', '运行日志', '查看服务运行期间产生的日志'],
@@ -1503,7 +1629,11 @@ function switchTab(name, btn) {
   document.getElementById('pageKicker').textContent = meta[0];
   document.getElementById('pageTitle').textContent = meta[1];
   document.getElementById('pageSubtitle').textContent = meta[2];
-  if (name === 'stats') {
+  if (name === 'managedRoutes') {
+    stopLogRealtime('待机', 'paused');
+    loadManagedRoutes();
+    if (!editingManagedRouteSlug) loadManagedRouteEditor();
+  } else if (name === 'stats') {
     stopLogRealtime('待机', 'paused');
     loadStats();
 	} else if (name === 'failover') {
