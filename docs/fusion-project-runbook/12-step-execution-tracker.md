@@ -53,3 +53,9 @@ Status: DONE
 - Remote feature ref: `1f60e1c`.
 - Scope: `docs/fusion-project-runbook/*` and `deploy/*` only.
 - No force push, main/master push, DNS, traffic, or service action.
+
+## Post-deploy stabilization
+
+| Step ID | Phase | Task | Status | Depends on | Files expected to change | Implementation notes | Validation command | Validation result | Commit hash | Next action |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| POSTDEPLOY-001 | Stabilization | Observe deployed BWG sidecar, repeat self-use smoke, verify rollback, and document access | IN_PROGRESS | DEPLOY-004 and deployment publish | `08`, `12-15`, `20-23` | Read-only runtime checks; no public ingress or service restart unless recovery is required | local/BWG/origin refs; systemd/listener/log checks; localhost smoke; rollback path checks | PENDING | TBD | Run BWG read-only stabilization checks |

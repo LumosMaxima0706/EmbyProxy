@@ -2,6 +2,8 @@
 
 Status: PASS - BWG SIDECAR HEALTHY
 
+Post-deploy stabilization recheck: IN_PROGRESS.
+
 ## Checks
 
 - `systemctl is-active <new-sidecar-service>` and bounded service status.

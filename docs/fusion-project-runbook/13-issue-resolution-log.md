@@ -89,6 +89,11 @@ No publish issue occurred. The deployment record bundle was verified and pushed 
 the authorized BWG bridge to `feature/failover-phase2-local` at `1f60e1c`; the
 temporary BWG ref and bundle were cleaned.
 
+## POSTDEPLOY-001 initial issue state
+
+No new issue is known at stabilization entry. Any service, log, smoke, rollback, or
+access-guide discrepancy must be added as a separate issue before recovery work.
+
 ### DEPLOY-001 local attempt result
 
 Local verification was successful with the recorded temporary Go toolchain. There

@@ -409,3 +409,11 @@
 - Remote feature ref verified at `1f60e1c`; temporary ref and bundle were cleaned.
 - No force push, main/master push, deployment mutation, restart, DNS, traffic,
   Nginx block, or NOSLA SSH occurred during publishing.
+
+## Post-deploy stabilization started
+
+- Owner accepted the deployment and authorized a read-only stabilization phase.
+- Added the owner localhost/SSH-tunnel access guide and stabilization log.
+- `POSTDEPLOY-001` is IN_PROGRESS; service restart/reload is not planned unless an
+  observed sidecar fault requires recovery.
+- No DNS, public traffic, existing Nginx block, rathole mapping, or NOSLA action is authorized.

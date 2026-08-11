@@ -166,6 +166,18 @@ Each completed row requires command, timestamp, result summary, and link to trac
 - Push target: `HEAD:refs/heads/feature/failover-phase2-local` only.
 - Remote verification: PASS; feature ref equals `5cbbe54`.
 - Force push/main/master/deploy/restart/NOSLA SSH: NOT USED.
+
+## Post-deploy stabilization verification
+
+| Verification | Success standard | Current result |
+| --- | --- | --- |
+| Local/BWG/origin refs | All feature refs match the expected stabilization base | PENDING |
+| Service stability | Active/enabled, main status zero, no unexpected restart | PENDING |
+| Listener boundary | Only `127.0.0.1:18082` | PENDING |
+| Bounded log review | No panic/ERROR/FATAL or secret leakage | PENDING |
+| Self-use smoke | Admin/auth/CRUD/upstream/fail-closed/fallback pass | PENDING |
+| Rollback readiness | Manifest, release/config/data/log paths, and unit rollback verified | PENDING |
+| Existing service safety | Nginx/rathole active; `nginx -t` pass; no config change | PENDING |
 - Dedicated BWG temporary ref and bundle: CLEANED.
 
 ## Deployment verification rows

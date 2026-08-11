@@ -48,3 +48,6 @@ database exists. This is the verified rollback baseline.
 
 Post-start rollback remains scoped to the new unit and assets. The first-deploy
 manifest is retained; no previous release/config/database needed restoration.
+
+Post-deploy stabilization must revalidate the manifest, current release link,
+configuration/data/log paths, and exact unit-only rollback command before closing.
