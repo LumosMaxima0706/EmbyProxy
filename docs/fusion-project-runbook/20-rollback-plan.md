@@ -1,6 +1,6 @@
 # Rollback Plan
 
-Status: REQUIRED BEFORE DEPLOYMENT MUTATION
+Status: VERIFIED FOR CURRENT FIRST DEPLOYMENT
 
 Rollback is limited to newly created sidecar assets. Existing services and
 configuration must not be deleted or overwritten.
@@ -45,3 +45,6 @@ Nginx, rathole, staging data, or any unknown service.
 
 Before first start, the unit is disabled/inactive, port 18082 is free, and no
 database exists. This is the verified rollback baseline.
+
+Post-start rollback remains scoped to the new unit and assets. The first-deploy
+manifest is retained; no previous release/config/database needed restoration.

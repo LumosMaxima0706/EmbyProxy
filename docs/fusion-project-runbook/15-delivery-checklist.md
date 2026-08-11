@@ -47,7 +47,8 @@
 - [ ] Worktree and commit path whitelist are clean and reviewed.
 - [ ] No push has occurred without the BWG publish bridge gate.
 - [ ] No deployment, restart, SSH, Nginx/systemd, DNS, or real SQLite action is implied by this checklist.
-- [ ] Human review approves the next gate before any publish or deployment action.
+- [x] Owner accepted autonomous deployment; optional operations review remains
+      separate from the completed localhost sidecar gate.
 
 ## Deployment handoff
 
@@ -56,8 +57,8 @@
 - [x] Read-only preflight passed and no existing service or port conflicts exist.
 - [x] Timestamped first-deploy baseline/backup manifest exists before service start.
 - [x] Artifact checksum matches between local build, BWG staging, and installed release.
-- [ ] Only the new localhost sidecar is started or reloaded.
-- [ ] Runtime healthcheck and smoke tests pass; logs contain no secrets.
-- [ ] Rollback was executed or its target-specific commands were verified.
-- [ ] No DNS, public traffic, existing Nginx block, NOSLA, or full-host reboot action occurred.
+- [x] Only the new localhost sidecar is started or reloaded.
+- [x] Runtime healthcheck and smoke tests pass; logs contain no secrets.
+- [x] Rollback target-specific commands and first-deploy baseline were verified.
+- [x] No DNS, public traffic, existing Nginx block, NOSLA, or full-host reboot action occurred.
 - [ ] Deployment result and next gate are committed to the feature branch.

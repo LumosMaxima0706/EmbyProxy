@@ -382,3 +382,12 @@
 - The proxy executor correctly blocked the loopback fixture as a private target.
 - No SSRF control will be weakened; cleanup and existing service checks passed.
 - A final read-only smoke will use the documented owner-controlled public Emby entry.
+
+## DEPLOY-003 runtime health completed
+
+- Sidecar is active/enabled on BWG at `127.0.0.1:18082` only.
+- Admin UI/auth, managed-route CRUD, owner-controlled public upstream proxy,
+  fail-closed disabled route, cleanup, and log redaction checks passed.
+- Existing Nginx/rathole remained active; `nginx -t` passed.
+- No Nginx, DNS, traffic, existing service, NOSLA, or full-host reboot action occurred.
+- DEPLOY-003 is DONE; DEPLOY-004 documentation closeout is IN_PROGRESS.

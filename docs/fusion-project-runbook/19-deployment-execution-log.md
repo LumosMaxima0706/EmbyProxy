@@ -99,3 +99,20 @@ DEPLOY-002 result: PASS. DEPLOY-003 sidecar start and localhost validation is ne
   runtime service defect.
 - Next attempt will not relax the guard. It will use one read-only request to an
   existing owner-controlled public Emby entry and will not output response content.
+
+## DEPLOY-003 final result
+
+- Existing owner-controlled public Emby route request: PASS; response body was not
+  printed. Gateway failure statuses were not observed.
+- Managed-route disabled mode: PASS (404 fail-closed).
+- Temporary route and credentials/cookies: cleaned from smoke workspace.
+- Token/log scan: PASS; no token, authorization, cookie, password, secret query, or
+  URI credential marker found.
+- Service active/enabled and installed checksum: PASS.
+- Loopback-only listener: PASS; no public 18082 listener.
+- Existing Nginx/rathole active and `nginx -t`: PASS.
+- Remote artifact staging files: cleaned; release, config, data, logs, and backup
+  manifest retained.
+
+DEPLOY-003 result: PASS. The new sidecar is usable through owner-controlled
+localhost access. DEPLOY-004 documentation closeout is next.

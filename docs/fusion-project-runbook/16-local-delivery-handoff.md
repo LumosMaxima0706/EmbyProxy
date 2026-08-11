@@ -1,6 +1,6 @@
 # Local Delivery Handoff
 
-Status: LOCAL DELIVERY READY FOR HUMAN REVIEW
+Status: BWG LOCALHOST SIDECAR DEPLOYED - OWNER USE READY
 
 ## Scope Delivered
 
@@ -55,9 +55,11 @@ Browser automation is not configured in this repository; live authenticated UI b
 
 `ISSUE-PROV-002` / `GAP-PROV-002` remains open for formal license, attribution, provenance, dependency inventory, SBOM, and notices evidence. It does not block implementation, but may block formal public release/distribution.
 
-### Deployment/runtime still pending
+### Deployment/runtime boundary
 
-Failover runtime, traffic, DNS, and policy gaps remain open for later phases. They must be reviewed before any production traffic change.
+Failover runtime, traffic, DNS, and policy gaps remain open for later phases. The
+new sidecar is available only through owner-controlled localhost/SSH access; these
+gaps must be reviewed before any production traffic change.
 
 ## Publish Readiness
 
@@ -67,6 +69,17 @@ This branch was published to `origin/feature/failover-phase2-local` at `5cbbe54`
 
 Before production deployment, the target environment must have a recorded previous working commit, a reviewed configuration backup, a database backup or migration rollback plan, and a reviewed feature-flag rollback path. No restart or rollback action was executed in this handoff.
 
+## Deployment result
+
+- BWG sidecar service: `embyproxy-gsy-sidecar.service`, active and enabled.
+- Listener: `127.0.0.1:18082` only.
+- Release commit: `e0f2bb6`; runtime artifact checksum is recorded in the deployment log.
+- Independent release/config/data/log paths and first-deploy rollback manifest are recorded.
+- No Nginx test location, DNS, public traffic, existing service, or host reboot was changed.
+- Administrator token remains only in the BWG mode-0600 environment file and was not
+  printed or committed; owner must use an approved secure retrieval path.
+
 ## Next Gate
 
-Next required gate: human/PR review. Production deployment and traffic changes remain separately gated.
+Next required gate: publish the deployment documentation through the BWG bridge,
+then owner operations review. Production traffic changes remain separately gated.

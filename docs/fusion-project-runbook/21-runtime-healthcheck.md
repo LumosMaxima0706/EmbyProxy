@@ -1,6 +1,6 @@
 # Runtime Healthcheck
 
-Status: PENDING DEPLOYMENT
+Status: PASS - BWG SIDECAR HEALTHY
 
 ## Checks
 
@@ -17,6 +17,21 @@ Status: PENDING DEPLOYMENT
 - Logs are bounded and scanned for secrets, cookies, authorization values, and
   sensitive query parameters.
 - Existing BWG services and Nginx remain healthy.
+
+## Current result
+
+- Service `embyproxy-gsy-sidecar.service`: active and enabled.
+- Version/commit: `sidecar-e0f2bb6` / `e0f2bb6`.
+- Listener: loopback-only `127.0.0.1:18082`.
+- Admin UI and unauthenticated rejection: PASS.
+- Authenticated managed-route CRUD: PASS; temporary smoke route removed.
+- Owner-controlled public upstream proxy request: PASS without response output.
+- Disabled managed route: 404 fail-closed.
+- Legacy fallback request: no 5xx.
+- Error/access log review: expected access statuses only; no ERROR/FATAL/panic or
+  sensitive marker found.
+- Existing Nginx/rathole: active; `nginx -t`: PASS.
+- No DNS, public traffic, existing Nginx block, NOSLA, or host reboot action.
 
 ## Failure handling
 

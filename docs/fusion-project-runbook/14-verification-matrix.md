@@ -177,8 +177,8 @@ Each completed row requires command, timestamp, result summary, and link to trac
 | Disk and backup capacity | DEPLOY-001/002 | Independent release, config, log, and DB backup paths have capacity | Do not upload or switch release | PASS; timestamped first-deploy manifest created |
 | Artifact checksum | DEPLOY-002 | BWG checksum equals local verified artifact | Remove only new staging artifact and record result | PASS |
 | Config validation | DEPLOY-002/003 | New config validates without modifying existing Nginx/server blocks | Stop before service start | PASS: unit verified; runtime start pending |
-| Sidecar health/smoke | DEPLOY-003 | Local health, auth, managed route, fallback, WebSocket/Range and redaction checks pass | Execute scoped rollback | PENDING |
-| Existing service safety | DEPLOY-003 | Existing services remain active and unchanged | Roll back new sidecar only | PENDING |
+| Sidecar health/smoke | DEPLOY-003 | Local health, auth, managed route, fallback, WebSocket/Range and redaction checks pass | Execute scoped rollback | PASS for available runtime checks; WebSocket/Range remain covered by automated suite |
+| Existing service safety | DEPLOY-003 | Existing services remain active and unchanged | Roll back new sidecar only | PASS |
 | No DNS/traffic/NOSLA action | Every deployment gate | No such mutation appears in command/log evidence | Stop and report immediately | PASS so far |
 
 ## DEPLOY-001 local result
@@ -221,6 +221,14 @@ Each completed row requires command, timestamp, result summary, and link to trac
   markers: PASS.
 - Full smoke result: INCONCLUSIVE (`DEPLOY-SMOKE-001`).
 - Cleanup and existing service safety after attempt: PASS.
+
+## DEPLOY-003 final verification
+
+- Public upstream proxy smoke: PASS.
+- Disabled route fail-closed and temporary route cleanup: PASS.
+- Service/error/access log scans: PASS; expected access statuses only.
+- Artifact checksum, unit/config permissions, service active/enabled, existing
+  services, loopback binding, and `nginx -t`: PASS.
 
 ## DEPLOY-003 attempt 2
 

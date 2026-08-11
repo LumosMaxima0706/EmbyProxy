@@ -1,6 +1,6 @@
 # Deployment Execution Plan
 
-Status: IN_PROGRESS
+Status: DEPLOYED TO BWG LOCALHOST SIDECAR
 
 Owner has authorized autonomous self-use deployment. This plan is limited to the
 documented BWG sidecar boundary and does not authorize production traffic changes.
@@ -50,6 +50,18 @@ Nginx or DNS as an implicit deployment step.
 - Health checks and local smoke tests pass, including auth rejection, managed-route
   behavior, legacy fallback, WebSocket/Range handling, and redacted logging.
 - A tested rollback path and backup locations are recorded.
+
+## DEPLOY-003 result
+
+PASS. The sidecar is enabled and active on BWG, serves only on `127.0.0.1:18082`,
+and the documented health and smoke checks passed. No Nginx test location, DNS,
+public traffic, or existing service was changed.
+
+## DEPLOY-004 closeout
+
+The deployment is usable for owner-controlled localhost/SSH-tunnel access. Public
+ingress remains intentionally absent. Formal production traffic changes remain
+outside this deployment and require their own reviewed gate.
 
 ## DEPLOY-001 preflight result
 
