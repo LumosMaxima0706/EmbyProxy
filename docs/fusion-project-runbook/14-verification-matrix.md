@@ -167,3 +167,16 @@ Each completed row requires command, timestamp, result summary, and link to trac
 - Remote verification: PASS; feature ref equals `5cbbe54`.
 - Force push/main/master/deploy/restart/NOSLA SSH: NOT USED.
 - Dedicated BWG temporary ref and bundle: CLEANED.
+
+## Deployment verification rows
+
+| Verification | When | Success standard | Failure handling | Current result |
+| --- | --- | --- | --- | --- |
+| BWG identity/checkout/status | DEPLOY-001 | Alias is `bwg`; intended checkout and clean state are confirmed | Record DEPLOY issue; do not mutate | PENDING |
+| Port/service conflict | DEPLOY-001 | New service name is unused and `127.0.0.1:18082` is free | Stop and choose no alternative implicitly | PENDING |
+| Disk and backup capacity | DEPLOY-001/002 | Independent release, config, log, and DB backup paths have capacity | Do not upload or switch release | PENDING |
+| Artifact checksum | DEPLOY-002 | BWG checksum equals local verified artifact | Remove only new staging artifact and record result | PENDING |
+| Config validation | DEPLOY-002/003 | New config validates without modifying existing Nginx/server blocks | Stop before service start | PENDING |
+| Sidecar health/smoke | DEPLOY-003 | Local health, auth, managed route, fallback, WebSocket/Range and redaction checks pass | Execute scoped rollback | PENDING |
+| Existing service safety | DEPLOY-003 | Existing services remain active and unchanged | Roll back new sidecar only | PENDING |
+| No DNS/traffic/NOSLA action | Every deployment gate | No such mutation appears in command/log evidence | Stop and report immediately | PASS so far |

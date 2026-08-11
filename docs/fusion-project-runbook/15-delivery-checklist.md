@@ -48,3 +48,16 @@
 - [ ] No push has occurred without the BWG publish bridge gate.
 - [ ] No deployment, restart, SSH, Nginx/systemd, DNS, or real SQLite action is implied by this checklist.
 - [ ] Human review approves the next gate before any publish or deployment action.
+
+## Deployment handoff
+
+- [ ] BWG target, checkout, independent service name, port, release path, config,
+      log path, and rollback commands are recorded.
+- [ ] Read-only preflight passed and no existing service or port conflicts exist.
+- [ ] Timestamped binary/config/database backups exist before mutation.
+- [ ] Artifact checksum matches between local build and BWG staging.
+- [ ] Only the new localhost sidecar is started or reloaded.
+- [ ] Runtime healthcheck and smoke tests pass; logs contain no secrets.
+- [ ] Rollback was executed or its target-specific commands were verified.
+- [ ] No DNS, public traffic, existing Nginx block, NOSLA, or full-host reboot action occurred.
+- [ ] Deployment result and next gate are committed to the feature branch.

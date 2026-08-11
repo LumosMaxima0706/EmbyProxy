@@ -31,3 +31,12 @@ Evidence: local bundle verification, BWG branch/base/status, bundle/temp-ref/pat
 Status: DONE (`ISSUE-PUBLISH-001` resolved for the implementation publish).
 
 Scope was limited to the approved `feature/failover-phase2-local` branch. BWG-only validation, ff-only merge, feature-ref push, remote verification, and cleanup passed. No source implementation is in progress.
+
+## Deployment steps
+
+| Step ID | Phase | Task | Status | Depends on | Files expected to change | Implementation notes | Validation command | Validation result | Commit hash | Next action |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| DEPLOY-001 | Deployment | BWG read-only preflight and target conflict check | IN_PROGRESS | K-001, owner deployment authorization | `18-21`, `08`, `12-15` | Confirm alias, checkout, service boundary, port `127.0.0.1:18082`, disk, backups, and Nginx structure before mutation | Local `go test ./...`, `go vet ./...`, `git diff --check`; read-only `ssh bwg` checks | PENDING | TBD | Record target-specific paths and proceed only if safe |
+| DEPLOY-002 | Deployment | Backup and upload independent sidecar artifact | TODO | DEPLOY-001 | deployment log, rollback plan | No mutation until preflight passes and exact paths are recorded | checksum, backup listing, transfer verification | PENDING | TBD | Start only new sidecar |
+| DEPLOY-003 | Deployment | Start sidecar and run health/smoke checks | TODO | DEPLOY-002 | healthcheck, execution log | No Nginx/DNS/traffic changes | service status, localhost checks, bounded logs | PENDING | TBD | Roll back on failure |
+| DEPLOY-004 | Deployment | Close deployment gate and record rollback/readiness | TODO | DEPLOY-003 | all deployment docs, progress log, checklist | Commit runbook result; no push unless separately authorized | final status and diff checks | PENDING | TBD | Stop for next explicit production gate |

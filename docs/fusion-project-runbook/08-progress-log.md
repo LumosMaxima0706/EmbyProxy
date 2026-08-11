@@ -334,3 +334,13 @@
 - No merge, push, deploy, restart, or traffic/configuration action occurred.
 - Temporary BWG ref and bundle were cleaned; BWG worktree remained clean.
 - Recorded as `ISSUE-PUBLISH-002`; retry will use a quoting-safe whitelist check and repeat all gates.
+
+## Autonomous BWG sidecar deployment started
+
+- Owner accepted the deployment risk and authorized autonomous self-use deployment.
+- Deployment target is BWG alias `bwg`, using the independent localhost sidecar
+  boundary documented in `18-deployment-execution-plan.md`.
+- Added deployment plan, execution log, rollback plan, and runtime healthcheck.
+- First gate is read-only BWG preflight; no server mutation has occurred.
+- Required tracker, issue log, verification matrix, and delivery checklist updates
+  are being made before each subsequent gate.
