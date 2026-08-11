@@ -212,6 +212,19 @@
 - **是否有 secret 泄露**：否。
 - **下一步建议**：将 E-001 标为 IN_PROGRESS，检查现有 embedded Admin UI 的结构，设计最小 managed-route editor，不改变认证边界。
 
+## 2026-08-11T22:34:00+08:00 | Phase E | Admin UI integration started
+
+- **操作人/工具**：Codex；本地 embedded HTML/JS/CSS 只读审查。
+- **做了什么**：将 E-001 标记为 IN_PROGRESS，开始定位现有 Admin UI 的 tab、node editor、API 请求和样式扩展点。
+- **验证命令**：`rg`/`sed` UI structure search；无外部系统访问。
+- **结果**：待确定最小 managed-route editor 入口和无需额外 frontend build 的验证方式。
+- **是否修改代码**：尚未修改 UI。
+- **是否 commit/push**：否/否。
+- **是否部署/重启**：否。
+- **是否修改 Nginx/systemd/SQLite/DNS**：否；未 SSH BWG/NOSLA。
+- **是否有 secret 泄露**：否。
+- **下一步建议**：完成 UI 结构盘点后实现一个受现有认证保护的 managed-route CRUD editor，并增加静态契约测试或人工 review 证据。
+
 ## 2026-08-11T22:20:00+08:00 | Phase D | Admin API compile issue found
 
 - **操作人/工具**：Codex；临时 Go 1.26 toolchain。
@@ -224,3 +237,15 @@
 - **是否修改 Nginx/systemd/SQLite/DNS**：否；未 SSH BWG/NOSLA。
 - **是否有 secret 泄露**：否。
 - **下一步建议**：修复 error 类型后重跑 targeted tests，再执行 full test/vet。
+
+## 2026-08-11T22:52:00+08:00 | Phase E | Managed-route Admin UI completed
+
+- **操作人/工具**：Codex；本地 embedded HTML/JavaScript 和 Go 静态契约测试。
+- **做了什么**：在 `internal/admin/static/index.html` 增加托管路由 tab；支持路由列表、新建/编辑、线路增删、保存、删除、刷新；所有请求沿用 same-origin authenticated session，退出登录时清理受保护路由状态。
+- **测试**：新增 `internal/admin/managed_routes_ui_test.go`，检查 tab、API endpoint、CRUD handlers、same-origin credentials 和敏感凭据不嵌入。
+- **验证命令**：`gofmt -w internal/admin/managed_routes_ui_test.go`；`go test ./internal/admin ./internal/proxyadapter`；`go test ./...`；`go vet ./...`；`git diff --check`。
+- **结果**：全部 PASS；UI source/test commit 为 `8c00f1a`。项目无独立 frontend build，浏览器人工复核仍列入交付清单。
+- **下一步**：进入 F-001，接通 runtime managed-route resolver，并保持 legacy path 在 feature flag 关闭/未知时可用。
+- **是否修改源码**：是；仅本地实现与测试。
+- **是否 commit/push**：已本地 commit `8c00f1a` / 未 push。
+- **是否部署/重启/SSH**：否；未部署、未重启、未 SSH BWG/NOSLA。

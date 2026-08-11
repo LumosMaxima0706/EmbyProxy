@@ -46,3 +46,10 @@ Every issue is recorded when detected. Resolution work updates the same row with
 - `golang-1.26-src` was downloaded and extracted into the same temporary GOROOT.
 - `go test ./internal/storage` passed after the complete GOROOT was available.
 - C-001 storage source was committed as `98229bd`; D-001 remains the active source task.
+
+### ISSUE-TOOLCHAIN-001 final status correction
+
+- B-001 recovery is complete, not in progress.
+- Temporary Go 1.26 toolchain remains available at the recorded local path for verification; commands use `GOTOOLCHAIN=local` to avoid automatic toolchain downloads.
+- C-001, D-001, and E-001 verification completed successfully after recovery.
+- Status: DONE; related commits: `98229bd`, `0b7b590`, `8c00f1a`.

@@ -9,8 +9,8 @@
 | `go test ./internal/storage ./internal/admin ./internal/proxyadapter` | After C/D source changes | Targeted packages pass | Record failing command/test; do not hard-commit | PASS after D-001 fix |
 | `go test ./...` | After implementation batches and before delivery | All Go packages pass | Stop, record issue, do not auto-fix outside scope | PASS |
 | `go vet ./...` | Before source delivery/release | No vet findings | Record findings and stop current gate | PASS |
-| Admin UI build/test | After E-001 | Existing project UI checks pass, or manual review evidence exists | Record unavailable automation and perform documented manual review | Not applicable yet; UI batch not started |
-| Manual admin review | When UI automation unavailable | Auth, CRUD, validation errors, no secret display, fallback preserved | Record checklist failures | Pending E-001 |
+| Admin UI build/test | After E-001 | Existing project UI checks pass, or manual review evidence exists | Record unavailable automation and perform documented manual review | Static contract test PASS; no separate frontend build exists |
+| Manual admin review | When UI automation unavailable | Auth, CRUD, validation errors, no secret display, fallback preserved | Record checklist failures | E-001 pending human browser review; UI source does not embed credentials and uses same-origin auth |
 | Secret redaction check | Every proxy/admin logging batch | No token, cookie, password, sensitive query, or credential in logs/output | Stop, redact, add regression test | Existing redaction tests identified; current batch not executed |
 | No deploy/restart/SSH check | Every task close | No server, process, Nginx/systemd, DNS, real SQLite, or SSH action | Stop and record unauthorized action | Passed; none performed |
 
@@ -62,3 +62,12 @@ Each completed row requires command, timestamp, result summary, and link to trac
 - Failure: `validateManagedRouteRequest` returned string constants where `error` values were required.
 - Issue: `ISSUE-ADMIN-001`.
 - Handling: stop before commit, wrap error codes, rerun targeted tests.
+
+## E-001 Completion Evidence
+
+- UI contract test: `go test ./internal/admin ./internal/proxyadapter` PASS.
+- Full Go suite: `go test ./...` PASS.
+- Static analysis: `go vet ./...` PASS.
+- Formatting/diff hygiene: `gofmt -w internal/admin/managed_routes_ui_test.go` and `git diff --check` PASS.
+- Browser automation is not configured in this repository; manual review remains required for visual behavior and live authenticated CRUD.
+- Source commit: `8c00f1a`.
