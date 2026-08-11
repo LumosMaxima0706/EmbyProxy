@@ -4,12 +4,45 @@ Every issue is recorded when detected. Resolution work updates the same row with
 
 | Issue ID | Detected during step | Symptom | Root cause | Impact | Blocking? | Resolution plan | Resolution result | Status | Related commit |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| ISSUE-TOOLCHAIN-001 | B-001 preflight / C-001-D-001 verification | `go` and `gofmt` commands are unavailable; formatting and tests cannot run | Current execution environment has no Go toolchain on PATH or known local path | Source batch cannot be safely formatted, tested, or committed | Yes for source commit; no for docs-only planning | Use an existing approved local Go toolchain path or restore the project development environment; do not install dependencies or fake results | Not resolved; `command -v go`, `command -v gofmt`, and `go version` produced no tool path/version | BLOCKED | None |
-| ISSUE-SOURCE-001 | C-001/D-001 carry-over | Managed-route storage/admin API source changes are dirty and uncommitted | Implementation began before toolchain recovery was available | Must preserve changes but cannot claim a deliverable source commit | Yes | Keep exact dirty paths, run gofmt/targeted/full tests once toolchain exists, then commit only reviewed source/tests | Not resolved; source changes preserved and `git diff --check` passes | BLOCKED | None |
-| ISSUE-WORKTREE-001 | A-001 precheck | Worktree contains six managed-route source/test paths, including two untracked files | Prior Phase 3 implementation attempt intentionally stopped before commit | Cleaning or reset would risk losing owner-authorized work | Yes for clean source verification; no for runbook documentation | Do not reset/clean; classify paths in tracker and commit only after verification | Runbook docs were committed separately in `8d60aa5`; source changes remain preserved and unstaged | OPEN | `8d60aa5` (docs classification only) |
+| ISSUE-TOOLCHAIN-001 | B-001 preflight / C-001-D-001 verification | `go` and `gofmt` commands were unavailable; formatting and tests could not run | System Go is not installed and no manager-provided binary exists | Source batch could not initially be safely formatted, tested, or committed | Yes for source commit; no for docs-only planning | Search local paths/managers, then use a safe user-local package extraction if a configured package source is available | Resolved by downloading `golang-1.26-go` and `golang-src` from the configured apt source into `/tmp/embyproxy-go-recovery.gpw7iY`, extracting with `dpkg-deb -x`, and verifying `go version go1.26.0 linux/amd64` plus gofmt help output; system package database unchanged | DONE | None |
+| ISSUE-SOURCE-001 | C-001/D-001 carry-over | Managed-route storage/admin API source changes were dirty and uncommitted | Implementation began before toolchain recovery was available | Remaining admin/proxyadapter batch still needs validation; storage subset can be delivered independently | Yes for remaining batch | Keep exact dirty paths, run targeted/full tests, then commit only reviewed source/tests | Storage subset resolved in `98229bd`; admin/proxyadapter batch resolved in `0b7b590`; no source paths remain dirty | DONE | `0b7b590` |
+| ISSUE-WORKTREE-001 | A-001 precheck | Worktree contained six managed-route source/test paths, including two untracked files | Prior Phase 3 implementation attempt intentionally stopped before commit | Cleaning or reset would risk losing owner-authorized work | Yes for clean source verification; no for runbook documentation | Do not reset/clean; classify paths in tracker and commit only after verification | Source paths were committed as `98229bd` and `0b7b590`; remaining dirty paths are declared runbook evidence updates | DONE | `0b7b590` |
+| ISSUE-ADMIN-001 | D-001 targeted test | `go test ./internal/admin ./internal/proxyadapter` initially failed because validation returned strings as `error` | `validateManagedRouteRequest` had an `error` return type but did not wrap error codes | Admin API could not compile | Yes for D-001 | Wrap stable error codes with `errors.New`, rerun targeted tests, then full tests before commit | Fixed with `errors.New`; targeted admin/proxyadapter tests, `go test ./...`, `go vet ./...`, and `git diff --check` all passed | DONE | `0b7b590` |
 
 ## Resolution Recording Rules
 
 - A resolved issue must include the exact command/evidence, changed files, resulting status, and related commit.
 - Toolchain recovery does not authorize deployment, SSH, push, or dependency installation.
 - A test failure becomes a separate issue if it has a distinct cause or scope.
+
+## ISSUE-TOOLCHAIN-001 Autonomous Recovery Attempt 1
+
+- **Status**：IN_PROGRESS
+- **Owner authorization**：本地自主恢复已获授权；不需要 owner-only access、secret 或生产操作。
+- **计划**：搜索 PATH、常见安装目录、Go 版本管理器、系统包管理器和项目脚本；发现可用工具链后临时更新 PATH，随后运行 gofmt/targeted/full tests/vet。
+- **已尝试**：`command -v go`、`command -v gofmt`、`go version`；此前已检查 `/usr/local/go/bin`、`/usr/bin`、`/usr/local/bin`、用户本地常见目录。
+- **当前结果**：待完成本轮更广泛的本机搜索与包源检查。
+
+### Recovery attempt 2: local package source
+
+- **尝试**：确认 `apt`/`apt-get` 可用、`golang-go` 有本地配置的软件源候选；当前用户无免密 sudo，因此优先使用用户可写临时目录下载并解包，不修改系统包数据库。
+- **安全边界**：仅本地开发环境；不接触生产服务器、凭据或项目外部服务配置。
+- **结果**：待执行临时包下载/解包并验证 `go`/`gofmt`。
+
+### Recovery attempt 2 result
+
+- Temporary package extraction succeeded; Go 1.26.0 and gofmt are available via `/tmp/embyproxy-go-recovery.gpw7iY/extracted/usr/lib/go-1.26/bin`.
+- No system install, service action, deployment, SSH, or secret access occurred.
+
+### Recovery attempt 3: complete standard library source
+
+- **Symptom**：Go binary starts, but `go test ./internal/storage` reports standard packages such as `context`, `bytes`, and `database/sql` missing from the temporary GOROOT.
+- **Cause**：The downloaded `golang-src` package is only a small transitional package; the versioned `golang-1.26-src` payload was not yet extracted.
+- **Plan**：Download and extract `golang-1.26-src` into the same temporary root, then rerun the storage test without changing repository dependency files.
+- **Status**：IN_PROGRESS.
+
+### Recovery attempt 3 result
+
+- `golang-1.26-src` was downloaded and extracted into the same temporary GOROOT.
+- `go test ./internal/storage` passed after the complete GOROOT was available.
+- C-001 storage source was committed as `98229bd`; D-001 remains the active source task.

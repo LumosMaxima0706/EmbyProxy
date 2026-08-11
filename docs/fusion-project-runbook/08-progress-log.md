@@ -133,3 +133,94 @@
 - **是否修改 Nginx/systemd/SQLite/DNS**：否；未 SSH BWG/NOSLA。
 - **是否有 secret 泄露**：否。
 - **下一步建议**：恢复已存在的 Go toolchain 后重试 B-001，再依次验证并提交 C-001/D-001；不安装依赖、不伪造验证。
+
+## 2026-08-11T21:42:00+08:00 | Phase B | Autonomous Go toolchain recovery started
+
+- **操作人/工具**：Codex；本地 PATH、文件系统和工具管理器只读检查。
+- **做了什么**：按 owner 授权将 B-001 从 BLOCKED 改为 IN_PROGRESS；扩大搜索到标准 Go 安装目录、用户目录、mise/asdf/gvm/brew/apt/dnf/yum/apk/pacman/nix/devbox 和项目脚本。
+- **验证命令**：`command -v go`、`command -v gofmt`、`go version`、PATH/常见目录/manager/package source checks。
+- **结果**：恢复尝试进行中；在确认所有安全自助路径前不停止，不提交未验证源码。
+- **是否修改代码**：否；仅更新 tracker、issue、verification 和 progress 文档。
+- **是否 commit/push**：否。
+- **是否部署/重启**：否。
+- **是否修改 Nginx/systemd/SQLite/DNS**：否；未 SSH BWG/NOSLA。
+- **是否有 secret 泄露**：否。
+- **下一步建议**：完成本机工具链搜索；若发现可用工具链则执行 B-001 验证并继续 C-001/D-001，否则记录穷尽证据和恢复路径。
+
+## 2026-08-11T21:48:00+08:00 | Phase B | Local Go package recovery attempt
+
+- **操作人/工具**：Codex；本地 `apt-cache`/`apt-get download` 计划与临时目录解包。
+- **做了什么**：确认 `golang-go` 软件包候选存在；由于当前用户无免密 sudo，选择不修改系统包数据库，尝试下载并解包到用户可写临时目录后临时更新 PATH。
+- **验证命令**：`apt-cache policy golang-go`、`apt-cache depends golang-go`、`sudo -n true`，随后执行临时包下载、`dpkg-deb -x`、`go version`、`gofmt` 检查。
+- **结果**：恢复尝试进行中；结果以实际命令为准。
+- **是否修改代码**：否；仅更新 recovery evidence 文档。
+- **是否 commit/push**：否。
+- **是否部署/重启**：否。
+- **是否修改 Nginx/systemd/SQLite/DNS**：否；未 SSH BWG/NOSLA。
+- **是否有 secret 泄露**：否。
+- **下一步建议**：完成临时工具链验证；成功后执行 B-001/C-001/D-001 验证，失败则写明包源/网络限制和下一恢复路径。
+
+## 2026-08-11T21:56:00+08:00 | Phase B/C | Go toolchain recovered; storage verification started
+
+- **操作人/工具**：Codex；本地 apt package download、`dpkg-deb -x`、临时 Go toolchain。
+- **做了什么**：从已配置 apt source 下载并解包 Go 1.26 到 `/tmp/embyproxy-go-recovery.gpw7iY`；确认 `go`/`gofmt` 可用；将 B-001 标记 DONE、C-001 标记 IN_PROGRESS。
+- **验证命令**：`apt-cache policy golang-go`、`apt-get download golang-1.26-go golang-src`、`dpkg-deb -x`、`go version`、`gofmt -h`。
+- **结果**：B-001 recovery 成功；系统包数据库未修改。即将执行 changed Go files 的 gofmt 和 `go test ./internal/storage`。
+- **是否修改代码**：尚未由本恢复动作修改源码；后续 gofmt 仅限当前 dirty batch。
+- **是否 commit/push**：否。
+- **是否部署/重启**：否。
+- **是否修改 Nginx/systemd/SQLite/DNS**：否；未 SSH BWG/NOSLA。
+- **是否有 secret 泄露**：否。
+- **下一步建议**：完成 C-001 storage 格式化与 targeted test，记录结果后再进入 D-001。
+
+## 2026-08-11T22:03:00+08:00 | Phase C | First storage test exposed incomplete temporary GOROOT
+
+- **操作人/工具**：Codex；临时 Go 1.26 toolchain。
+- **做了什么**：对当前六个 changed Go files 执行 gofmt，并运行 `go test ./internal/storage`。
+- **验证命令**：`gofmt -w ...` 通过；`go test ./internal/storage` 启动但因临时 GOROOT 缺少标准库源码而失败。
+- **结果**：源码未提交；问题归入 `ISSUE-TOOLCHAIN-001` recovery attempt 3，准备补取版本化 standard library source。
+- **是否修改代码**：是；仅 gofmt 当前已登记 dirty source batch。
+- **是否 commit/push**：否/否。
+- **是否部署/重启**：否。
+- **是否修改 Nginx/systemd/SQLite/DNS**：否；未 SSH BWG/NOSLA。
+- **是否有 secret 泄露**：否。
+- **下一步建议**：补齐临时 GOROOT 后重跑 C-001 storage test；失败则记录实际测试错误并停止该 step。
+
+## 2026-08-11T22:12:00+08:00 | Phase C/D | Managed route storage completed; Admin API verification started
+
+- **操作人/工具**：Codex；临时 Go 1.26 toolchain。
+- **做了什么**：补齐 `golang-1.26-src` 后重跑 storage 测试；C-001 storage foundation 通过并提交为 `98229bd`；将 D-001 Admin API verification 标为 IN_PROGRESS。
+- **验证命令**：`gofmt` storage files、`go test ./internal/storage`、`git diff --check`。
+- **结果**：C-001 DONE；storage package tests PASS；admin/proxyadapter dirty batch 尚未提交，等待 D-001 targeted tests。
+- **是否修改代码**：是；C-001 source commit 已创建，D-001 source changes 仍未提交。
+- **是否 commit/push**：`98229bd` / 未 push。
+- **是否部署/重启**：否。
+- **是否修改 Nginx/systemd/SQLite/DNS**：否；未 SSH BWG/NOSLA。
+- **是否有 secret 泄露**：否。
+- **下一步建议**：运行 `go test ./internal/admin ./internal/proxyadapter`，通过后提交 D-001。
+
+## 2026-08-11T22:28:00+08:00 | Phase D | Managed route Admin API completed
+
+- **操作人/工具**：Codex；临时 Go 1.26 toolchain。
+- **做了什么**：修复 `ISSUE-ADMIN-001` 的 error 类型问题；完成 authenticated managed-route GET/PUT/DELETE API、输入校验和测试；提交 D-001 为 `0b7b590`。
+- **验证命令**：`gofmt`；`go test ./internal/admin ./internal/proxyadapter`；`go test ./...`；`go vet ./...`；`git diff --check`。
+- **结果**：全部通过；C-001/D-001 DONE。Admin UI、runtime loading 和后续集成尚未开始。
+- **是否修改代码**：是；D-001 source/test files 已提交。
+- **是否 commit/push**：`0b7b590` / 未 push。
+- **是否部署/重启**：否。
+- **是否修改 Nginx/systemd/SQLite/DNS**：否；未 SSH BWG/NOSLA。
+- **是否有 secret 泄露**：否。
+- **下一步建议**：将 E-001 标为 IN_PROGRESS，检查现有 embedded Admin UI 的结构，设计最小 managed-route editor，不改变认证边界。
+
+## 2026-08-11T22:20:00+08:00 | Phase D | Admin API compile issue found
+
+- **操作人/工具**：Codex；临时 Go 1.26 toolchain。
+- **做了什么**：运行 D-001 targeted tests；发现 `validateManagedRouteRequest` 的 error-code 返回类型错误。
+- **验证命令**：`go test ./internal/admin ./internal/proxyadapter`；proxyadapter 通过，admin 编译失败。
+- **结果**：未提交 D-001；问题已登记为 `ISSUE-ADMIN-001`，准备使用 `errors.New` 包装稳定错误码。
+- **是否修改代码**：否；待 issue 记录后修复。
+- **是否 commit/push**：否/否。
+- **是否部署/重启**：否。
+- **是否修改 Nginx/systemd/SQLite/DNS**：否；未 SSH BWG/NOSLA。
+- **是否有 secret 泄露**：否。
+- **下一步建议**：修复 error 类型后重跑 targeted tests，再执行 full test/vet。
