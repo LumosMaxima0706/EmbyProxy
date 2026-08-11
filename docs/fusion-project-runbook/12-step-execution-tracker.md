@@ -24,10 +24,10 @@ E-001 is complete in `8c00f1a`; F-001 is complete in `29118fb`; G-001 is complet
 
 Status: DONE for target `5cbbe54`.
 
-Evidence: local bundle verification, BWG branch/base/status, bundle/temp-ref/path whitelist, ff-only merge, feature-only push, remote ref verification, and temporary artifact cleanup all passed. A final docs-only publish-result commit remains to be sent through the same bridge.
+Evidence: local bundle verification, BWG branch/base/status, bundle/temp-ref/path whitelist, ff-only merge, feature-only push, remote ref verification, and temporary artifact cleanup all passed. The publish-result docs commit is the next approved bundle target.
 
 ## Publish Bridge Gate
 
-Status: IN_PROGRESS (`ISSUE-PUBLISH-001`)
+Status: DONE (`ISSUE-PUBLISH-001` resolved for the implementation publish).
 
-Scope is limited to the approved `feature/failover-phase2-local` branch. The next action is local bundle creation, followed by BWG-only validation, ff-only merge, feature-ref push, remote verification, and cleanup. No source implementation is in progress.
+Scope was limited to the approved `feature/failover-phase2-local` branch. BWG-only validation, ff-only merge, feature-ref push, remote verification, and cleanup passed. No source implementation is in progress.
