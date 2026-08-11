@@ -66,3 +66,5 @@ traffic remains intentionally untouched.
 All current service, listener, log, tunnel, auth/CRUD, upstream, fail-closed,
 fallback, cleanup, rollback, Nginx, and rathole checks passed. No restart/reload,
 DNS, public traffic, Nginx server-block, rathole mapping, or NOSLA action occurred.
+
+Day-2 operations documentation was published through the BWG bridge at `3419686`.

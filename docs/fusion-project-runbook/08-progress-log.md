@@ -476,3 +476,11 @@
 - **下一步建议**：日常使用按 `27-day2-checklist.md`；公网切流和正式 public release 仍需各自独立 gate。
 
 Day-2 runbook start and closeout evidence commits are `412987e` and `1d285e9`.
+
+## Day-2 operations docs publish bridge
+
+- Bundle target `3419686` passed local verification and BWG runbook-only path checks.
+- BWG staging checkout fast-forwarded from `31fa87c`; only the same feature ref was pushed.
+- Remote feature ref verification and local/BWG temporary bundle/ref cleanup passed.
+- No force push, main/master push, service action, DNS, public traffic, Nginx,
+  rathole, or NOSLA action occurred.

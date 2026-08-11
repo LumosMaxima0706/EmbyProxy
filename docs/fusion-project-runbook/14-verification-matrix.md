@@ -307,3 +307,11 @@ with cleanup and sidecar health under `POSTDEPLOY-ISSUE-002`.
 | Owner smoke | DAY2-001 | CRUD/upstream/fail-closed/fallback/cleanup pass | Record issue and troubleshoot | PASS; temporary routes removed |
 | Rollback readiness | DAY2-001 | manifest and release/config/data/log paths readable | Stop finalization until corrected | PASS; unit verification and modes checked |
 | Existing ingress safety | DAY2-001 | Nginx/rathole active; `nginx -t` pass; no changes | Stop/report; do not mutate ingress | PASS; no ingress mutation |
+
+## Day-2 docs publish verification
+
+- Local bundle verification/list-heads: PASS.
+- BWG branch/base/worktree and runbook-only path whitelist: PASS.
+- Fast-forward-only feature push and remote ref verification: PASS at `3419686`.
+- Local and BWG temporary artifacts: CLEANED.
+- Force push, main/master, deploy/restart, DNS/traffic, Nginx/rathole, NOSLA: NOT USED.

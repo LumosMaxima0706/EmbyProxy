@@ -130,3 +130,9 @@ recovery action.
 
 | DAY2-ISSUE-001 | DAY2-001 rollback metadata check | Composite read-only check passed refs, service, listener, logs, UI, and auth rejection, then exited during rollback metadata assertions | Assertion expected a relative `current` symlink target; BWG uses the equivalent absolute release path | Day-2 closeout was briefly pending; no runtime outage or mutation occurred | No | Recheck every metadata field and record the actual absolute release target | Manifest/config mode 0600, database/log paths, unit verification, and absolute `e0f2bb6` release target all passed; documentation corrected | DONE | Day-2 closeout docs commit |
 | DAY2-ISSUE-002 | DAY2-001 owner smoke | Authenticated API, managed-route CRUD, fail-closed, cleanup, and legacy fallback passed; automatic owner-upstream route discovery found no legacy Admin node | Current Admin node and managed-route lists were empty after prior smoke cleanup | Upstream connectivity recheck remained pending; management and fallback were healthy | No | Select an owner-controlled host from existing BWG Nginx metadata internally, without printing it, run one status-only managed-route proxy smoke, and remove the route | Owner-controlled upstream returned a non-gateway status; temporary route deletion and post-smoke service checks passed | DONE | Day-2 closeout docs commit |
+
+## Day-2 publish result
+
+No publish issue occurred. Target `3419686` passed BWG bundle verification,
+runbook-only path validation, ff-only feature update, remote verification, and
+temporary artifact cleanup.
