@@ -136,3 +136,5 @@ recovery action.
 No publish issue occurred. Target `3419686` passed BWG bundle verification,
 runbook-only path validation, ff-only feature update, remote verification, and
 temporary artifact cleanup.
+
+| DAY2-PUBLISH-ISSUE-001 | Day-2 publish-result docs bridge | Bundle verify/fetch passed, then the target equality assertion failed before merge/push | Retry script contained an incorrect manually entered full hash for short commit `32746f7` | Final publish-result docs remained local; BWG/origin stayed safely at `3419686` | No runtime impact; yes for final docs publication | Clean temporary ref/bundles, resolve the full hash from Git instead of transcribing it, and rerun all bridge checks | Retry pending; no merge or push occurred | IN_PROGRESS | `32746f7` |
