@@ -15,6 +15,9 @@ documented BWG sidecar boundary and does not authorize production traffic change
 - Config root: `/etc/embyproxy-gsy-sidecar`.
 - Data root: `/var/lib/embyproxy-gsy-sidecar`.
 - Log root: `/var/log/embyproxy-gsy-sidecar`.
+- Audited unit template: `deploy/systemd/embyproxy-gsy-sidecar.service`.
+- Non-secret environment template: `deploy/embyproxy-gsy-sidecar.env.example`;
+  `ADMIN_TOKEN` is generated on BWG and never printed or committed.
 - New assets must use an independent release directory, config, log path, service
   name, and binary backup.
 - Existing Nginx server blocks, `/admin/`, `/s/`, rathole, DNS, and production

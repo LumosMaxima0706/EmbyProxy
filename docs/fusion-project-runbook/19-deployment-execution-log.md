@@ -50,3 +50,11 @@ checksum, create an independent backup manifest, and upload to a new release pat
 - SHA-256: `bbd6d1fb69c3d988ca617ea0918e40be45acd5dde4b541535c23e225555632aa`.
 - Local temporary artifact: `/tmp/embyproxy-sidecar-e0f2bb6.LiWZRw/embyproxy`.
 - No repository file or remote host was changed by the build.
+
+## Deployment configuration preparation
+
+- Added an auditable systemd unit using a dedicated user and independent paths.
+- Added a non-secret environment template fixed to `127.0.0.1:18082`, managed
+  routes enabled, real DNS apply disabled, and mock fixture disabled.
+- The required administrator credential will be generated on BWG with mode 0600;
+  its value will not be printed, transferred back, or committed.
