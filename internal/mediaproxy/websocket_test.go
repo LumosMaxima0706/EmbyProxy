@@ -161,6 +161,122 @@ func TestWebSocketHTTPSProxyAndNoProxySelection(t *testing.T) {
 	}
 }
 
+func TestServeHTTPWebSocketPassesThroughClientRejections(t *testing.T) {
+	for _, status := range []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound} {
+		status := status
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Connection", "keep-alive, X-Hop")
+				w.Header().Set("Keep-Alive", "timeout=5")
+				w.Header().Set("Upgrade", "websocket")
+				w.Header().Set("X-Hop", "drop")
+				w.Header().Set("WWW-Authenticate", `Bearer realm="staging"`)
+				w.WriteHeader(status)
+				_, _ = io.WriteString(w, "upstream rejection body")
+			}))
+			defer upstream.Close()
+			parsed, _ := url.Parse(upstream.URL)
+			port, _ := strconv.Atoi(parsed.Port())
+			executor := NewExecutor(Config{AllowPrivateTargets: true})
+			proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				executor.ServeHTTP(w, r, Target{Scheme: "http", Host: parsed.Hostname(), Port: port})
+			}))
+			defer proxy.Close()
+
+			conn, response := rawWebSocketRequest(t, proxy.URL)
+			defer conn.Close()
+			if response.StatusCode != status {
+				t.Fatalf("status = %d, want %d", response.StatusCode, status)
+			}
+			if response.Header.Get("Connection") != "" || response.Header.Get("Keep-Alive") != "" || response.Header.Get("Upgrade") != "" || response.Header.Get("X-Hop") != "" {
+				t.Fatalf("hop-by-hop headers leaked: %v", response.Header)
+			}
+			if response.Header.Get("WWW-Authenticate") == "" {
+				t.Fatal("safe rejection header was not forwarded")
+			}
+		})
+	}
+}
+
+func TestWriteWebSocketClientRejectionFiltersUnsafeHeaders(t *testing.T) {
+	unsafeHeaders := make(http.Header)
+	for name, value := range map[string]string{
+		"Location":            "https://upstream.example/private",
+		"Connection":          "keep-alive, X-Hop",
+		"Upgrade":             "websocket",
+		"Keep-Alive":          "timeout=5",
+		"Proxy-Authenticate":  "challenge",
+		"Proxy-Authorization": "value",
+		"TE":                  "trailers",
+		"Trailer":             "X-Trailer",
+		"Transfer-Encoding":   "chunked",
+		"X-Hop":               "drop",
+		"WWW-Authenticate":    `Bearer realm="staging"`,
+	} {
+		unsafeHeaders.Set(name, value)
+	}
+	response := &http.Response{
+		StatusCode: http.StatusNotFound,
+		Header:     unsafeHeaders,
+		Body:       http.NoBody,
+	}
+	recorder := httptest.NewRecorder()
+
+	writeWebSocketClientRejection(recorder, response)
+
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", recorder.Code)
+	}
+	for _, name := range []string{"Location", "Connection", "Upgrade", "Keep-Alive", "Proxy-Authenticate", "Proxy-Authorization", "TE", "Trailer", "Transfer-Encoding", "X-Hop"} {
+		if got := recorder.Header().Values(name); len(got) != 0 {
+			t.Errorf("%s leaked: %v", name, got)
+		}
+	}
+	if got := recorder.Header().Get("WWW-Authenticate"); got != `Bearer realm="staging"` {
+		t.Errorf("WWW-Authenticate = %q, want safe challenge", got)
+	}
+}
+
+func TestServeHTTPWebSocketServerFailureStillReturnsBadGateway(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer upstream.Close()
+	parsed, _ := url.Parse(upstream.URL)
+	port, _ := strconv.Atoi(parsed.Port())
+	executor := NewExecutor(Config{AllowPrivateTargets: true})
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		executor.ServeHTTP(w, r, Target{Scheme: "http", Host: parsed.Hostname(), Port: port})
+	}))
+	defer proxy.Close()
+
+	conn, response := rawWebSocketRequest(t, proxy.URL)
+	defer conn.Close()
+	if response.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", response.StatusCode)
+	}
+}
+
+func TestServeHTTPWebSocketTransportFailureStillReturnsBadGateway(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	_ = listener.Close()
+	executor := NewExecutor(Config{AllowPrivateTargets: true})
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		executor.ServeHTTP(w, r, Target{Scheme: "http", Host: "127.0.0.1", Port: port})
+	}))
+	defer proxy.Close()
+
+	conn, response := rawWebSocketRequest(t, proxy.URL)
+	defer conn.Close()
+	if response.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", response.StatusCode)
+	}
+}
+
 func rawWebSocketRequest(t *testing.T, rawURL string) (net.Conn, *http.Response) {
 	t.Helper()
 	parsed, _ := url.Parse(rawURL)

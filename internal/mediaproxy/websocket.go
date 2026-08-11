@@ -15,10 +15,6 @@ import (
 )
 
 func (e *Executor) serveWebSocket(w http.ResponseWriter, r *http.Request, target Target) error {
-	hijacker, ok := w.(http.Hijacker)
-	if !ok {
-		return fmt.Errorf("websocket hijack unavailable")
-	}
 	upstreamURL, err := target.URLForRequest(r.URL)
 	if err != nil {
 		return err
@@ -48,8 +44,20 @@ func (e *Executor) serveWebSocket(w http.ResponseWriter, r *http.Request, target
 		return err
 	}
 	if response.StatusCode != http.StatusSwitchingProtocols {
+		if isWebSocketClientRejection(response.StatusCode) {
+			defer conn.Close()
+			writeWebSocketClientRejection(w, response)
+			return nil
+		}
+		_ = response.Body.Close()
 		_ = conn.Close()
 		return fmt.Errorf("upstream websocket status %d", response.StatusCode)
+	}
+	hijacker, ok := w.(http.Hijacker)
+	if !ok {
+		_ = response.Body.Close()
+		_ = conn.Close()
+		return fmt.Errorf("websocket hijack unavailable")
 	}
 	client, clientReader, err := hijacker.Hijack()
 	if err != nil {
@@ -67,6 +75,25 @@ func (e *Executor) serveWebSocket(w http.ResponseWriter, r *http.Request, target
 	go copyClose(conn, client)
 	go copyClose(client, conn)
 	return nil
+}
+
+func isWebSocketClientRejection(status int) bool {
+	switch status {
+	case http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound:
+		return true
+	default:
+		return false
+	}
+}
+
+func writeWebSocketClientRejection(w http.ResponseWriter, response *http.Response) {
+	defer response.Body.Close()
+	for _, name := range []string{"Cache-Control", "Content-Language", "Content-Type", "Expires", "Pragma", "Retry-After", "Vary", "WWW-Authenticate"} {
+		for _, value := range response.Header.Values(name) {
+			w.Header().Add(name, value)
+		}
+	}
+	w.WriteHeader(response.StatusCode)
 }
 
 func (e *Executor) dialTarget(ctx context.Context, target Target) (net.Conn, bool, error) {

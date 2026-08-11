@@ -95,6 +95,12 @@ func (h *Handler) tryWebSocketTarget(ctx context.Context, w http.ResponseWriter,
 		return false
 	}
 	if res.StatusCode != http.StatusSwitchingProtocols {
+		if isWebSocketClientRejection(res.StatusCode) {
+			defer upstreamConn.Close()
+			writeWebSocketClientRejection(w, res)
+			h.log.Info("ws", "upstream rejected upgrade", map[string]any{"event": "upstreamRejectedUpgradeResponse", "id": requestID, "node": parsed.Name, "target": logging.FormatTarget(target), "status": res.StatusCode})
+			return true
+		}
 		_ = upstreamConn.Close()
 		h.log.Warn("ws", "upstream rejected upgrade", map[string]any{"event": "upstreamRejectedUpgrade", "id": requestID, "node": parsed.Name, "target": logging.FormatTarget(target), "status": res.StatusCode})
 		return false
@@ -137,6 +143,25 @@ func buildWebSocketHeaders(ids *identity.Manager, raw http.Header, targetURL *ur
 	headers.Set("Connection", "Upgrade")
 	headers.Set("Upgrade", "websocket")
 	return headers
+}
+
+func isWebSocketClientRejection(status int) bool {
+	switch status {
+	case http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound:
+		return true
+	default:
+		return false
+	}
+}
+
+func writeWebSocketClientRejection(w http.ResponseWriter, res *http.Response) {
+	defer res.Body.Close()
+	for _, name := range []string{"Cache-Control", "Content-Language", "Content-Type", "Expires", "Pragma", "Retry-After", "Vary", "WWW-Authenticate"} {
+		for _, value := range res.Header.Values(name) {
+			w.Header().Add(name, value)
+		}
+	}
+	w.WriteHeader(res.StatusCode)
 }
 
 func (h *Handler) dialWebSocket(ctx context.Context, target *url.URL, headers http.Header) (*http.Response, net.Conn, *bufio.Reader, error) {
