@@ -375,3 +375,10 @@
 - A temporary fixture readiness race made the first full smoke script inconclusive.
 - Cleanup passed; Nginx and rathole remain active; no DNS, traffic, or Nginx change occurred.
 - Recorded `DEPLOY-SMOKE-001`; DEPLOY-003 remains IN_PROGRESS for a diagnostic retry.
+
+## DEPLOY-003 smoke attempt 2 isolated the cause
+
+- Admin UI, unauthenticated rejection, login, and managed-route create/list passed.
+- The proxy executor correctly blocked the loopback fixture as a private target.
+- No SSRF control will be weakened; cleanup and existing service checks passed.
+- A final read-only smoke will use the documented owner-controlled public Emby entry.

@@ -221,3 +221,10 @@ Each completed row requires command, timestamp, result summary, and link to trac
   markers: PASS.
 - Full smoke result: INCONCLUSIVE (`DEPLOY-SMOKE-001`).
 - Cleanup and existing service safety after attempt: PASS.
+
+## DEPLOY-003 attempt 2
+
+- Fixture readiness, Admin UI, auth rejection/login, and route create/list: PASS.
+- Private/loopback target execution: fail closed as designed.
+- Successful upstream proxy: still PENDING under `DEPLOY-SMOKE-001`.
+- Cleanup, sidecar listener, Nginx, and rathole: PASS.

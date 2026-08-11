@@ -85,3 +85,17 @@ DEPLOY-002 result: PASS. DEPLOY-003 sidecar start and localhost validation is ne
   intact; fixture port free; temporary smoke directory cleaned.
 - Issue: `DEPLOY-SMOKE-001`. No rollback was required because the service health
   gate remained passing; a diagnostic smoke retry is required.
+
+## DEPLOY-003 smoke attempt 2 diagnosis
+
+- Fixture readiness: PASS.
+- Admin UI embedded managed-route editor: PASS.
+- Unauthenticated managed-route API rejection: PASS.
+- Credential-based local login: PASS without credential output.
+- Managed-route create/list: PASS.
+- Proxy to loopback fixture: correctly rejected by mediaproxy private-target guard.
+- Cleanup: PASS; service/Nginx/rathole remain active.
+- Root cause: the fixture design conflicted with the production SSRF policy, not a
+  runtime service defect.
+- Next attempt will not relax the guard. It will use one read-only request to an
+  existing owner-controlled public Emby entry and will not output response content.
