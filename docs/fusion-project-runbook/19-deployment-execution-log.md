@@ -73,3 +73,15 @@ checksum, create an independent backup manifest, and upload to a new release pat
 - Existing Nginx, rathole, staging checkout/data, DNS, and traffic were not changed.
 
 DEPLOY-002 result: PASS. DEPLOY-003 sidecar start and localhost validation is next.
+
+## DEPLOY-003 start and smoke attempt 1
+
+- New service enable/start: PASS.
+- Active/enabled, loopback-only listener, database initialization, startup log
+  markers, and embedded version: PASS.
+- First smoke script: INCONCLUSIVE. The temporary upstream initially refused a
+  connection and the script did not emit later stage markers.
+- Post-attempt safety check: sidecar, Nginx, and rathole active; sidecar listener
+  intact; fixture port free; temporary smoke directory cleaned.
+- Issue: `DEPLOY-SMOKE-001`. No rollback was required because the service health
+  gate remained passing; a diagnostic smoke retry is required.

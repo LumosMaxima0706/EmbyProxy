@@ -368,3 +368,10 @@
 - Installed and verified the audited systemd unit; generated the credential on BWG without output.
 - Service remains inactive and disabled; port 18082 remains free and no database exists.
 - DEPLOY-002 is DONE; DEPLOY-003 start and localhost health/smoke checks are IN_PROGRESS.
+
+## DEPLOY-003 smoke attempt 1 requires retry
+
+- The sidecar start gate passed and it remains active on loopback only.
+- A temporary fixture readiness race made the first full smoke script inconclusive.
+- Cleanup passed; Nginx and rathole remain active; no DNS, traffic, or Nginx change occurred.
+- Recorded `DEPLOY-SMOKE-001`; DEPLOY-003 remains IN_PROGRESS for a diagnostic retry.

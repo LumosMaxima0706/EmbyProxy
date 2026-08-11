@@ -100,3 +100,5 @@ active. DEPLOY-001 is resolved and DEPLOY-002 may proceed.
 No issue was detected. Backup manifest, checksum validation, independent paths,
 dedicated user, credential generation, unit verification, and pre-start checks all
 passed. Service remains inactive/disabled until DEPLOY-003.
+
+| DEPLOY-SMOKE-001 | DEPLOY-003 smoke attempt 1 | The temporary loopback upstream returned one initial connection-refused error and the script ended without per-stage completion markers | Fixture readiness was not established with an explicit success flag, and the monolithic script did not identify the later failing assertion | Runtime smoke result is unknown; sidecar start result remains valid | Yes for DEPLOY-003 completion; no for service availability | Verify cleanup/service safety, then retry with an explicit fixture-ready assertion and output after each stage | Cleanup verified: fixture port free, temp directory absent, sidecar/Nginx/rathole active, sidecar listener intact | IN_PROGRESS | TBD |

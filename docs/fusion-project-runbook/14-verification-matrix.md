@@ -214,3 +214,10 @@ Each completed row requires command, timestamp, result summary, and link to trac
 - Config permission 0600 and credential non-disclosure: PASS.
 - Pre-start service/port/database baseline: PASS.
 - Existing services, Nginx, DNS, traffic, and NOSLA: unchanged.
+
+## DEPLOY-003 attempt 1
+
+- Service start, enabled state, loopback listener, DB init, version, and startup
+  markers: PASS.
+- Full smoke result: INCONCLUSIVE (`DEPLOY-SMOKE-001`).
+- Cleanup and existing service safety after attempt: PASS.
