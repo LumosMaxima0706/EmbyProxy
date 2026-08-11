@@ -183,6 +183,9 @@ Initial composite stabilization check: INCONCLUSIVE under
 `POSTDEPLOY-ISSUE-001`; per-stage diagnosis is required.
 
 Diagnosis result: runtime checks PASS; rollback manifest formatting repair PENDING.
+
+SSH tunnel attempt 1: INCONCLUSIVE due validation pipeline behavior; cleanup and
+sidecar health PASS under `POSTDEPLOY-ISSUE-002`.
 - Dedicated BWG temporary ref and bundle: CLEANED.
 
 ## Deployment verification rows

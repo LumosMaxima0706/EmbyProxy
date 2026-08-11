@@ -95,6 +95,7 @@ No new issue is known at stabilization entry. Any service, log, smoke, rollback,
 access-guide discrepancy must be added as a separate issue before recovery work.
 
 | POSTDEPLOY-ISSUE-001 | POSTDEPLOY-001 initial composite check | The read-only script exited before its summary output | One of the ref/service/log/rollback assertions did not match; the monolithic script lacked per-stage markers | Stabilization cannot be marked complete; deployed service was not modified | Yes for POSTDEPLOY-001 completion; no confirmed runtime outage | Rerun the same scope with explicit per-stage PASS/FAIL output, then correct documentation or recover only the sidecar if an actual fault is found | Diagnosis isolated a formatting defect in the first-deploy manifest: all fields were on one line, so exact line checks failed. Service/runtime checks passed. Manifest normalization is the only recovery action required | IN_PROGRESS | TBD |
+| POSTDEPLOY-ISSUE-002 | POSTDEPLOY-001 SSH tunnel check | Admin UI content arrived through the tunnel, but the shell returned failure before PASS output | With `pipefail`, `grep -q` stopped after finding the marker and caused upstream curl to report a broken pipe | Access-guide validation remained inconclusive; service stayed healthy | Yes for tunnel validation only | Capture the complete response to a private temporary file, then match it; verify tunnel process and file cleanup | First attempt cleanup passed; local port 28082 released and sidecar remained active | IN_PROGRESS | TBD |
 
 ### DEPLOY-001 local attempt result
 

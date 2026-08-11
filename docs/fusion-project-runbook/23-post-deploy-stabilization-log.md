@@ -31,3 +31,9 @@ The service and runtime checks passed. The only failed assertion was rollback
 manifest field parsing: the original first-deploy manifest stored all key/value
 fields on one line. The manifest contains no credential, but it must be normalized
 to newline-delimited fields with mode 0600 before stabilization can close.
+
+## SSH tunnel attempt 1
+
+The tunnel returned Admin UI data, but a `curl | grep -q` pipeline produced a
+broken-pipe false failure under `pipefail`. Tunnel cleanup passed and the service
+remained active. Retry is tracked as `POSTDEPLOY-ISSUE-002`.

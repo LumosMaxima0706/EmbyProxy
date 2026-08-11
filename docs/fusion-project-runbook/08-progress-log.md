@@ -430,3 +430,10 @@
 - The first-deploy manifest was valid metadata but formatted as one line, causing
   exact field checks to fail.
 - Only manifest normalization is pending; no service restart or binary/config change is needed.
+
+## POSTDEPLOY-ISSUE-002 tunnel validation retry
+
+- The SSH tunnel returned Admin UI data, but the validation pipeline caused a
+  broken-pipe false failure.
+- Tunnel cleanup passed, local port 28082 was released, and the sidecar remained active.
+- The retry will capture the full response before checking the UI marker.
