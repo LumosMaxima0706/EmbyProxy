@@ -120,3 +120,16 @@
 - **是否修改 Nginx/systemd/SQLite/DNS**：否；未 SSH BWG/NOSLA。
 - **是否有 secret 泄露**：否。
 - **下一步建议**：提交 runbook operating system 后完成 A-001，进入 B-001 toolchain recovery；若仍不可用，保持源码步骤 BLOCKED 并等待具备 Go toolchain 的本地验证环境。
+
+## 2026-08-11T21:36:00+08:00 | Phase A/B | Tracker transition and toolchain gate
+
+- **操作人/工具**：Codex；本地 runbook/Git 只读核对与文档更新。
+- **做了什么**：完成 A-001 并记录 runbook OS commit `8d60aa5`；启动 B-001 toolchain recovery，确认 `go`、`gofmt` 不在 PATH 或已知本地路径；将 C-001/D-001 标记为依赖该问题的 BLOCKED。
+- **验证命令**：`command -v go`、`command -v gofmt`、`go version`、`git status --short --untracked-files=all`、`git diff --check`。
+- **结果**：A-001 DONE；B-001 BLOCKED by `ISSUE-TOOLCHAIN-001`；现有 managed-route source batch 未被清理、覆盖或提交。
+- **是否修改代码**：否；仅更新 tracker、issue、verification 和 progress 文档。
+- **是否 commit/push**：待创建本次 docs-only tracking update commit；未 push。
+- **是否部署/重启**：否。
+- **是否修改 Nginx/systemd/SQLite/DNS**：否；未 SSH BWG/NOSLA。
+- **是否有 secret 泄露**：否。
+- **下一步建议**：恢复已存在的 Go toolchain 后重试 B-001，再依次验证并提交 C-001/D-001；不安装依赖、不伪造验证。

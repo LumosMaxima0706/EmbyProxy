@@ -2,8 +2,8 @@
 
 | Verification | When to run | Success standard | Failure handling | Current result |
 | --- | --- | --- | --- | --- |
-| `git branch --show-current`, `git rev-parse --short HEAD` | Every task start and commit gate | Expected feature branch and recorded base/HEAD | Stop, record mismatch; no reset | Branch verified; HEAD `aee3871` |
-| `git status --short --untracked-files=all` | Before/after every task | Only declared task paths are dirty | Stop and classify unexpected paths | Current dirty source/docs state recorded in ISSUE-WORKTREE-001 |
+| `git branch --show-current`, `git rev-parse --short HEAD` | Every task start and commit gate | Expected feature branch and recorded base/HEAD | Stop, record mismatch; no reset | Branch verified; HEAD `8d60aa5` |
+| `git status --short --untracked-files=all` | Before/after every task | Only declared task paths are dirty | Stop and classify unexpected paths | Runbook docs clean after `8d60aa5`; declared source paths remain dirty under ISSUE-WORKTREE-001 |
 | `git diff --check` | Before every commit and after edits | No whitespace errors | Fix only in task scope, re-run | Passed for current tracked changes |
 | `gofmt -w <changed Go files>` | Before source tests/commit | Changed Go files format successfully | Record toolchain or format issue; do not commit | BLOCKED: `gofmt` unavailable |
 | `go test ./internal/storage ./internal/admin ./internal/proxyadapter` | After C/D source changes | Targeted packages pass | Record failing command/test; do not hard-commit | BLOCKED: `go` unavailable |
