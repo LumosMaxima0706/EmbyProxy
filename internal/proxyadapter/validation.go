@@ -61,6 +61,24 @@ func validateNodeName(name string) error {
 	return nil
 }
 
+// ValidateManagedRouteSlug exposes the same route constraints used by the
+// production resolver to management-plane callers.
+func ValidateManagedRouteSlug(slug string) error {
+	return validateSlug(slug)
+}
+
+// ValidateManagedRouteNode exposes the node-name constraints used by managed
+// route storage callers.
+func ValidateManagedRouteNode(name string) error {
+	return validateNodeName(name)
+}
+
+// ValidateManagedTarget checks a managed line before it is persisted.
+func ValidateManagedTarget(raw string) error {
+	_, err := parseServerTarget(raw)
+	return err
+}
+
 func splitRoutePath(raw string) ([]string, error) {
 	if err := validateRawPath(raw); err != nil {
 		return nil, err

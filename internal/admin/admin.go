@@ -137,6 +137,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.streamLogs(w, r, res)
 		return
 	}
+	if path == "/api/admin/managed-routes" || strings.HasPrefix(path, "/api/admin/managed-routes/") {
+		h.handleManagedRoutesAPI(w, r, path)
+		return
+	}
 	if strings.HasPrefix(path, "/api/admin/failover/") || strings.HasPrefix(path, "/api/admin/traffic/") || strings.HasPrefix(path, "/api/admin/dns/") {
 		h.handleFailoverAPI(w, r, path)
 		return
