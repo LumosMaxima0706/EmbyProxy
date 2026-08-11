@@ -53,3 +53,6 @@ Nginx location, DNS record, or rathole mapping as part of self-use access.
 
 For recurring checks and incident handling, use `24-owner-operations-guide.md`,
 `25-troubleshooting-guide.md`, and `27-day2-checklist.md`.
+
+Day-2 tunnel validation passed. The owner may use this localhost access method;
+public exposure remains intentionally disabled.

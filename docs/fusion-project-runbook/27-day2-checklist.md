@@ -1,6 +1,6 @@
 # Day-2 Operations Checklist
 
-Status: IN_PROGRESS
+Status: DONE - OWNER SELF-USE READY
 
 ## Before each use
 

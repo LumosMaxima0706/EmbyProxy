@@ -2,7 +2,7 @@
 
 Status: PASS - BWG SIDECAR HEALTHY
 
-Post-deploy stabilization recheck: PASS; day-2 finalization in progress.
+Post-deploy stabilization and day-2 recheck: PASS.
 
 ## Checks
 
@@ -47,3 +47,16 @@ scoped rollback before further diagnosis.
 - Recheck service state, restart count, loopback listener, and bounded logs.
 - Reuse the SSH tunnel smoke path without printing sensitive data.
 - Verify rollback manifest metadata and current release link without mutation.
+
+## Day-2 result
+
+- Local/BWG/origin base ref: `31fa87c`; day-2 docs were then committed locally
+  for feature-only bridge publication.
+- Service active/enabled, status zero, `NRestarts=0`.
+- Listener loopback-only on `127.0.0.1:18082`.
+- Bounded log and secret-marker scans: PASS.
+- SSH tunnel Admin UI and unauthenticated rejection: PASS; tunnel cleaned up.
+- Authenticated CRUD, owner-controlled upstream, fail-closed, fallback, and
+  temporary-route cleanup: PASS.
+- Rollback metadata and existing Nginx/rathole safety checks: PASS.
+- No service restart/reload was required.

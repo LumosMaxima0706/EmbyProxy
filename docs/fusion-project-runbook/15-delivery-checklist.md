@@ -77,8 +77,8 @@
 
 ## Day-2 operations
 
-- [ ] Owner operations guide covers tunnel, UI, service, listener, logs, route basics, and exposure boundary.
-- [ ] Troubleshooting guide covers access, service, port, auth, CRUD, proxy, and log failures.
-- [ ] Non-destructive backup/restore drill verifies manifest and scoped rollback.
-- [ ] Day-2 checklist covers use, route changes, incidents, rollback, and future cutover.
-- [ ] `DAY2-001` closes only after current BWG read-only checks pass.
+- [x] Owner operations guide covers tunnel, UI, service, listener, logs, route basics, and exposure boundary.
+- [x] Troubleshooting guide covers access, service, port, auth, CRUD, proxy, and log failures.
+- [x] Non-destructive backup/restore drill verifies manifest and scoped rollback.
+- [x] Day-2 checklist covers use, route changes, incidents, rollback, and future cutover.
+- [x] `DAY2-001` closed after current BWG read-only checks passed.

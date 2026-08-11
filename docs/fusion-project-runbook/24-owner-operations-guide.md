@@ -1,6 +1,6 @@
 # Owner Operations Guide
 
-Status: READY FOR OWNER SELF-USE
+Status: VERIFIED - READY FOR OWNER SELF-USE
 
 The sidecar is available only on BWG loopback at `127.0.0.1:18082`. It is not
 published through DNS, public traffic, an existing Nginx server block, or a
@@ -43,3 +43,6 @@ screenshots.
 
 Confirm the listener remains loopback-only. Do not alter Nginx, DNS, rathole, or
 firewall configuration for self-use; public cutover is a separate approved gate.
+
+Day-2 validation confirmed this access path, service state, listener boundary,
+health smoke, and rollback readiness.

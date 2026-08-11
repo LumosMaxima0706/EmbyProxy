@@ -52,8 +52,8 @@ manifest is retained; no previous release/config/database needed restoration.
 Post-deploy stabilization must revalidate the manifest, current release link,
 configuration/data/log paths, and exact unit-only rollback command before closing.
 
-Manifest formatting repair is pending; this does not require a service restart or
-change to the deployed binary.
+Manifest formatting repair was completed during stabilization. Day-2 recheck
+confirmed mode 0600 and readable newline-delimited metadata.
 
 ## Day-2 drill
 

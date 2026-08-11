@@ -60,3 +60,9 @@ runtime mutation occurred during publication.
 `DAY2-001` adds recurring owner operations, troubleshooting, backup/restore, and
 day-2 checklist documentation. Runtime behavior remains unchanged and public
 traffic remains intentionally untouched.
+
+## Day-2 result
+
+All current service, listener, log, tunnel, auth/CRUD, upstream, fail-closed,
+fallback, cleanup, rollback, Nginx, and rathole checks passed. No restart/reload,
+DNS, public traffic, Nginx server-block, rathole mapping, or NOSLA action occurred.

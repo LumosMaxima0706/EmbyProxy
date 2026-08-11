@@ -11,6 +11,7 @@ deleting files, or restoring over the current deployment.
 - Manifest: `/root/backups/embyproxy-gsy-sidecar/20260811T151516Z/pre-deployment-manifest.txt`.
 - Release root: `/opt/embyproxy-gsy-sidecar`.
 - Current release link: `/opt/embyproxy-gsy-sidecar/current`.
+- Current release target: `/opt/embyproxy-gsy-sidecar/releases/e0f2bb6`.
 - Config: `/etc/embyproxy-gsy-sidecar/embyproxy.env` (do not print contents).
 - Database: `/var/lib/embyproxy-gsy-sidecar/proxy.db`.
 - Logs: `/var/log/embyproxy-gsy-sidecar`.
@@ -38,3 +39,6 @@ manifest before switching `current`.
 
 The unit is active, listener is only `127.0.0.1:18082`, health checks pass, logs
 contain no panic/error or secret leakage, and the owner tunnel works.
+
+Day-2 read-only validation passed. No restore, service action, or file mutation
+was performed by this drill.
