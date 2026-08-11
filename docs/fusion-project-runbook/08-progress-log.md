@@ -94,3 +94,29 @@
 - **是否修改 Nginx/systemd/SQLite/DNS**：否；未 SSH BWG/NOSLA。
 - **是否有 secret 泄露**：否。
 - **下一步建议**：提交 docs-only authorization decision 后，开始第一批最小、可测试的 Phase 3 implementation；release hygiene 并行跟踪但不阻塞 coding。
+
+## 2026-08-11T21:15:43+08:00 | Phase 3 | Managed route admin API implementation attempt
+
+- **操作人/工具**：Codex；本地源码编辑，未访问外部系统。
+- **做了什么**：实现 managed route storage 的 list/save/delete 事务接口；新增认证后的 `/api/admin/managed-routes` GET/PUT/DELETE API；复用 proxyadapter 的 route/node/target 校验；新增 storage 与 admin API 测试。
+- **验证命令**：`gofmt -w` 和 `go test ./internal/storage ./internal/proxyadapter ./internal/admin` 已尝试；当前环境没有 `go` 或 `gofmt` 命令，因此验证未执行，`git diff --check` 已通过。
+- **结果**：源码改动仍未形成 commit；由于缺少 Go toolchain，不能声明测试通过，也不能安全提交 implementation commit。
+- **是否修改代码**：是；`internal/storage/managed_routes.go`、`internal/storage/managed_routes_test.go`、`internal/proxyadapter/validation.go`、`internal/admin/admin.go`、`internal/admin/managed_routes_api.go`、`internal/admin/managed_routes_api_test.go`。
+- **是否 commit/push**：否/否。
+- **是否部署/重启**：否。
+- **是否修改 Nginx/systemd/SQLite/DNS**：否；未 SSH BWG/NOSLA。
+- **是否有 secret 泄露**：否。
+- **下一步建议**：在具备现有 Go toolchain 的本地环境运行 gofmt、targeted tests、`go test ./...` 和 `go vet ./...`；若通过，再 review 并创建 implementation commit。不要安装依赖或绕过验证。
+
+## 2026-08-11T21:32:12+08:00 | Phase A | 建立 full-project executable runbook
+
+- **操作人/工具**：Codex；本地 Git、源码结构和 runbook 文档检查。
+- **做了什么**：要求并建立从 repo normalization 到最终 delivery 的 master plan、step execution tracker、issue resolution log、verification matrix 和 delivery checklist；把项目从单点 Phase 3 切换为全项目 stepwise execution。
+- **验证命令**：branch/HEAD/status/log、dirty path inventory、`command -v go`、`command -v gofmt`、`git diff --check` 和 runbook path checks。
+- **结果**：所有阶段、任务依赖、验收标准、验证命令和 rollback 边界已落盘；A-001 当前 IN_PROGRESS。Go/gofmt 仍不可用，问题已登记到 `ISSUE-TOOLCHAIN-001`；现有 managed-route source batch 未被丢弃。
+- **是否修改代码**：否；本轮 runbook 文档更新不修改源码内容。
+- **是否 commit/push**：待创建 runbook-only commit；未 push。
+- **是否部署/重启**：否。
+- **是否修改 Nginx/systemd/SQLite/DNS**：否；未 SSH BWG/NOSLA。
+- **是否有 secret 泄露**：否。
+- **下一步建议**：提交 runbook operating system 后完成 A-001，进入 B-001 toolchain recovery；若仍不可用，保持源码步骤 BLOCKED 并等待具备 Go toolchain 的本地验证环境。

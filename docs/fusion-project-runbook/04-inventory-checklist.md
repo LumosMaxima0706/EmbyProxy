@@ -113,3 +113,14 @@
 - [x] 已区分 implemented、partial、mock-only、placeholder 和 unverified。
 - [x] Owner authorization 已解除 `GAP-PROV-001` 对 Phase 3 implementation 的阻塞；未完成的 release/docs hygiene 转入 `GAP-PROV-002`。
 - [x] Phase 3 implementation 可开始；正式 release/public distribution 仍需单独完成 provenance/license hygiene review。
+
+## Full-project Implementation Inventory
+
+- [x] 已识别管理面入口：embedded Admin UI、`internal/admin` auth/API、`internal/storage` SQLite store。
+- [x] 已识别 data-plane 入口：`internal/proxyadapter` resolver/router 与 `internal/mediaproxy` executor。
+- [x] 已识别 failover 组件：policy/controller/scheduler、mock health/traffic/DNS、persistence 和 redirect helper。
+- [ ] 待完成 managed route storage CRUD 的 toolchain 验证与 source commit（tracker `C-001`）。
+- [ ] 待完成 Admin API 到 managed route 的完整验证（tracker `D-001`）。
+- [ ] 待接入 Admin UI managed-route editor（tracker `E-001`）。
+- [ ] 待完成 runtime resolver wiring、migration/backward compatibility、full regression 和 final delivery（trackers `F-001` 至 `K-001`）。
+- [x] license/provenance/SBOM/notices 已归入 `GAP-PROV-002` release/docs hygiene，不阻塞 implementation；正式 release/public distribution 前仍必须完成。

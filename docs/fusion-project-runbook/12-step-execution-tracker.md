@@ -1,0 +1,21 @@
+# Step Execution Tracker
+
+Statuses are `TODO`, `IN_PROGRESS`, `BLOCKED`, `DONE`, or `SKIPPED`. Only one step is `IN_PROGRESS` at a time. Every status change must include evidence in this file, `08-progress-log.md`, and, when applicable, `13-issue-resolution-log.md` and `14-verification-matrix.md`.
+
+| Step ID | Phase | Task | Status | Depends on | Files expected to change | Implementation notes | Validation command | Validation result | Commit hash | Next action |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| A-001 | A | Normalize repo/runbook operating system and classify dirty work | IN_PROGRESS | Owner authorization, current branch | `11-master-implementation-plan.md`, `12-step-execution-tracker.md`, `13-issue-resolution-log.md`, `14-verification-matrix.md`, `15-delivery-checklist.md`, existing runbook docs | Create executable phases, task states, issue and evidence rules; do not discard managed-route dirty batch | `git status --short --untracked-files=all`; `git diff --check`; runbook file checks | Pending docs-only commit | TBD | Commit runbook OS, then close A-001 and start B-001 |
+| B-001 | B | Recover or document Go/gofmt verification toolchain | TODO | A-001 | Runbook docs or local toolchain only | Do not install dependencies or fake results | `command -v go`; `command -v gofmt`; `go version` | Not run | TBD | If unavailable, record BLOCKED and proceed only with docs |
+| C-001 | C | Verify managed-route transactional storage CRUD batch | TODO | B-001 | `internal/storage/managed_routes.go`, tests | Existing dirty implementation must be preserved and verified before commit | `gofmt`; `go test ./internal/storage` | Blocked by missing toolchain | TBD | Run targeted tests when toolchain is available |
+| D-001 | D | Verify authenticated managed-route Admin API | TODO | C-001 | `internal/admin/admin.go`, `internal/admin/managed_routes_api.go`, tests | API contract is implemented in current dirty batch | `go test ./internal/admin` | Blocked by missing toolchain | TBD | Run auth/CRUD/invalid input tests |
+| E-001 | E | Integrate managed-route editor into embedded Admin UI | TODO | D-001 | `internal/admin/static/index.html`, UI tests/docs | Preserve existing admin auth and visual operations | Existing UI test/build command; manual review | Not run | TBD | Define UI contract after API verification |
+| F-001 | F | Wire runtime storage resolver and safe feature-flag loading | TODO | C-001, D-001 | `cmd/embyproxy/main.go`, `internal/proxyadapter/`, config/tests | Keep unknown and flag-off fallback | `go test ./internal/proxyadapter ./cmd/embyproxy` | Not run | TBD | Add startup/resolver integration tests |
+| G-001 | G | Verify managed route reaches mediaproxy core | TODO | F-001 | `internal/proxyadapter/`, `internal/mediaproxy/`, tests | Cover HTTP, Range, WebSocket, headers, rewrite, transport, redaction | Targeted mediaproxy/proxyadapter tests | Not run | TBD | Execute integration matrix |
+| H-001 | H | Add migration and backward-compatibility evidence | TODO | C-001 through G-001 | storage migrations, tests, runbook | No real SQLite; temporary DB only | migration/restore/fallback tests | Not run | TBD | Design migration before implementation |
+| I-001 | I | Full regression/security hardening | TODO | C-001 through H-001 | tests, runbook | No automatic repair after failures | `go test ./...`; `go vet ./...`; redaction checks | Not run | TBD | Resolve issues and repeat matrix |
+| J-001 | J | Complete release provenance/docs hygiene | TODO | I-001, owner/rightsholder evidence | `docs/third_party_notices.md`, release docs, matrix | Non-blocking for implementation; blocks formal distribution | release notice/SBOM/manual review | Not run | TBD | Fill `GAP-PROV-002` |
+| K-001 | K | Final delivery and publish/deploy gate preparation | TODO | I-001; J-001 for release | runbook, bundle evidence | No push/deploy without separate gate | final checklist, Git status, bundle verify | Not run | TBD | Await human review and explicit gate |
+
+## Current Task Rule
+
+The current `IN_PROGRESS` task is A-001. It must be completed and recorded before B-001 starts. The existing uncommitted source batch is assigned to C-001/D-001 and must not be overwritten or committed before its toolchain gate passes.
