@@ -104,3 +104,36 @@ func TestManagedRouteSaveListUpdateAndDelete(t *testing.T) {
 		t.Fatalf("deleted lines=%+v err=%v", gotLines, err)
 	}
 }
+
+func TestManagedRoutesSurviveStoreReopen(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "proxy.db")
+	store, err := New(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveManagedRoute(ctx, ManagedRoute{Slug: "persisted", NodeName: "persisted-node", Enabled: true, Public: true, DefaultLine: "main"}, []ManagedRouteLine{{RouteSlug: "persisted", LineSlug: "main", Target: "https://media.example/base", Enabled: true, Position: 1}}); err != nil {
+		_ = store.Close()
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := New(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	route, err := reopened.GetManagedRoute(ctx, "persisted")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if route == nil || route.NodeName != "persisted-node" || !route.Enabled || !route.Public {
+		t.Fatalf("reopened route = %+v", route)
+	}
+	lines, err := reopened.ListManagedRouteLines(ctx, "persisted")
+	if err != nil || len(lines) != 1 || lines[0].Target != "https://media.example/base" {
+		t.Fatalf("reopened lines = %+v err=%v", lines, err)
+	}
+}
