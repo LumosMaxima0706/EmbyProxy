@@ -446,3 +446,10 @@
 - Logs, listener boundary, rollback paths, Nginx/rathole, and `nginx -t` passed.
 - POSTDEPLOY-ISSUE-001 and POSTDEPLOY-ISSUE-002 are DONE.
 - POSTDEPLOY-001 is DONE; stabilization docs must be published through BWG bridge.
+
+## Stabilization docs BWG publish completed
+
+- Published stabilization target `1aaf193` through BWG only.
+- Bundle path whitelist: `docs/fusion-project-runbook/*` only.
+- BWG ff-only merge and feature-only push passed; remote feature ref verified at `1aaf193`.
+- Temporary ref/bundle cleaned; no service, DNS, traffic, Nginx, rathole, or NOSLA action.

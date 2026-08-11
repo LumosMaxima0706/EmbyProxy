@@ -199,6 +199,14 @@ with cleanup and sidecar health under `POSTDEPLOY-ISSUE-002`.
 | Self-use smoke | PASS; auth/CRUD/upstream/fail-closed/fallback/cleanup |
 | Rollback readiness | PASS; normalized manifest, current release, config/data/log paths, unit verification |
 | Existing service safety | PASS; Nginx/rathole active and `nginx -t` pass |
+
+## Stabilization publish verification
+
+- Local bundle verify/list-heads: PASS.
+- BWG branch/base/status/path whitelist: PASS.
+- Fast-forward-only feature push and post-push ref: PASS at `1aaf193`.
+- Temporary ref/bundle cleanup: PASS.
+- Force push/main/master/DNS/traffic/deploy/restart/NOSLA SSH: NOT USED.
 - Dedicated BWG temporary ref and bundle: CLEANED.
 
 ## Deployment verification rows

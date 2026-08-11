@@ -68,6 +68,9 @@ This branch was published to `origin/feature/failover-phase2-local` at `5cbbe54`
 The deployment closeout record was subsequently published through the same bridge;
 the remote feature ref was verified at `1f60e1c`.
 
+Post-deploy stabilization records were subsequently published through the same
+bridge; the remote feature ref was verified at `1aaf193`.
+
 ## Rollback Principle
 
 Before any production traffic change, the target environment must have a recorded

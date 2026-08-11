@@ -59,4 +59,12 @@ Status: DONE
 | Step ID | Phase | Task | Status | Depends on | Files expected to change | Implementation notes | Validation command | Validation result | Commit hash | Next action |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | POSTDEPLOY-001 | Stabilization | Observe deployed BWG sidecar, repeat self-use smoke, verify rollback, and document access | IN_PROGRESS | DEPLOY-004 and deployment publish | `08`, `12-15`, `20-23` | Read-only runtime checks; no public ingress or service restart unless recovery is required | local/BWG/origin refs; systemd/listener/log checks; localhost smoke; rollback path checks | PENDING | TBD | Run BWG read-only stabilization checks |
-| POSTDEPLOY-001 | Stabilization | Observe deployed BWG sidecar, repeat self-use smoke, verify rollback, and document access | DONE | DEPLOY-004 and deployment publish | `08`, `12-15`, `20-23` | Read-only runtime checks; normalized first-deploy manifest metadata; no public ingress or service restart | local/BWG/origin refs; systemd/listener/log checks; SSH tunnel; localhost smoke; rollback path checks | PASS; service stable, all smoke checks pass, rollback metadata ready | `aa0f123` | Publish stabilization docs through BWG bridge |
+| POSTDEPLOY-001 | Stabilization | Observe deployed BWG sidecar, repeat self-use smoke, verify rollback, and document access | DONE | DEPLOY-004 and deployment publish | `08`, `12-15`, `20-23` | Read-only runtime checks; normalized first-deploy manifest metadata; no public ingress or service restart | local/BWG/origin refs; systemd/listener/log checks; SSH tunnel; localhost smoke; rollback path checks | PASS; service stable, all smoke checks pass, rollback metadata ready | `aa0f123` | Stabilization docs published at `1aaf193`; owner self-use |
+
+## Stabilization docs publish bridge
+
+Status: DONE
+
+- Target: `1aaf193`.
+- BWG bundle verification, path whitelist, ff-only merge, feature-only push, remote
+  ref verification, and temporary cleanup: PASS.

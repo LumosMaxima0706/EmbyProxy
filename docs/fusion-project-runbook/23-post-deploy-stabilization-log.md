@@ -1,6 +1,6 @@
 # Post-Deploy Stabilization Log
 
-Status: DONE
+Status: DONE - PUBLISHED
 
 ## Scope
 
@@ -49,3 +49,8 @@ remained active. Retry is tracked as `POSTDEPLOY-ISSUE-002`.
 - Rollback manifest normalized and verified; release/config/data/log paths and
   unit-only rollback command are complete.
 - No service restart/reload, DNS, public traffic, Nginx block, rathole, or NOSLA action.
+
+## Stabilization publish result
+
+The completed stabilization record was published through BWG at `1aaf193`; no
+runtime mutation occurred during publication.

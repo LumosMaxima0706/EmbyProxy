@@ -66,7 +66,7 @@
 
 ## Post-deploy stabilization
 
-- [x] Local/BWG/origin feature refs are reconciled; final docs publish is the remaining ref advance.
+- [x] Local/BWG/origin feature refs are reconciled after stabilization docs publish.
 - [x] Sidecar remains active/enabled without an unexpected restart.
 - [x] Listener remains loopback-only.
 - [x] Bounded logs contain no panic, ERROR/FATAL, or secret leakage.

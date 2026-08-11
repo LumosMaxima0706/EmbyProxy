@@ -116,3 +116,8 @@ dedicated user, credential generation, unit verification, and pre-start checks a
 passed. Service remains inactive/disabled until DEPLOY-003.
 
 | DEPLOY-SMOKE-001 | DEPLOY-003 smoke attempts 1-2 | The loopback fixture became ready and Admin UI/auth/CRUD passed, but managed-route proxying did not return 200 | `mediaproxy` intentionally rejects loopback/private targets at execution time; the first script lacked stage markers, while the second isolated the expected security block | A successful real upstream proxy smoke remains pending; sidecar start and management plane are healthy | Yes for full DEPLOY-003 completion; no for service availability | Do not weaken SSRF protection. Retry once against an existing owner-controlled public Emby entry using a read-only, credential-free request; delete the route immediately | First attempt race and second private-target rejection were diagnosed; public upstream request, fail-closed, cleanup, and log scans passed; no security control changed | DONE | `51e7a8c` |
+
+## Stabilization publish result
+
+No publish issue occurred. Stabilization docs target `1aaf193` was verified and
+pushed through BWG to the feature branch; no runtime action was taken.
