@@ -94,7 +94,7 @@ temporary BWG ref and bundle were cleaned.
 No new issue is known at stabilization entry. Any service, log, smoke, rollback, or
 access-guide discrepancy must be added as a separate issue before recovery work.
 
-| POSTDEPLOY-ISSUE-001 | POSTDEPLOY-001 initial composite check | The read-only script exited before its summary output | One of the ref/service/log/rollback assertions did not match; the monolithic script lacked per-stage markers | Stabilization cannot be marked complete; deployed service was not modified | Yes for POSTDEPLOY-001 completion; no confirmed runtime outage | Rerun the same scope with explicit per-stage PASS/FAIL output, then correct documentation or recover only the sidecar if an actual fault is found | PENDING diagnosis | IN_PROGRESS | TBD |
+| POSTDEPLOY-ISSUE-001 | POSTDEPLOY-001 initial composite check | The read-only script exited before its summary output | One of the ref/service/log/rollback assertions did not match; the monolithic script lacked per-stage markers | Stabilization cannot be marked complete; deployed service was not modified | Yes for POSTDEPLOY-001 completion; no confirmed runtime outage | Rerun the same scope with explicit per-stage PASS/FAIL output, then correct documentation or recover only the sidecar if an actual fault is found | Diagnosis isolated a formatting defect in the first-deploy manifest: all fields were on one line, so exact line checks failed. Service/runtime checks passed. Manifest normalization is the only recovery action required | IN_PROGRESS | TBD |
 
 ### DEPLOY-001 local attempt result
 

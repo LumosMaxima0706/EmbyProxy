@@ -181,6 +181,8 @@ Each completed row requires command, timestamp, result summary, and link to trac
 
 Initial composite stabilization check: INCONCLUSIVE under
 `POSTDEPLOY-ISSUE-001`; per-stage diagnosis is required.
+
+Diagnosis result: runtime checks PASS; rollback manifest formatting repair PENDING.
 - Dedicated BWG temporary ref and bundle: CLEANED.
 
 ## Deployment verification rows

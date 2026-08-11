@@ -423,3 +423,10 @@
 - The first composite read-only script exited before summary output.
 - No remote file, service, Nginx, DNS, traffic, rathole, or NOSLA mutation occurred.
 - Recorded `POSTDEPLOY-ISSUE-001`; stabilization remains IN_PROGRESS.
+
+## POSTDEPLOY-ISSUE-001 diagnosis
+
+- All runtime/ref/service/listener/log checks passed.
+- The first-deploy manifest was valid metadata but formatted as one line, causing
+  exact field checks to fail.
+- Only manifest normalization is pending; no service restart or binary/config change is needed.
