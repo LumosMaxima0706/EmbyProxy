@@ -34,6 +34,7 @@ are recorded after preflight.
 - Database: `/var/lib/embyproxy-gsy-sidecar/proxy.db`.
 - Logs: `/var/log/embyproxy-gsy-sidecar`.
 - Backup root: `/root/backups/embyproxy-gsy-sidecar`.
+- First-deploy manifest: `/root/backups/embyproxy-gsy-sidecar/20260811T151516Z/pre-deployment-manifest.txt`.
 
 This is the first deployment and all target paths were absent at preflight. Before
 service start, create a timestamped manifest stating that no previous release,
@@ -41,3 +42,6 @@ config, database, or service existed. On a failed first start, use
 `systemctl disable --now embyproxy-gsy-sidecar.service`, verify port 18082 is free,
 and preserve the new release/config/database/log assets for diagnosis. Do not touch
 Nginx, rathole, staging data, or any unknown service.
+
+Before first start, the unit is disabled/inactive, port 18082 is free, and no
+database exists. This is the verified rollback baseline.

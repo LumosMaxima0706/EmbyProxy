@@ -174,9 +174,9 @@ Each completed row requires command, timestamp, result summary, and link to trac
 | --- | --- | --- | --- | --- |
 | BWG identity/checkout/status | DEPLOY-001 | Alias is `bwg`; intended checkout and clean state are confirmed | Record DEPLOY issue; do not mutate | PASS: feature branch at `e0f2bb6`, clean |
 | Port/service conflict | DEPLOY-001 | New service name is unused and `127.0.0.1:18082` is free | Stop and choose no alternative implicitly | PASS |
-| Disk and backup capacity | DEPLOY-001/002 | Independent release, config, log, and DB backup paths have capacity | Do not upload or switch release | PASS for preflight; backup creation pending |
-| Artifact checksum | DEPLOY-002 | BWG checksum equals local verified artifact | Remove only new staging artifact and record result | PENDING |
-| Config validation | DEPLOY-002/003 | New config validates without modifying existing Nginx/server blocks | Stop before service start | PENDING |
+| Disk and backup capacity | DEPLOY-001/002 | Independent release, config, log, and DB backup paths have capacity | Do not upload or switch release | PASS; timestamped first-deploy manifest created |
+| Artifact checksum | DEPLOY-002 | BWG checksum equals local verified artifact | Remove only new staging artifact and record result | PASS |
+| Config validation | DEPLOY-002/003 | New config validates without modifying existing Nginx/server blocks | Stop before service start | PASS: unit verified; runtime start pending |
 | Sidecar health/smoke | DEPLOY-003 | Local health, auth, managed route, fallback, WebSocket/Range and redaction checks pass | Execute scoped rollback | PENDING |
 | Existing service safety | DEPLOY-003 | Existing services remain active and unchanged | Roll back new sidecar only | PENDING |
 | No DNS/traffic/NOSLA action | Every deployment gate | No such mutation appears in command/log evidence | Stop and report immediately | PASS so far |
@@ -205,3 +205,12 @@ Each completed row requires command, timestamp, result summary, and link to trac
 - Embedded version/commit: PASS.
 - Local SHA-256 recorded in the deployment log.
 - Remote checksum and backup manifest: pending.
+
+## DEPLOY-002 remote result
+
+- Backup manifest and independent paths: PASS.
+- Uploaded and installed artifact checksum: PASS.
+- Unit validation and daemon reload: PASS.
+- Config permission 0600 and credential non-disclosure: PASS.
+- Pre-start service/port/database baseline: PASS.
+- Existing services, Nginx, DNS, traffic, and NOSLA: unchanged.

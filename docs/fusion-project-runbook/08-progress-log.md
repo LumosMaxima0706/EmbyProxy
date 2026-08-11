@@ -359,3 +359,12 @@
 - Confirmed later local commits only affect runbook documentation.
 - Recorded the build metadata and SHA-256 in the deployment execution log.
 - No remote mutation has occurred; backup manifest and artifact transfer are next.
+
+## DEPLOY-002 backup and release preparation completed
+
+- Created a timestamped first-deploy baseline manifest.
+- Uploaded and checksum-verified the `e0f2bb6` static artifact.
+- Created only the dedicated service user and independent release/config/data/log paths.
+- Installed and verified the audited systemd unit; generated the credential on BWG without output.
+- Service remains inactive and disabled; port 18082 remains free and no database exists.
+- DEPLOY-002 is DONE; DEPLOY-003 start and localhost health/smoke checks are IN_PROGRESS.

@@ -54,8 +54,8 @@
 - [x] BWG target, checkout, independent service name, port, release path, config,
       log path, and rollback commands are recorded.
 - [x] Read-only preflight passed and no existing service or port conflicts exist.
-- [ ] Timestamped binary/config/database backups exist before mutation.
-- [ ] Artifact checksum matches between local build and BWG staging.
+- [x] Timestamped first-deploy baseline/backup manifest exists before service start.
+- [x] Artifact checksum matches between local build, BWG staging, and installed release.
 - [ ] Only the new localhost sidecar is started or reloaded.
 - [ ] Runtime healthcheck and smoke tests pass; logs contain no secrets.
 - [ ] Rollback was executed or its target-specific commands were verified.

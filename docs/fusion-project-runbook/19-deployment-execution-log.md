@@ -58,3 +58,18 @@ checksum, create an independent backup manifest, and upload to a new release pat
   routes enabled, real DNS apply disabled, and mock fixture disabled.
 - The required administrator credential will be generated on BWG with mode 0600;
   its value will not be printed, transferred back, or committed.
+
+## DEPLOY-002 backup and installation result
+
+- Backup manifest: `/root/backups/embyproxy-gsy-sidecar/20260811T151516Z/pre-deployment-manifest.txt`.
+- Uploaded artifact and templates only to `/root/staging/embyproxy-sidecar-e0f2bb6`.
+- Remote staging and installed SHA-256 matched the local artifact: PASS.
+- Created the dedicated system user and independent release/config/data/log paths.
+- Installed release `e0f2bb6` and a new `current` symlink.
+- Generated the administrator credential on BWG without output; environment mode is 0600.
+- Unit mode is 0644 and binary mode is 0755.
+- `systemd-analyze verify`: PASS; `systemctl daemon-reload`: PASS.
+- Pre-start state: service inactive and disabled, port free, database absent.
+- Existing Nginx, rathole, staging checkout/data, DNS, and traffic were not changed.
+
+DEPLOY-002 result: PASS. DEPLOY-003 sidecar start and localhost validation is next.

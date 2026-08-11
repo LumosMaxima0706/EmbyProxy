@@ -94,3 +94,9 @@ backup, and Nginx checks remain pending and are the next safe action.
 All required read-only BWG checks passed. Independent service, listener, release,
 config, data, and log names are available; existing Nginx and rathole remained
 active. DEPLOY-001 is resolved and DEPLOY-002 may proceed.
+
+### DEPLOY-002 result
+
+No issue was detected. Backup manifest, checksum validation, independent paths,
+dedicated user, credential generation, unit verification, and pre-start checks all
+passed. Service remains inactive/disabled until DEPLOY-003.
