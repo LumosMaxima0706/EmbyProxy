@@ -269,6 +269,15 @@
 - This is a documentation-only handoff update; no source changes were made.
 - No push, deployment, restart, or SSH was performed.
 
+## BWG publish bridge readiness check | BLOCKED
+
+- **本地检查**：branch `feature/failover-phase2-local`、目标 HEAD `53f7437`、worktree clean；remote feature ref 已刷新为旧目标 `c7f475c`，本地 ahead。
+- **最终验证**：`go test ./...`、`go vet ./...`、`git diff --check` PASS；路径范围和 main/master 目标检查未发现不安全目标。
+- **阻塞现象**：直接 `git push --dry-run` 因本地 publisher authentication 不可用而失败；实际 push 未执行。
+- **规则结论**：Codex 不得绕过 runbook 的 BWG publish bridge rule 直接 push GitHub；本 gate 同时禁止 SSH BWG/NOSLA，因此不能在本轮完成桥接发布。
+- **恢复路径**：等待人工在明确授权的 BWG gate 中转移并验证 bundle，或重新进入允许 BWG SSH/SCP 的 publish bridge gate；不得修改 remote/auth，不得改用其他 publisher。
+- **外部影响**：未 push、未 force push、未部署、未重启、未 SSH BWG/NOSLA；未输出 secret/token/cookie/password 等敏感信息。
+
 ## 2026-08-11T22:20:00+08:00 | Phase D | Admin API compile issue found
 
 - **操作人/工具**：Codex；临时 Go 1.26 toolchain。
