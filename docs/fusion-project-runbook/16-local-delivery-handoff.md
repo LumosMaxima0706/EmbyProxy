@@ -67,7 +67,10 @@ This branch was published to `origin/feature/failover-phase2-local` at `5cbbe54`
 
 ## Rollback Principle
 
-Before production deployment, the target environment must have a recorded previous working commit, a reviewed configuration backup, a database backup or migration rollback plan, and a reviewed feature-flag rollback path. No restart or rollback action was executed in this handoff.
+Before any production traffic change, the target environment must have a recorded
+previous working commit, a reviewed configuration backup, a database backup or
+migration rollback plan, and a reviewed feature-flag rollback path. The only
+service start performed here was the new isolated sidecar; no rollback was needed.
 
 ## Deployment result
 

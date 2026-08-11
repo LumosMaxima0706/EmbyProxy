@@ -230,6 +230,14 @@ Each completed row requires command, timestamp, result summary, and link to trac
 - Artifact checksum, unit/config permissions, service active/enabled, existing
   services, loopback binding, and `nginx -t`: PASS.
 
+## DEPLOY-004 closeout result
+
+- Local verification: PASS (`go test ./...`, `go vet ./...`, `git diff --check`).
+- Remote verification: PASS (service, listener, checksum, Nginx/rathole, staging
+  cleanup, and secret/error scans).
+- Deployment status: COMPLETE for the isolated BWG localhost sidecar.
+- Public DNS/traffic and production failover remain intentionally unchanged.
+
 ## DEPLOY-003 attempt 2
 
 - Fixture readiness, Admin UI, auth rejection/login, and route create/list: PASS.

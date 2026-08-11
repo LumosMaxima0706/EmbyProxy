@@ -1,6 +1,6 @@
 # Deployment Execution Log
 
-Status: IN_PROGRESS (preflight pending)
+Status: DEPLOYED - CLOSEOUT COMPLETE
 
 | Time | Gate | Action | Result | Impact / next action |
 | --- | --- | --- | --- | --- |
@@ -116,3 +116,15 @@ DEPLOY-002 result: PASS. DEPLOY-003 sidecar start and localhost validation is ne
 
 DEPLOY-003 result: PASS. The new sidecar is usable through owner-controlled
 localhost access. DEPLOY-004 documentation closeout is next.
+
+## DEPLOY-004 final closeout
+
+- Local final `go test ./...`, `go vet ./...`, and `git diff --check`: PASS.
+- Remote final service, enabled state, loopback listener, installed checksum,
+  Nginx/rathole state, `nginx -t`, and staging cleanup: PASS.
+- Deployment target: BWG only; no NOSLA SSH.
+- Runtime mutation: only the new sidecar user, unit, release, config, data, logs,
+  and backup manifest were created.
+- No existing deployment directory, Nginx server block, rathole, DNS, public
+  traffic, or host reboot was modified.
+- Deployment is complete for owner-controlled localhost/SSH-tunnel use.

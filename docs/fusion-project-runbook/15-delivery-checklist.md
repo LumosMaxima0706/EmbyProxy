@@ -46,7 +46,8 @@
 
 - [ ] Worktree and commit path whitelist are clean and reviewed.
 - [ ] No push has occurred without the BWG publish bridge gate.
-- [ ] No deployment, restart, SSH, Nginx/systemd, DNS, or real SQLite action is implied by this checklist.
+- [x] Deployment was limited to the new BWG sidecar; no unapproved restart, Nginx
+      server-block, DNS, traffic, real SQLite, or NOSLA action occurred.
 - [x] Owner accepted autonomous deployment; optional operations review remains
       separate from the completed localhost sidecar gate.
 
@@ -61,4 +62,4 @@
 - [x] Runtime healthcheck and smoke tests pass; logs contain no secrets.
 - [x] Rollback target-specific commands and first-deploy baseline were verified.
 - [x] No DNS, public traffic, existing Nginx block, NOSLA, or full-host reboot action occurred.
-- [ ] Deployment result and next gate are committed to the feature branch.
+- [x] Deployment result and next gate are committed locally; publish uses the BWG bridge.

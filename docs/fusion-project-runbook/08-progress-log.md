@@ -391,3 +391,11 @@
 - Existing Nginx/rathole remained active; `nginx -t` passed.
 - No Nginx, DNS, traffic, existing service, NOSLA, or full-host reboot action occurred.
 - DEPLOY-003 is DONE; DEPLOY-004 documentation closeout is IN_PROGRESS.
+
+## DEPLOY-004 deployment closeout completed
+
+- Final local and BWG runtime verification passed.
+- The isolated BWG localhost sidecar is usable; release/config/data/log/backup paths are recorded.
+- Rollback remains scoped to the new unit/assets and the first-deploy manifest is retained.
+- DEPLOY-001 through DEPLOY-004 are DONE.
+- The deployment record still needs publication through the documented BWG feature-branch bridge.
