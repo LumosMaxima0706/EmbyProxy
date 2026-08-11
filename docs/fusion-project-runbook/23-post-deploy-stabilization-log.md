@@ -18,3 +18,9 @@ Status: IN_PROGRESS
 - Deployed artifact source: `e0f2bb6`.
 - Stabilization checks: PENDING.
 - Service restart/reload: NOT PLANNED unless an observed fault requires recovery.
+
+## Initial composite check
+
+Result: INCONCLUSIVE. A read-only assertion exited before summary output. No remote
+mutation or service action occurred. `POSTDEPLOY-ISSUE-001` records the diagnostic
+retry requirement.

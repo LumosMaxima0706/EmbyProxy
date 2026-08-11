@@ -178,6 +178,9 @@ Each completed row requires command, timestamp, result summary, and link to trac
 | Self-use smoke | Admin/auth/CRUD/upstream/fail-closed/fallback pass | PENDING |
 | Rollback readiness | Manifest, release/config/data/log paths, and unit rollback verified | PENDING |
 | Existing service safety | Nginx/rathole active; `nginx -t` pass; no config change | PENDING |
+
+Initial composite stabilization check: INCONCLUSIVE under
+`POSTDEPLOY-ISSUE-001`; per-stage diagnosis is required.
 - Dedicated BWG temporary ref and bundle: CLEANED.
 
 ## Deployment verification rows

@@ -417,3 +417,9 @@
 - `POSTDEPLOY-001` is IN_PROGRESS; service restart/reload is not planned unless an
   observed sidecar fault requires recovery.
 - No DNS, public traffic, existing Nginx block, rathole mapping, or NOSLA action is authorized.
+
+## POSTDEPLOY-001 initial check requires diagnosis
+
+- The first composite read-only script exited before summary output.
+- No remote file, service, Nginx, DNS, traffic, rathole, or NOSLA mutation occurred.
+- Recorded `POSTDEPLOY-ISSUE-001`; stabilization remains IN_PROGRESS.
