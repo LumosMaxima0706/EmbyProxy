@@ -21,4 +21,7 @@ AGENTS.md
 CLAUDE.md
 
 # 本地文档和归档
-/docs/
+/docs/*
+!/docs/fusion-project-runbook/
+/docs/fusion-project-runbook/*
+!/docs/fusion-project-runbook/*.md
