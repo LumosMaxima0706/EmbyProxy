@@ -182,10 +182,23 @@ Each completed row requires command, timestamp, result summary, and link to trac
 Initial composite stabilization check: INCONCLUSIVE under
 `POSTDEPLOY-ISSUE-001`; per-stage diagnosis is required.
 
-Diagnosis result: runtime checks PASS; rollback manifest formatting repair PENDING.
+Diagnosis result: runtime checks PASS; rollback manifest formatting repair PASS.
 
-SSH tunnel attempt 1: INCONCLUSIVE due validation pipeline behavior; cleanup and
-sidecar health PASS under `POSTDEPLOY-ISSUE-002`.
+SSH tunnel attempt 1 was inconclusive due validation pipeline behavior; retry PASSed
+with cleanup and sidecar health under `POSTDEPLOY-ISSUE-002`.
+
+## POSTDEPLOY-001 final verification
+
+| Verification | Current result |
+| --- | --- |
+| Local/BWG/origin refs | Local stabilization docs were ahead; BWG/origin deployment base verified at `165c91f`; final docs publish pending |
+| Service stability | PASS; active/enabled, main status 0, `NRestarts=0` |
+| Listener boundary | PASS; only `127.0.0.1:18082` |
+| Bounded log review | PASS; no panic/ERROR/FATAL or secret/URI marker |
+| Self-use tunnel | PASS; Admin UI and auth rejection |
+| Self-use smoke | PASS; auth/CRUD/upstream/fail-closed/fallback/cleanup |
+| Rollback readiness | PASS; normalized manifest, current release, config/data/log paths, unit verification |
+| Existing service safety | PASS; Nginx/rathole active and `nginx -t` pass |
 - Dedicated BWG temporary ref and bundle: CLEANED.
 
 ## Deployment verification rows

@@ -1,6 +1,6 @@
 # Post-Deploy Stabilization Log
 
-Status: IN_PROGRESS
+Status: DONE
 
 ## Scope
 
@@ -37,3 +37,15 @@ to newline-delimited fields with mode 0600 before stabilization can close.
 The tunnel returned Admin UI data, but a `curl | grep -q` pipeline produced a
 broken-pipe false failure under `pipefail`. Tunnel cleanup passed and the service
 remained active. Retry is tracked as `POSTDEPLOY-ISSUE-002`.
+
+## Completed stabilization result
+
+- Local tunnel to BWG: Admin UI and unauthenticated managed-route rejection PASS.
+- BWG localhost smoke: authenticated login, managed-route create/list/update/delete,
+  owner-controlled public upstream proxy, disabled-route 404 fail-closed, legacy
+  fallback, cleanup, and log redaction PASS.
+- Service active/enabled, `NRestarts=0`, loopback listener, Nginx/rathole, and
+  `nginx -t`: PASS.
+- Rollback manifest normalized and verified; release/config/data/log paths and
+  unit-only rollback command are complete.
+- No service restart/reload, DNS, public traffic, Nginx block, rathole, or NOSLA action.

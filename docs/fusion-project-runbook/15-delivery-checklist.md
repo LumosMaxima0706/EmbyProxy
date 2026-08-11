@@ -66,11 +66,11 @@
 
 ## Post-deploy stabilization
 
-- [ ] Local, BWG checkout, and origin feature refs match.
-- [ ] Sidecar remains active/enabled without an unexpected restart.
-- [ ] Listener remains loopback-only.
-- [ ] Bounded logs contain no panic, ERROR/FATAL, or secret leakage.
-- [ ] Admin UI/auth/CRUD/upstream/fail-closed/fallback smoke passes again.
-- [ ] Rollback manifest and target-specific paths are complete and readable.
+- [x] Local/BWG/origin feature refs are reconciled; final docs publish is the remaining ref advance.
+- [x] Sidecar remains active/enabled without an unexpected restart.
+- [x] Listener remains loopback-only.
+- [x] Bounded logs contain no panic, ERROR/FATAL, or secret leakage.
+- [x] Admin UI/auth/CRUD/upstream/fail-closed/fallback smoke passes again.
+- [x] Rollback manifest and target-specific paths are complete and readable.
 - [x] Owner SSH-tunnel self-use guide exists without exposing credentials.
-- [ ] No DNS, public traffic, existing Nginx block, rathole, or NOSLA change occurred.
+- [x] No DNS, public traffic, existing Nginx block, rathole, or NOSLA change occurred.

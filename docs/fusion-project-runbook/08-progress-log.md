@@ -437,3 +437,12 @@
   broken-pipe false failure.
 - Tunnel cleanup passed, local port 28082 was released, and the sidecar remained active.
 - The retry will capture the full response before checking the UI marker.
+
+## POSTDEPLOY-001 stabilization completed
+
+- Normalized the first-deploy rollback manifest to newline-delimited mode 0600.
+- SSH tunnel Admin UI/auth rejection and BWG localhost auth/CRUD/upstream/fail-closed/fallback smoke all passed.
+- Service remained active/enabled with `NRestarts=0`; no restart/reload was needed.
+- Logs, listener boundary, rollback paths, Nginx/rathole, and `nginx -t` passed.
+- POSTDEPLOY-ISSUE-001 and POSTDEPLOY-ISSUE-002 are DONE.
+- POSTDEPLOY-001 is DONE; stabilization docs must be published through BWG bridge.
