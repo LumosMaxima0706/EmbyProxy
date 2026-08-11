@@ -9,6 +9,8 @@
 - `PLANNED`：方案已 review，等待实现批准。
 - `IN_PROGRESS`：处于获批实现 gate。
 - `BLOCKED`：缺少输入、授权或外部条件。
+- `OWNER-AUTHORIZED / PHASE-3-UNBLOCKED`：owner 已明确授权实现，但证据 hygiene 仍待完成。
+- `OPEN / NON-BLOCKING FOR PHASE 3`：仍需处理，但不阻止本地 Phase 3 coding。
 - `VERIFIED`：修复及对应验证已完成。
 - `CLOSED`：证据 review 完成，不再阻塞。
 
@@ -47,14 +49,16 @@
 - **Phase**：Phase 0
 - **严重程度**：High
 - **描述**：在 `a3c08dd` 上完成的 repo tree 与完整本地 Git 历史只读审计仍不能建立完整 license/source provenance。根目录没有 LICENSE/COPYING/NOTICE；README 仅声明 MIT，缺少完整 license 文本与 copyright notice。`docs/third_party_notices.md` 记录了 EmbyProxy 的 MIT 意图、另一代理项目无可确认复制授权，以及 `internal/mediaproxy` 为独立实现的声明，但证据链仍不完整。
-- **影响**：无法完整确定宿主项目、致谢上游、融合模块和 Go dependencies 的 attribution/再分发要求；在证据补齐并经人工确认前，Phase 3 必须保持 blocked。
+- **影响**：license/source provenance 细节仍需补齐，但 owner 已授权融合实现，Phase 3 coding 不再被本 gap 阻塞；正式 release/public distribution 仍需完成后续 evidence hygiene。
 - **发现方式**：在无网络条件下检查当前 tree、完整本地 Git history、README、`docs/third_party_notices.md`、commit `97c0e55`、`go.mod`/`go.sum`、tracked 文件类型、source markers、submodule/vendor/generated/minified 资产和精确 license 关键词。
-- **需要修改的文件**：未来修复范围由权利与来源确认结果决定；至少包括 root LICENSE/copyright notice、`docs/third_party_notices.md`、逐文件 provenance 清单和 dependency license inventory/SBOM。当前 docs-only gate 不创建这些修复产物。
+- **需要修改的文件**：当前 evidence tracking skeleton 为 `10-provenance-evidence-matrix.md`；未来修复范围由权利与来源确认结果决定，至少可能包括 root LICENSE/copyright notice、`docs/third_party_notices.md`、完整逐文件 provenance 清单和 dependency license inventory/SBOM。创建 skeleton 不代表授权问题已解决。
 - **需要新增的测试**：不适用；需要可复核的 source commit/file/license/notice 映射和 dependency inventory 检查。
-- **修复前禁止进入的 phase**：Phase 1 和 Phase 3
-- **状态**：OPEN
-- **证据/链接**：HEAD `a3c08dd`；`docs/third_party_notices.md`；`97c0e55`；root license/history 搜索为空；`go.mod` 有 6 个 direct 和 12 个 indirect dependencies。
+- **修复前禁止进入的 phase**：正式 release/public distribution（不阻塞 Phase 3 coding）
+- **状态**：OWNER-AUTHORIZED / PHASE-3-UNBLOCKED
+- **证据/链接**：HEAD `c7f475c`；`10-provenance-evidence-matrix.md`；`docs/third_party_notices.md`；`813118c`、`97c0e55`、`bbd9072`；root license/history 搜索为空；`go.mod` 有 6 个 direct 和 12 个 indirect dependencies。
 - **备注**：
+  - Project owner confirmed that code modification, refactoring, rewriting, and integration of the involved projects are authorized for the fusion objective. Codex does not need per-file provenance approval before implementation. Phase 3 development is unblocked.
+  - Remaining license/provenance/SBOM/notice work is tracked as release/docs hygiene and must not block Phase 3 implementation.
   - README 致谢的另一上游尚无 revision、license、复制范围或 attribution 记录。
   - `internal/mediaproxy` 在 `97c0e55` 中整体引入并声明独立实现，但尚无逐文件 provenance 映射；`internal/proxyadapter` 也需要纳入映射。
   - repo 没有 dependency license inventory、SBOM 或对应 notices。
@@ -62,14 +66,28 @@
   - 未发现 minified、bundled、wasm、source map 或按文件名标记的 generated 文件；大型 admin HTML 是自包含资源，未发现外部脚本引用或内嵌 license marker。
   - 上述“未发现”仅限定于本次 repo-only 静态审计，不等于确认不存在版权或依赖义务。
 
-### GAP-PROV-001 Phase 3 前置 checklist
+### GAP-PROV-001 后续 release/docs hygiene checklist
 
-- [ ] 为 README 致谢的上游记录稳定 revision、license 证据、复制/参考范围和 attribution 要求。
-- [ ] 补充适用的 root LICENSE 与 copyright notice，或取得并记录权利人的明确确认。
-- [ ] 为 `internal/mediaproxy` 和 `internal/proxyadapter` 建立逐文件来源、作者/项目、基线 commit、是否直接复制、修改范围与测试来源映射。
-- [ ] 为 6 个 direct 和 12 个 indirect Go dependencies 建立版本、license、notice/redistribution 要求清单，并决定是否需要 SBOM。
+- [ ] 由人工确认 MIT 授权权利人、适用年份、copyright notice，以及正式发布和再分发授权；确认前不得创建或补写 root LICENSE。
+- [ ] 由人工确认 README 致谢上游 `chenhr454/emby---worker` 的 stable revision、license、复制/改写范围和 attribution 要求。
+- [ ] 由作者或权利人确认 `internal/mediaproxy`、`internal/proxyadapter` 是否独立实现，以及是否引用、翻译、复制或改写外部项目；按 `10-provenance-evidence-matrix.md` 扩展逐文件记录。
+- [ ] 完成 6 个 direct 和 12 个 indirect Go dependencies 的 license/notice inventory，由人工审核结果并决定 SBOM 要求。
 - [ ] 人工 review 上述证据，确认 `docs/third_party_notices.md` 与实际复制/独立实现边界一致。
-- [ ] checklist 全部完成前保持 `GAP-PROV-001` 为 `OPEN`，不得进入 Phase 3。
+- [ ] 上述事项完成前，`GAP-PROV-001` 保持 owner-authorized/unblocked；它们只阻塞正式 release/public distribution，不阻塞 Phase 3 coding。
+
+## GAP-PROV-002 | Release provenance and license hygiene
+
+- **Phase**：Release / public distribution
+- **严重程度**：High
+- **描述**：root LICENSE/copyright notice、README upstream attribution、mediaproxy/proxyadapter 逐文件 provenance matrix、Go dependency license inventory、SBOM 和 notices 仍需补齐。
+- **影响**：可能阻止正式 release/public distribution；不阻塞已获 owner 授权的 Phase 3 implementation。
+- **发现方式**：`GAP-PROV-001` repo-only evidence audit 与 owner authorization review。
+- **需要修改的文件**：root license/notice（待权利人确认）、`docs/third_party_notices.md`、`10-provenance-evidence-matrix.md` 及 release evidence 文件。
+- **需要新增的测试**：release artifact license/notice presence、dependency inventory completeness 和 attribution review checks。
+- **修复前禁止进入的 phase**：正式 release/public distribution
+- **状态**：OPEN / NON-BLOCKING FOR PHASE 3
+- **证据/链接**：`10-provenance-evidence-matrix.md`；owner authorization decision。
+- **备注**：不得将本 gap 重新解释为 Phase 3 coding blocker；完成后再由人工 review release readiness。
 
 ## GAP-ROUTE-001 | Managed route 缺少管理 API 写入合同
 

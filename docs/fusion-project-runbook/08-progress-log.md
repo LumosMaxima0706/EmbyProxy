@@ -67,4 +67,30 @@
 - **是否部署/重启**：否。
 - **是否修改 Nginx/systemd/SQLite/DNS**：否。
 - **是否有 secret 泄露**：否。
-- **下一步建议**：人工 review 本审计记录；`GAP-PROV-001` 保持 OPEN，provenance/license evidence 未解决前 Phase 3 blocked。
+- **下一步建议**：人工 review 本审计记录并取得 owner authorization decision；该审计时点尚未解除 `GAP-PROV-001`，后续决定见 owner authorization 记录。
+
+## 2026-08-11T18:51:08+08:00 | Phase 0 | Provenance remediation skeleton
+
+- **操作人/工具**：Codex；本地只读 evidence 结果与 docs-only 编辑。
+- **做了什么**：新增 `10-provenance-evidence-matrix.md`，结构化记录 project license、README 上游致谢、mediaproxy/proxyadapter、Go direct/indirect dependencies 和 repository assets 的本地证据、缺失证据及人工确认项；同步更新 inventory 与 gap 引用。
+- **验证命令**：branch/HEAD/status precheck；文档编辑后执行 `git status --short --untracked-files=all`、`git diff --name-only`、`git diff --stat`、`git diff --check`、路径白名单、blocker 关键词检查和完整 runbook diff review。
+- **结果**：仅建立 evidence tracking 与 dependency inventory 占位结构；该时点所有未确认项尚待 owner decision，没有进入 Phase 3。后续状态由 owner authorization 记录更新。
+- **是否修改代码**：否；仅修改 runbook 文档。
+- **是否 commit/push**：否。
+- **是否部署/重启**：否。
+- **是否修改 Nginx/systemd/SQLite/DNS**：否；未 SSH BWG/NOSLA。
+- **是否有 secret 泄露**：否。
+- **下一步建议**：人工 review 本 skeleton；后续由权利人/作者逐项填充 release/docs hygiene evidence。Phase 3 状态以最新 owner authorization decision 为准。
+
+## 2026-08-11T21:08:03+08:00 | Phase 0 / Phase 3 kickoff | Owner authorization decision
+
+- **操作人/工具**：Project owner 授权；Codex 仅更新 runbook。
+- **做了什么**：记录 owner 已授权为融合目标修改、重构、改写和集成相关项目源码，无需在 implementation 前逐文件等待 provenance 批准；将未完成的 license/provenance/SBOM/notice 工作迁移到 `GAP-PROV-002` release/docs hygiene tracker。
+- **验证命令**：branch/HEAD/status、文档路径白名单、`git diff --check`、状态关键词检查和 docs-only cached diff review。
+- **结果**：`GAP-PROV-001` 不再阻塞 Phase 3；Phase 3 implementation may begin。授权不表示所有 license/provenance 细节已解决，正式 release/public distribution 仍受 `GAP-PROV-002` 约束。
+- **是否修改代码**：否；本记录所属 docs-only unblock commit 只包含四个 runbook 文档。
+- **是否 commit/push**：计划创建 docs-only unblock commit；不 push。
+- **是否部署/重启**：否。
+- **是否修改 Nginx/systemd/SQLite/DNS**：否；未 SSH BWG/NOSLA。
+- **是否有 secret 泄露**：否。
+- **下一步建议**：提交 docs-only authorization decision 后，开始第一批最小、可测试的 Phase 3 implementation；release hygiene 并行跟踪但不阻塞 coding。

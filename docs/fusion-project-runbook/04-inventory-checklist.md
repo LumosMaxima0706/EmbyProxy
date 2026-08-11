@@ -22,11 +22,13 @@
 - [x] 完成 repo-only 静态审计；未访问 GitHub、未安装依赖、未修改审计对象。
 - [x] 确认没有 tracked vendor/、third_party/、node_modules/、build/dist、submodule、二进制归档或匹配的 minified/bundled/wasm/source-map/generated 文件。
 - [x] 未发现 copied-from/snippet/source attribution 注释或明确 GPL/AGPL/LGPL/MPL 线索；该结论不等于完成权利确认。
-- [ ] 为 README 致谢的上游补齐 revision、license、复制/参考范围和 attribution。
-- [ ] 补齐 root LICENSE/copyright notice，或记录权利人明确确认。
-- [ ] 建立 `internal/mediaproxy`、`internal/proxyadapter` 逐文件来源与独立实现证据映射。
-- [ ] 建立 6 个 direct、12 个 indirect Go dependencies 的 license/notice inventory，并决定 SBOM 要求。
-- [ ] 人工 review 全部证据并保持 `GAP-PROV-001` OPEN，完成前禁止进入 Phase 3。
+- [x] 已建立 `10-provenance-evidence-matrix.md` skeleton，用于跟踪证据和人工确认；该结构化记录不是授权确认。
+- [x] Owner 已授权为融合目标修改、重构、改写和集成源码；`GAP-PROV-001` 不再阻塞 Phase 3 implementation。
+- [ ] `RELEASE HYGIENE PENDING`：确认 MIT 权利人、年份、copyright notice 和正式发布授权后，才可决定 root LICENSE 内容。
+- [ ] `RELEASE HYGIENE PENDING`：为 README 致谢的 `chenhr454/emby---worker` 补齐 stable revision、license、复制/改写范围和 attribution。
+- [ ] `RELEASE HYGIENE PENDING`：将 `internal/mediaproxy`、`internal/proxyadapter` skeleton 扩展为逐文件来源、作者确认、独立实现和测试 provenance 映射。
+- [ ] `RELEASE HYGIENE PENDING`：完成 6 个 direct、12 个 indirect Go dependencies 的 license/notice inventory，并由人工决定 SBOM 要求。
+- [ ] 上述事项由 `GAP-PROV-002` 跟踪，只影响正式 release/public distribution，不阻塞 Phase 3 coding。
 
 ## 模块与集成点
 
@@ -109,5 +111,5 @@
 - [x] 所有确认的缺口已写入 `09-gap-log.md`。
 - [x] 每个 gap 已标严重程度、阻塞 phase、预计文件和测试。
 - [x] 已区分 implemented、partial、mock-only、placeholder 和 unverified。
-- [ ] Phase 0 尚未通过：`GAP-PROV-001` 的 license/provenance 结论未完成，且本 inventory 需要人工 review。
-- [ ] 不允许直接进入 Phase 3；下一步是人工 review 本 inventory，再决定 Phase 0 provenance audit 或 Phase 1 设计 gate。
+- [x] Owner authorization 已解除 `GAP-PROV-001` 对 Phase 3 implementation 的阻塞；未完成的 release/docs hygiene 转入 `GAP-PROV-002`。
+- [x] Phase 3 implementation 可开始；正式 release/public distribution 仍需单独完成 provenance/license hygiene review。
