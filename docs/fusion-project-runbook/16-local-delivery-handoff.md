@@ -61,7 +61,7 @@ Failover runtime, traffic, DNS, and policy gaps remain open for later phases. Th
 
 ## Publish Readiness
 
-This branch is locally ready for human review. Publishing must use the BWG publish bridge gate and must not force push, push `main`/`master`, deploy, restart services, or SSH BWG/NOSLA without explicit authorization.
+This branch was published to `origin/feature/failover-phase2-local` at `5cbbe54` through the authorized BWG publish bridge. Publishing must continue to use the BWG bridge and must not force push, push `main`/`master`, deploy, restart services, or SSH BWG/NOSLA without explicit authorization.
 
 ## Rollback Principle
 
@@ -69,4 +69,4 @@ Before production deployment, the target environment must have a recorded previo
 
 ## Next Gate
 
-Next required gate: BWG publish bridge readiness check. Do not publish until explicitly instructed.
+Next required gate: human/PR review. Production deployment and traffic changes remain separately gated.

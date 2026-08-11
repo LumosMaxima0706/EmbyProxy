@@ -157,3 +157,13 @@ Each completed row requires command, timestamp, result summary, and link to trac
 - Pre-push remote assertion: FAILED due retry script logic; expected remote was base `c7f475c`, not target.
 - Push: NOT RUN; remote feature ref remains base.
 - Cleanup: PASS; temporary ref and bundle removed; BWG worktree clean.
+
+## BWG Publish Success Result
+
+- Final local bundle target: `5cbbe54`; bundle verify/list-heads: PASS.
+- BWG branch/base/status: PASS; ff-only update completed without a merge commit.
+- Path whitelist: PASS; only approved project source/tests and runbook/docs paths were transferred in the target range.
+- Push target: `HEAD:refs/heads/feature/failover-phase2-local` only.
+- Remote verification: PASS; feature ref equals `5cbbe54`.
+- Force push/main/master/deploy/restart/NOSLA SSH: NOT USED.
+- Dedicated BWG temporary ref and bundle: CLEANED.

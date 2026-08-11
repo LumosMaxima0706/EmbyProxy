@@ -285,6 +285,16 @@
 - Remote feature ref remains `c7f475c`; BWG worktree is clean at `61de764`; temporary ref/bundle cleanup completed.
 - Recorded as `ISSUE-PUBLISH-003`; next retry must assert remote=base before push and remote=target after push.
 
+## BWG publish bridge success
+
+- Final BWG bridge attempt passed bundle verification, path whitelist, branch/status checks, and `git merge --ff-only`.
+- BWG advanced through the verified fast-forward chain to `5cbbe54`.
+- Before push, remote `feature/failover-phase2-local` was verified at base `c7f475c`; after push it was verified at `5cbbe54`.
+- Only `feature/failover-phase2-local` was pushed. No force push, main/master push, deployment, restart, production change, or NOSLA SSH occurred.
+- The dedicated BWG temp ref and bundle were cleaned after verification.
+- `ISSUE-PUBLISH-001` is resolved for this publish; `ISSUE-PUBLISH-002` and `ISSUE-PUBLISH-003` are resolved script-attempt records.
+- Next step: publish this runbook result commit through the same BWG bridge, then stop for human/PR review.
+
 ## 2026-08-11T22:20:00+08:00 | Phase D | Admin API compile issue found
 
 - **操作人/工具**：Codex；临时 Go 1.26 toolchain。
