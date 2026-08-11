@@ -1,57 +1,102 @@
 # Inventory Checklist
 
-本清单尚未执行完成。每项必须记录命令、commit SHA、文件路径或测试名作为证据；不能只写“看起来存在”。
+本清单记录 2026-08-11 在 `feature/failover-phase2-local`、`7d8ba77` 上完成的 Phase 0 只读盘点。`[x]` 表示事实已核对，不代表整个功能已完成；部分实现和阻断项均链接到 `09-gap-log.md`。
 
 ## Git 与来源
 
-- [ ] 确认 canonical branch 是哪个。
-  - 证据：`TBD`
-- [ ] 确认 `1514664` 存在及所在本地/远端 branch。
-  - 当前参考证据：存在于 failover 与 mediaproxy 分支；canonical 复核待执行。
-- [ ] 确认 `e1f5450` 存在及所在本地/远端 branch。
-  - 当前参考证据：存在于 failover 分支；fresh fetch 待执行。
-- [ ] 确认当前远端包含所有本地关键 commit。
-- [ ] 确认两个上游项目 URL、基线 commit、license 和 attribution。
-- [ ] 确认 clean worktree，列出所有 untracked/ignored 构建产物。
+- [x] 当前融合工作 canonical branch 为 `feature/failover-phase2-local`。
+  - 证据：用户指定基线；`git branch --show-current`、`git rev-parse --short HEAD` 和 origin ref 分别为该分支、`7d8ba77`、`7d8ba77`。
+- [x] `1514664` 存在并位于本地/远端 failover 与 mediaproxy 分支。
+  - 证据：`git branch -a --contains 1514664`；commit message 为 `Integrate mediaproxy routes behind feature flag`。
+- [x] `e1f5450` 存在并位于本地/远端 failover 分支。
+  - 证据：`git branch -a --contains e1f5450`；commit 只修改四个 WebSocket 源码/测试文件。
+- [x] 当前 origin failover 分支包含本地关键 commit。
+  - 证据：fresh fetch 后本地 HEAD 与 origin 均为 `7d8ba77`；该历史包含 `1514664` 和 `e1f5450`。mediaproxy 远端 ref 为 `4074662`。
+- [ ] 两个上游来源已定位，但 license、基线 provenance 和 attribution 未完成。
+  - 证据：当前仓库有 `origin` 与 `upstream` remote；参考 clone 指向 `Gsy-allen/emby-reverse-proxy-go`、HEAD 为 `74297fd`。两个 Git tree 均未找到 LICENSE/COPYING/NOTICE；当前 README 仅有 MIT 声明，不能替代完整 provenance audit。见 `GAP-PROV-001`。
+- [x] 工作区在盘点开始前 clean，无 untracked 项。
+  - 证据：`git status --short --untracked-files=all` 和脱敏后的 ignored 状态检查均无输出。
 
 ## 模块与集成点
 
-- [ ] `internal/mediaproxy` 存在，列出职责、入口和测试。
-- [ ] `internal/proxyadapter` 存在，列出 adapter contract 和验证逻辑。
-- [ ] `internal/failover` 存在，列出 state machine、持久化和并发边界。
-- [ ] managed route schema 存在，并确认 migration/兼容/rollback。
-- [ ] admin failover API 存在，并确认认证、只读/写入边界和错误码。
-- [ ] traffic source 存在，并确认 inbound+outbound、unknown、reset cycle 和校准。
-- [ ] DNS mock provider 存在，并确认 dry-run/apply/failure/幂等测试。
-- [ ] redirect fallback 存在，并确认 host/scheme/path allowlist。
-- [ ] WebSocket 4xx mapping/header hardening 存在，并确认 `e1f5450` 内容。
-- [ ] feature flags 存在，并确认默认值、route scope 和关闭后的旧 fallback。
+- [x] `internal/mediaproxy` 存在。
+  - 职责：目标解析、安全校验、HTTP/Range、header、rewrite、transport 和 WebSocket data-plane executor。
+  - 测试：9 个测试文件，覆盖 target、security、Range、rewrite、transport、header、日志脱敏和 WebSocket。
+- [x] `internal/proxyadapter` 存在。
+  - contract：把 managed slug 或既有 node 解析为 `mediaproxy.Target`；生产 router 支持 fallback。
+  - 测试：`adapter_test.go`、`production_test.go`，覆盖 route/node、边界、fallback、WebSocket、安全目标和日志脱敏。
+- [x] `internal/failover` 存在。
+  - 职责：纯策略、controller、DNS guard、mock health/traffic/DNS、scheduler contract、redirect helper。
+  - 持久化：`internal/storage/failover.go` 记录 state、event、health、traffic 与 DNS run，并提供事务提交和恢复。
+  - 并发边界：controller、health tracker、mock/provider state 使用 mutex；已有并发 tracker 测试，但本轮未运行 race detector。
+- [x] managed route schema 和只读 resolver 存在。
+  - 证据：`internal/storage/managed_routes.go` 创建 `managed_routes` 与 `managed_route_lines`；`Store.InitSchema` 调用初始化；schema/query 测试存在。
+  - 限制：只有 `CREATE IF NOT EXISTS` 和查询 API，未发现管理 API、兼容迁移版本或显式 rollback。见 `GAP-ROUTE-001`。
+- [x] admin failover API 存在且走现有 admin auth/origin guard。
+  - 范围：status、check-now、mode、manual switch、events、traffic status/manual sample、DNS status/dry-run/apply。
+  - 证据：`internal/admin/failover_api.go`、`failover_api_test.go`、`auth_test.go`；写操作包含确认/guard，但仅对内存 controller/mock fixture 有完整测试。
+- [x] traffic abstraction、mock 和 proxy counter 存在。
+  - 证据：known/unknown/stale 模型、双向相加、cycle reset 与 unknown 测试存在。
+  - 限制：provider API、SSH vnstat、persisted manual source 均为返回 unknown 的 placeholder，主程序未接线采集 scheduler。见 `GAP-TRAFFIC-001`、`GAP-RUNTIME-001`。
+- [x] DNS mock provider 与 fail-closed guard 存在。
+  - 证据：dry-run/apply/failure/propagation、one-time binding、allowlist、rollback metadata 和“失败不提交 active state”测试存在。
+  - 限制：主程序固定构造 mock provider，未发现真实 provider adapter。见 `GAP-DNS-001`。
+- [x] redirect fallback helper 存在但未接入运行时。
+  - 证据：`BuildRedirect` 固定 HTTPS 并验证 host allowlist；测试覆盖非 allowlist 和畸形 host。
+  - 限制：无生产调用方，path/query policy 测试不足。见 `GAP-REDIRECT-001`。
+- [x] WebSocket 4xx mapping/header hardening 存在。
+  - 证据：`e1f5450`；proxy/mediaproxy 测试覆盖 4xx passthrough、header 过滤、101、5xx 和 transport failure。
+- [x] mediaproxy route feature flag 存在且默认关闭。
+  - 证据：`Config.MediaProxyRoutes`、`MEDIAPROXY_ROUTES_ENABLED=false` 默认值、config tests 和 `proxyRouteHandler`；关闭或未匹配时进入旧 fallback。
 
 ## 行为核对
 
-- [ ] 管理 API 可以创建/更新 managed route，但不能暴露 secret。
-- [ ] managed route 可以进入 mediaproxy data-plane。
-- [ ] 未知 route 保持旧 fallback，不被 feature flag 误接管。
-- [ ] 400/401/403/404 WebSocket rejection 透传且不 ban/fallback。
-- [ ] 101 tunnel、5xx 和 transport/TLS/dial failure 保持预期策略。
-- [ ] `auto`、`force_nosla`、`force_bwg`、`maintenance_nosla` 完整实现。
-- [ ] 连续失败 3 次、恢复阈值、冷却和最小保持时间已配置化。
-- [ ] reset day 和新周期确认不会把 unknown traffic 当成 0。
-- [ ] DNS apply 失败不会改变 active state。
+- [ ] EmbyProxy 管理 API 尚不能创建/更新 managed route。
+  - 全仓搜索只发现测试直接 INSERT；生产 storage 仅提供 route 查询。见 `GAP-ROUTE-001`。
+- [x] 已启用且 public 的 managed route 能进入 mediaproxy。
+  - 证据：`proxyadapter.NewProductionRouter` wiring 与 `TestProductionSlugRouteUsesManagedTarget`。
+- [x] 未知 route 和 flag-off 保持旧 fallback。
+  - 证据：`proxyRouteHandler`、`Router.serveFallback`、`TestProductionNodeRouteAndFallbackBoundaries` 及 main route tests。
+- [x] 400/401/403/404 WebSocket rejection 的源码/测试合同为透传且不 ban/fallback。
+- [x] 101 tunnel、5xx 和 transport failure 的源码/测试合同保持原策略。
+- [x] `auto`、`force_nosla`、`force_bwg`、`maintenance_nosla` 策略及单元测试存在。
+- [ ] failure/recovery/cooldown/traffic threshold 有 `PolicyConfig`，但主程序使用固定 defaults，且没有独立 minimum-hold 配置。
+  - 默认值为连续失败 3、恢复成功 3、冷却 30 分钟、流量 97%；见 `GAP-POLICY-001`。
+- [x] reset cycle 要求 known 新周期；unknown/stale 默认不能触发切回。
+  - 证据：`newKnownCycle` 及 recovery/cycle/unknown tests。
+- [x] mock DNS apply/verify 失败不会提交成功 active state。
+  - 证据：DNS failure、verify failure、writer/transaction failure tests。
+- [ ] automatic failover 尚未完成 production wiring。
+  - 主程序只在 loopback mock fixture 下构造 nodes，未启动 failover scheduler，未接真实 health/traffic/DNS。见 `GAP-RUNTIME-001`。
 
 ## 测试盘点
 
-- [ ] 列出每个模块的单元测试文件和场景。
-- [ ] 列出跨模块集成测试和缺失场景。
-- [ ] 列出 race/concurrency 测试。
-- [ ] 列出 admin auth、origin/CSRF、rate limit 和 secret redaction 测试。
-- [ ] 列出日志脱敏测试，包括 header、cookie、query 和错误字符串。
-- [ ] 运行 Phase 3 前生成“需求 -> 测试 -> 证据”映射表。
+- [x] 模块测试文件已列出。
+  - mediaproxy 9、proxyadapter 2、failover 6、admin 3、storage 4；另有 `cmd/embyproxy` wiring/restore tests 和 `internal/proxy/websocket_mapping_test.go`。
+- [x] 跨模块测试已定位。
+  - `cmd/embyproxy/main_test.go`、`failover_restore_test.go`、`proxyadapter/production_test.go` 覆盖 feature flag、storage resolver、fallback 和恢复 wiring。
+  - 缺失：管理 API 写 managed route 后经生产 router 进入 mediaproxy 的端到端测试；真实 scheduler/provider wiring 测试。
+- [x] concurrency/race 测试证据已定位。
+  - `TestHealthTrackerIsRaceSafeForConcurrentRecords` 以及既有 proxy/storage 并发测试存在；本轮按 Phase 0 规则未运行 `go test -race`。
+- [x] admin auth/origin 与写接口 guard 测试已定位。
+  - failover API 全路由认证、cross-site POST、确认字段、DNS dry-run binding、unknown traffic view 均有测试；rate-limit 证据属于既有 admin auth 体系，尚未形成 failover 专用矩阵。
+- [x] 日志与存储脱敏测试已定位。
+  - mediaproxy URL/header/request logging、proxyadapter request/node log、failover reason/storage redaction 均有测试；本轮未执行测试。
+- [ ] Phase 3 前的“需求 -> 测试 -> 证据”可执行矩阵尚未生成。
+  - 应在 Phase 1 设计确认和 Phase 2 gap 修复后完成。
 
-## 缺口输出
+## 分类结论
 
-- [ ] 把所有未实现需求写入 `09-gap-log.md`。
-- [ ] 为每个 gap 标严重程度、阻塞 phase、修改文件和新增测试。
-- [ ] 明确哪些需求已实现、部分实现、仅 mock、完全未实现。
-- [ ] 明确是否存在阻止 Phase 3 或 Phase 4 的 gap。
+- **已实现**：mediaproxy core、proxyadapter 读取/路由、managed schema/query、feature flag/fallback、failover policy/state persistence、admin failover endpoints、WebSocket hardening。
+- **部分实现**：managed route management contract、运行时 node/control-plane wiring、可配置 policy、redirect fallback、failover UI/operational flow。
+- **仅 mock**：DNS provider、health probe、scheduler scenario、自动采样 flow。
+- **placeholder**：provider API、SSH vnstat、persisted manual traffic source。
+- **未确认/未完成**：license/source provenance、真实 DNS provider、production automatic failover、Phase 3 全流程验证。
 
+## Phase 0 Gate 结论
+
+- [x] 所有确认的缺口已写入 `09-gap-log.md`。
+- [x] 每个 gap 已标严重程度、阻塞 phase、预计文件和测试。
+- [x] 已区分 implemented、partial、mock-only、placeholder 和 unverified。
+- [ ] Phase 0 尚未通过：`GAP-PROV-001` 的 license/provenance 结论未完成，且本 inventory 需要人工 review。
+- [ ] 不允许直接进入 Phase 3；下一步是人工 review 本 inventory，再决定 Phase 0 provenance audit 或 Phase 1 设计 gate。
