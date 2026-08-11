@@ -309,3 +309,11 @@
 - Scope: create and verify one local Git bundle, transfer it only to BWG alias `bwg`, validate it in `/root/staging/embyproxy-staging`, fast-forward only, and push only the matching feature ref.
 - Prohibited: NOSLA SSH, deployment, restart, production configuration/traffic changes, force push, main/master push, remote/auth changes, and secret output.
 - The next publish attempts and results must be recorded here, in the tracker, issue log, and verification matrix before stopping.
+
+## BWG publish attempt 1 | stopped before merge
+
+- Local bundle and BWG branch/base/status/bundle verification passed.
+- The remote path whitelist shell command failed because of an `awk` quoting parse error.
+- No merge, push, deploy, restart, or traffic/configuration action occurred.
+- Temporary BWG ref and bundle were cleaned; BWG worktree remained clean.
+- Recorded as `ISSUE-PUBLISH-002`; retry will use a quoting-safe whitelist check and repeat all gates.

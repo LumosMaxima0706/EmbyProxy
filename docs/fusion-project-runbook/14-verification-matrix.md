@@ -141,3 +141,11 @@ Each completed row requires command, timestamp, result summary, and link to trac
 - Authorization: owner explicitly authorized BWG SSH/SCP for the current feature branch only.
 - Required checks: local clean branch/HEAD/path scope; bundle verify/list-heads; BWG branch/base/status; BWG bundle verify/list-heads; temporary ref target; path whitelist; `git merge --ff-only`; feature ref push only; remote ref verification; cleanup.
 - Forbidden actions remain: NOSLA SSH, deploy/restart, production changes, force push, main/master push, remote/auth changes, and secret output.
+
+## BWG Publish Attempt 1 Result
+
+- Local bundle verification: PASS.
+- BWG branch/base/status and bundle verification: PASS.
+- Path whitelist command: FAILED due shell `awk` quoting; recorded as `ISSUE-PUBLISH-002`.
+- BWG merge/push: NOT RUN.
+- Cleanup: PASS; temporary ref and bundle removed, BWG worktree clean.
