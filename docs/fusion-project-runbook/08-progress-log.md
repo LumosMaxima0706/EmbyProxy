@@ -474,3 +474,5 @@
 - **运行态变更**：仅临时 managed routes 用于 smoke 且已删除；未 restart/reload，未改配置、DNS、Nginx 或 rathole。
 - **发布边界**：本地 docs closeout commit 将通过 BWG ff-only feature-only bridge 发布；不 push main/master，不 force push。
 - **下一步建议**：日常使用按 `27-day2-checklist.md`；公网切流和正式 public release 仍需各自独立 gate。
+
+Day-2 runbook start and closeout evidence commits are `412987e` and `1d285e9`.
