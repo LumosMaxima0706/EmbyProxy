@@ -35,6 +35,28 @@
 - 不得 stage `bin/`、临时数据库、凭据、日志或 provider 响应。
 - dirty worktree 中不得清理、覆盖或还原不属于当前任务的用户改动。
 
+### BWG publish bridge rule
+
+以下规则是所有 approved commit 发布到 GitHub 的默认流程；每次 bundle 传输、BWG SSH 和 push 仍需当前 gate 分别明确授权，不能把本规则视为长期授权。
+
+- Codex 当前执行环境默认不直接 push GitHub，也不得尝试修复或修改 Git remote、DNS、credential、token 或认证配置。
+- approved commit 必须先在本地确认 branch、HEAD、clean status 和 commit path whitelist，再创建只包含已批准范围的 Git bundle。
+- 未明确批准 BWG SSH/SCP 时，只能生成并验证 bundle，然后输出 bundle 路径等待人工处理。
+- BWG 不可用或 SSH/SCP 失败时立即停止；只输出已验证的 bundle 路径，不猜测连接目标，不改用其他 publisher，不修 remote/auth。
+- 获得明确授权后，只能把 bundle 传到 BWG；禁止 SSH NOSLA。
+- BWG 是发布桥，只能在 `/root/staging/embyproxy-staging` 内执行该发布流程。
+- BWG 必须依次检查当前 branch、预期 base HEAD、clean status、bundle verify/list-heads、临时 ref HEAD 和变更路径白名单；任何不一致立即停止。
+- bundle 只能 fetch 到本次专用临时 ref；不得直接覆盖 branch，不得 merge 未验证 ref。
+- 当前发布分支只能通过 `git merge --ff-only` 前进；禁止 merge commit、rebase、reset 和新增 commit。
+- 只能 push `HEAD:refs/heads/feature/failover-phase2-local`；禁止 force push，禁止 push `main`、`master` 或其他分支。
+- push 后必须只读核对 GitHub 目标 ref 等于 approved commit，并确认 BWG branch/HEAD/status 正常。
+- 成功后清理本次专用 BWG 临时 ref 和远端 bundle；不得顺手清理其他 ref、bundle 或文件。
+- publish bridge 只负责发布 Git commit；禁止借此部署、替换 binary、reload/restart 服务、修改 Nginx/systemd/DNS/SQLite 或切换流量。
+- 输出必须脱敏，不得显示 private key、credential、token、cookie、password、完整 URL query、完整 UUID 或完整订阅链接。
+- 任一步失败即停止并保留可复核 evidence；不得猜测修复、扩大 scope 或绕过 gate。
+
+已验证参考案例：`feature/failover-phase2-local` 从 base `7d8ba77` 以 ff-only 前进到 approved commit `871cfc2`，再由 BWG 成功 push 同名 GitHub feature branch。该案例仅证明流程可行，不构成未来 SSH、merge 或 push 授权。
+
 ## 外部与运行环境规则
 
 以下操作必须有本轮明确、具体的人工批准，不能从旧批准或 phase 名推导：

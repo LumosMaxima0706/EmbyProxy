@@ -42,3 +42,16 @@
 - **是否修改 Nginx/systemd/SQLite/DNS**：否；未调用 admin 写接口。
 - **是否有 secret 泄露**：否。
 - **下一步建议**：人工 review inventory；随后在单独批准的 Phase 0 子 gate 完成 license/source provenance audit，并在进入 Phase 1 前为 High gap 指定处理顺序。
+
+## 2026-08-11T17:57:01+08:00 | Phase 0 | 验证并固化 BWG publish bridge
+
+- **操作人/工具**：Codex；本地 Git bundle、经明确批准的 BWG SSH/SCP、BWG Git 和 GitHub feature ref 验证。
+- **做了什么**：将 approved docs-only commit `871cfc2` 打包，经 BWG 发布桥验证 bundle、临时 ref 和三文档路径白名单，随后 ff-only 更新 BWG feature branch 并 push GitHub 同名 feature branch；本 gate 把该流程写入操作守则。
+- **验证命令**：本地 branch/HEAD/status/commit path 检查和 `git bundle verify/list-heads`；BWG branch/base/status、bundle/temp-ref/path whitelist、`git merge --ff-only`、目标 ref push 后只读核对。
+- **结果**：BWG 从 `7d8ba77` fast-forward 到 `871cfc2`；GitHub `feature/failover-phase2-local` 到达 `871cfc2`；本次专用 BWG 临时 ref 和 bundle 已清理。未 force push，未 push `main`/`master`，未 SSH NOSLA。
+- **是否修改代码**：否；本 gate 仅修改 `docs/fusion-project-runbook/07-codex-operating-rules.md` 和 `08-progress-log.md`。
+- **是否 commit/push**：本 gate 未 commit、未 push；记录的上一独立 gate 已按批准 push `871cfc2`。
+- **是否部署/重启**：否。
+- **是否修改 Nginx/systemd/SQLite/DNS**：否。
+- **是否有 secret 泄露**：否。
+- **下一步建议**：人工 review 本规则；通过后单独批准 docs-only commit。Phase 0 的下一项技术任务仍是 license/source provenance audit。
