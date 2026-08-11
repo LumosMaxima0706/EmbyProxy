@@ -72,6 +72,8 @@ func TestProductionSlugRouteUsesManagedTarget(t *testing.T) {
 		}
 		w.Header().Set("Accept-Ranges", "bytes")
 		w.Header().Set("Content-Range", "bytes 0-2/3")
+		w.Header().Set("Location", "http://"+r.Host+"/base/redirect")
+		w.Header().Set("Content-Location", "/base/content")
 		w.WriteHeader(http.StatusPartialContent)
 		_, _ = w.Write([]byte("abc"))
 	}))
@@ -90,6 +92,9 @@ func TestProductionSlugRouteUsesManagedTarget(t *testing.T) {
 	newProductionTestRouter(t, store, http.NotFoundHandler()).ServeHTTP(recorder, req)
 	if recorder.Code != http.StatusPartialContent || recorder.Body.String() != "abc" || hits.Load() != 1 || forbiddenHits.Load() != 0 {
 		t.Fatalf("status=%d body=%q hits=%d", recorder.Code, recorder.Body.String(), hits.Load())
+	}
+	if recorder.Header().Get("Location") != "/s/demo/redirect" || recorder.Header().Get("Content-Location") != "/s/demo/content" {
+		t.Fatalf("rewritten headers=%v", recorder.Header())
 	}
 }
 
