@@ -302,3 +302,10 @@
 - **是否修改源码**：是；仅本地实现与测试。
 - **是否 commit/push**：已本地 commit `8c00f1a` / 未 push。
 - **是否部署/重启/SSH**：否；未部署、未重启、未 SSH BWG/NOSLA。
+
+## Owner-authorized BWG publish bridge execution
+
+- Owner explicitly authorized the documented BWG publish bridge for the current `feature/failover-phase2-local` branch only.
+- Scope: create and verify one local Git bundle, transfer it only to BWG alias `bwg`, validate it in `/root/staging/embyproxy-staging`, fast-forward only, and push only the matching feature ref.
+- Prohibited: NOSLA SSH, deployment, restart, production configuration/traffic changes, force push, main/master push, remote/auth changes, and secret output.
+- The next publish attempts and results must be recorded here, in the tracker, issue log, and verification matrix before stopping.

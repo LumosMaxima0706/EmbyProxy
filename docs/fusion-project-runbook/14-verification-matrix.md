@@ -135,3 +135,9 @@ Each completed row requires command, timestamp, result summary, and link to trac
 - Sensitive scan: no tracked secret-named files; marker count is not treated as proof of absence because code/tests contain redaction terminology.
 - Publisher check: `git push --dry-run` failed due unavailable local authentication. Direct origin publishing is also disallowed by the BWG publish bridge rule.
 - Result: BLOCKED as `ISSUE-PUBLISH-001`; no actual push, force push, deployment, restart, or SSH occurred.
+
+## BWG Publish Bridge Authorized Attempt
+
+- Authorization: owner explicitly authorized BWG SSH/SCP for the current feature branch only.
+- Required checks: local clean branch/HEAD/path scope; bundle verify/list-heads; BWG branch/base/status; BWG bundle verify/list-heads; temporary ref target; path whitelist; `git merge --ff-only`; feature ref push only; remote ref verification; cleanup.
+- Forbidden actions remain: NOSLA SSH, deploy/restart, production changes, force push, main/master push, remote/auth changes, and secret output.

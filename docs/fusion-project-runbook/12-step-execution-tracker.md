@@ -19,3 +19,9 @@ Statuses are `TODO`, `IN_PROGRESS`, `BLOCKED`, `DONE`, or `SKIPPED`. Only one st
 ## Current Task Rule
 
 E-001 is complete in `8c00f1a`; F-001 is complete in `29118fb`; G-001 is complete in `4e60097`; H-001 is complete in `fc00c61`; I-001 verification is complete. J-001 is release-only BLOCKED by `ISSUE-PROV-002`; K-001 local delivery preparation is DONE. No implementation task remains active in this run.
+
+## Publish Bridge Gate
+
+Status: IN_PROGRESS (`ISSUE-PUBLISH-001`)
+
+Scope is limited to the approved `feature/failover-phase2-local` branch. The next action is local bundle creation, followed by BWG-only validation, ff-only merge, feature-ref push, remote verification, and cleanup. No source implementation is in progress.
