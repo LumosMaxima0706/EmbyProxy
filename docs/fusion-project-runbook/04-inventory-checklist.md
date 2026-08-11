@@ -13,9 +13,20 @@
 - [x] 当前 origin failover 分支包含本地关键 commit。
   - 证据：fresh fetch 后本地 HEAD 与 origin 均为 `7d8ba77`；该历史包含 `1514664` 和 `e1f5450`。mediaproxy 远端 ref 为 `4074662`。
 - [ ] 两个上游来源已定位，但 license、基线 provenance 和 attribution 未完成。
-  - 证据：当前仓库有 `origin` 与 `upstream` remote；参考 clone 指向 `Gsy-allen/emby-reverse-proxy-go`、HEAD 为 `74297fd`。两个 Git tree 均未找到 LICENSE/COPYING/NOTICE；当前 README 仅有 MIT 声明，不能替代完整 provenance audit。见 `GAP-PROV-001`。
+  - 证据：`a3c08dd` repo-only audit 确认 root LICENSE/COPYING/NOTICE 在当前 tree 和完整本地历史中均不存在；README 仅有 MIT 声明。既有 third-party review、另一个 README 致谢上游、逐文件 provenance 与 dependency licenses 仍不完整。见 `GAP-PROV-001`。
 - [x] 工作区在盘点开始前 clean，无 untracked 项。
   - 证据：`git status --short --untracked-files=all` 和脱敏后的 ignored 状态检查均无输出。
+
+### License/source provenance audit
+
+- [x] 完成 repo-only 静态审计；未访问 GitHub、未安装依赖、未修改审计对象。
+- [x] 确认没有 tracked vendor/、third_party/、node_modules/、build/dist、submodule、二进制归档或匹配的 minified/bundled/wasm/source-map/generated 文件。
+- [x] 未发现 copied-from/snippet/source attribution 注释或明确 GPL/AGPL/LGPL/MPL 线索；该结论不等于完成权利确认。
+- [ ] 为 README 致谢的上游补齐 revision、license、复制/参考范围和 attribution。
+- [ ] 补齐 root LICENSE/copyright notice，或记录权利人明确确认。
+- [ ] 建立 `internal/mediaproxy`、`internal/proxyadapter` 逐文件来源与独立实现证据映射。
+- [ ] 建立 6 个 direct、12 个 indirect Go dependencies 的 license/notice inventory，并决定 SBOM 要求。
+- [ ] 人工 review 全部证据并保持 `GAP-PROV-001` OPEN，完成前禁止进入 Phase 3。
 
 ## 模块与集成点
 

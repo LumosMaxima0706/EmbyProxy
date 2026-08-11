@@ -46,15 +46,30 @@
 
 - **Phase**：Phase 0
 - **严重程度**：High
-- **描述**：两个项目的 Git tree 均未找到 LICENSE/COPYING/NOTICE。当前 EmbyProxy README 声称 MIT，但尚未核对上游 license 文本、copyright notice、融合代码是复制还是自研，以及逐文件来源。
-- **影响**：无法确定 attribution 和再分发要求；不得凭 README 一句话宣称 provenance audit 完成。
-- **发现方式**：remote、`git ls-tree`、license 文件搜索和 README 关键词只读检查。
-- **需要修改的文件**：`docs/fusion-project-runbook/01-original-goal.md`、新增 provenance 清单 `TBD`；若确认直接复制，license/notice 路径由 audit 决定。
-- **需要新增的测试**：不适用；需要 commit/file/source 映射证据。
-- **修复前禁止进入的 phase**：Phase 1
+- **描述**：在 `a3c08dd` 上完成的 repo tree 与完整本地 Git 历史只读审计仍不能建立完整 license/source provenance。根目录没有 LICENSE/COPYING/NOTICE；README 仅声明 MIT，缺少完整 license 文本与 copyright notice。`docs/third_party_notices.md` 记录了 EmbyProxy 的 MIT 意图、另一代理项目无可确认复制授权，以及 `internal/mediaproxy` 为独立实现的声明，但证据链仍不完整。
+- **影响**：无法完整确定宿主项目、致谢上游、融合模块和 Go dependencies 的 attribution/再分发要求；在证据补齐并经人工确认前，Phase 3 必须保持 blocked。
+- **发现方式**：在无网络条件下检查当前 tree、完整本地 Git history、README、`docs/third_party_notices.md`、commit `97c0e55`、`go.mod`/`go.sum`、tracked 文件类型、source markers、submodule/vendor/generated/minified 资产和精确 license 关键词。
+- **需要修改的文件**：未来修复范围由权利与来源确认结果决定；至少包括 root LICENSE/copyright notice、`docs/third_party_notices.md`、逐文件 provenance 清单和 dependency license inventory/SBOM。当前 docs-only gate 不创建这些修复产物。
+- **需要新增的测试**：不适用；需要可复核的 source commit/file/license/notice 映射和 dependency inventory 检查。
+- **修复前禁止进入的 phase**：Phase 1 和 Phase 3
 - **状态**：OPEN
-- **证据/链接**：当前 origin/upstream refs；参考项目 HEAD `74297fd`；两棵树的 license 文件搜索为空。
-- **备注**：参考 clone worktree 自身为 tracked files deleted 状态，本轮没有修复或修改，只通过 Git object 读取。
+- **证据/链接**：HEAD `a3c08dd`；`docs/third_party_notices.md`；`97c0e55`；root license/history 搜索为空；`go.mod` 有 6 个 direct 和 12 个 indirect dependencies。
+- **备注**：
+  - README 致谢的另一上游尚无 revision、license、复制范围或 attribution 记录。
+  - `internal/mediaproxy` 在 `97c0e55` 中整体引入并声明独立实现，但尚无逐文件 provenance 映射；`internal/proxyadapter` 也需要纳入映射。
+  - repo 没有 dependency license inventory、SBOM 或对应 notices。
+  - 未发现 tracked vendor/、third_party/、node_modules/、build/dist、submodule、二进制归档、copied-from/snippet/source attribution 注释，或明确 GPL/AGPL/LGPL/MPL 线索。
+  - 未发现 minified、bundled、wasm、source map 或按文件名标记的 generated 文件；大型 admin HTML 是自包含资源，未发现外部脚本引用或内嵌 license marker。
+  - 上述“未发现”仅限定于本次 repo-only 静态审计，不等于确认不存在版权或依赖义务。
+
+### GAP-PROV-001 Phase 3 前置 checklist
+
+- [ ] 为 README 致谢的上游记录稳定 revision、license 证据、复制/参考范围和 attribution 要求。
+- [ ] 补充适用的 root LICENSE 与 copyright notice，或取得并记录权利人的明确确认。
+- [ ] 为 `internal/mediaproxy` 和 `internal/proxyadapter` 建立逐文件来源、作者/项目、基线 commit、是否直接复制、修改范围与测试来源映射。
+- [ ] 为 6 个 direct 和 12 个 indirect Go dependencies 建立版本、license、notice/redistribution 要求清单，并决定是否需要 SBOM。
+- [ ] 人工 review 上述证据，确认 `docs/third_party_notices.md` 与实际复制/独立实现边界一致。
+- [ ] checklist 全部完成前保持 `GAP-PROV-001` 为 `OPEN`，不得进入 Phase 3。
 
 ## GAP-ROUTE-001 | Managed route 缺少管理 API 写入合同
 

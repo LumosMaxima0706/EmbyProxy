@@ -55,3 +55,16 @@
 - **是否修改 Nginx/systemd/SQLite/DNS**：否。
 - **是否有 secret 泄露**：否。
 - **下一步建议**：人工 review 本规则；通过后单独批准 docs-only commit。Phase 0 的下一项技术任务仍是 license/source provenance audit。
+
+## 2026-08-11T18:35:07+08:00 | Phase 0 | License/source provenance 只读审计
+
+- **操作人/工具**：Codex；本地 Git history、tracked tree、依赖清单、source marker 和文件类型只读检查。
+- **做了什么**：在 HEAD `a3c08dd` 上审计 root license/notice、既有 third-party review、上游致谢、mediaproxy 引入历史、Go dependency inventory、vendor/submodule/binary/generated 资产和强约束 license 线索；审计阶段没有修改文件。
+- **验证命令**：branch/HEAD/status、`find`、`git ls-files`、`git log/show`、`git grep`、`rg`、`file`，以及最终 clean status 检查；未访问 GitHub 或其他外部网络。
+- **结果**：未发现 vendored/minified/strong-copyleft 证据，但 root license/copyright、README 致谢上游 provenance、mediaproxy/proxyadapter 逐文件映射和 Go dependency license inventory 均不完整；结论为需要 docs-only gap update，不能宣称 provenance 已解决。
+- **是否修改代码**：否；随后的 docs-only gate 仅更新 `04-inventory-checklist.md`、`08-progress-log.md` 和 `09-gap-log.md`。
+- **是否 commit/push**：否。
+- **是否部署/重启**：否。
+- **是否修改 Nginx/systemd/SQLite/DNS**：否。
+- **是否有 secret 泄露**：否。
+- **下一步建议**：人工 review 本审计记录；`GAP-PROV-001` 保持 OPEN，provenance/license evidence 未解决前 Phase 3 blocked。
