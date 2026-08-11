@@ -358,6 +358,18 @@ func TestProxyRouteHandlerEnabledKeepsLegacyFallback(t *testing.T) {
 	}
 }
 
+func TestProxyRouteHandlerEnabledWithoutStoreKeepsLegacyFallback(t *testing.T) {
+	fallback := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTeapot)
+	})
+	handler := proxyRouteHandler(config.Config{MediaProxyRoutes: true}, nil, fallback)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/s/demo/path", nil))
+	if recorder.Code != http.StatusTeapot {
+		t.Fatalf("status=%d", recorder.Code)
+	}
+}
+
 func assertCaptureRouteMeta(t *testing.T, record capture.Record, mode, stage, inboundURL string, status int) {
 	t.Helper()
 	if record.Mode != mode || record.Stage != stage || record.InboundURL != inboundURL || record.Status != status {

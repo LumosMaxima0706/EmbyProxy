@@ -55,6 +55,21 @@ func TestLoadReadsMediaProxyRoutesFlag(t *testing.T) {
 	}
 }
 
+func TestMediaProxyRoutesUnknownValuesFailClosed(t *testing.T) {
+	for _, value := range []string{"enabled", "maybe", "2", "unexpected"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("MEDIAPROXY_ROUTES_ENABLED", value)
+			cfg, err := Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.MediaProxyRoutes {
+				t.Fatalf("unknown feature flag value %q enabled managed routes", value)
+			}
+		})
+	}
+}
+
 func TestListenAddressesPreserveLegacyDefaults(t *testing.T) {
 	clearListenEnv(t)
 	cfg, err := Load()
