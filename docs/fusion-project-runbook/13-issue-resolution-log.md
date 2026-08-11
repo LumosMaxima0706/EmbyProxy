@@ -75,7 +75,7 @@ Every issue is recorded when detected. Resolution work updates the same row with
 | ISSUE-PUBLISH-003 | BWG publish bridge attempt 2 | Push-precheck assertion expected the remote feature ref to equal the new target before push | Retry script compared remote ref to target instead of the expected base; the check was ordered before push | BWG fast-forward merge completed to `61de764`, but push was not attempted; remote stayed at `c7f475c` | No | Compare remote to base before push, then to target only after push | Corrected in the next retry; final push and remote verification passed | DONE | `5cbbe54` |
 | ISSUE-PUBLISH-001 | BWG publish bridge readiness | Remote feature branch was clear and local target was ahead; direct publisher authentication was unavailable | Codex environment is not the trusted publisher; BWG bridge was required | Publish gate was blocked until owner authorized BWG bridge | Yes for publish only; No for implementation | Use the documented BWG bundle/ff-only/feature-ref flow after explicit authorization | Owner authorized bridge; BWG verified and pushed `5cbbe54` to the feature ref; remote verification passed | RESOLVED | `5cbbe54` |
 
-| DEPLOY-001 | Deployment preflight | BWG sidecar target, service name, port occupancy, backup paths, and runtime boundaries require confirmation | Deployment state is external to the repository and must be checked read-only before mutation | Blocks deployment mutation only; does not affect local implementation | Yes for DEPLOY-002 onward | Use `ssh bwg` read-only checks; record exact target paths and conflicts; stop if target is ambiguous | PENDING preflight | IN_PROGRESS | TBD |
+| DEPLOY-001 | Deployment preflight | BWG sidecar target, service name, port occupancy, backup paths, and runtime boundaries required confirmation | Deployment state was external to the repository and required a read-only check before mutation | Blocked deployment mutation only; did not affect local implementation | Yes for DEPLOY-002 onward | Use `ssh bwg` read-only checks; record exact target paths and conflicts; stop if target is ambiguous | BWG checkout/branch/HEAD/worktree, port, service, paths, disk, Nginx, rathole, test location, and staging state all checked; no conflict found and no mutation occurred | DONE | TBD |
 
 ## Deployment issue recording rule
 
@@ -88,3 +88,9 @@ recorded.
 Local verification was successful with the recorded temporary Go toolchain. There
 is no local implementation blocker. BWG identity, port, service, disk, release,
 backup, and Nginx checks remain pending and are the next safe action.
+
+### DEPLOY-001 remote result
+
+All required read-only BWG checks passed. Independent service, listener, release,
+config, data, and log names are available; existing Nginx and rathole remained
+active. DEPLOY-001 is resolved and DEPLOY-002 may proceed.

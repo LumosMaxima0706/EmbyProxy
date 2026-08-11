@@ -51,9 +51,9 @@
 
 ## Deployment handoff
 
-- [ ] BWG target, checkout, independent service name, port, release path, config,
+- [x] BWG target, checkout, independent service name, port, release path, config,
       log path, and rollback commands are recorded.
-- [ ] Read-only preflight passed and no existing service or port conflicts exist.
+- [x] Read-only preflight passed and no existing service or port conflicts exist.
 - [ ] Timestamped binary/config/database backups exist before mutation.
 - [ ] Artifact checksum matches between local build and BWG staging.
 - [ ] Only the new localhost sidecar is started or reloaded.

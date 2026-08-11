@@ -36,11 +36,10 @@ Scope was limited to the approved `feature/failover-phase2-local` branch. BWG-on
 
 | Step ID | Phase | Task | Status | Depends on | Files expected to change | Implementation notes | Validation command | Validation result | Commit hash | Next action |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| DEPLOY-001 | Deployment | BWG read-only preflight and target conflict check | IN_PROGRESS | K-001, owner deployment authorization | `18-21`, `08`, `12-15` | Confirm alias, checkout, service boundary, port `127.0.0.1:18082`, disk, backups, and Nginx structure before mutation | Local `go test ./...`, `go vet ./...`, `git diff --check`; read-only `ssh bwg` checks | PENDING | TBD | Record target-specific paths and proceed only if safe |
-| DEPLOY-002 | Deployment | Backup and upload independent sidecar artifact | TODO | DEPLOY-001 | deployment log, rollback plan | No mutation until preflight passes and exact paths are recorded | checksum, backup listing, transfer verification | PENDING | TBD | Start only new sidecar |
+| DEPLOY-001 | Deployment | BWG read-only preflight and target conflict check | DONE | K-001, owner deployment authorization | `18-21`, `08`, `12-15` | Confirmed checkout, service boundary, port `127.0.0.1:18082`, disk, paths, existing service safety, and Nginx state without mutation | Local tests plus read-only `ssh bwg` checks | PASS; no conflicts, existing Nginx/rathole active, `nginx -t` PASS | `15a114a` (local evidence baseline) | DEPLOY-002 is ready |
+| DEPLOY-002 | Deployment | Backup and upload independent sidecar artifact | IN_PROGRESS | DEPLOY-001 | deployment log, rollback plan | Build static artifact from `e0f2bb6`; create first-deploy manifest and independent paths; generate credential without output | checksum, backup listing, transfer verification | PENDING | TBD | Start only new sidecar after config validation |
 | DEPLOY-003 | Deployment | Start sidecar and run health/smoke checks | TODO | DEPLOY-002 | healthcheck, execution log | No Nginx/DNS/traffic changes | service status, localhost checks, bounded logs | PENDING | TBD | Roll back on failure |
 | DEPLOY-004 | Deployment | Close deployment gate and record rollback/readiness | TODO | DEPLOY-003 | all deployment docs, progress log, checklist | Commit runbook result; no push unless separately authorized | final status and diff checks | PENDING | TBD | Stop for next explicit production gate |
 
-DEPLOY-001 local verification update: `go test ./...`, `go vet ./...`, `gofmt`, and
-`git diff --check` passed. The step remains `IN_PROGRESS` pending read-only BWG
-preflight.
+DEPLOY-001 local and BWG read-only verification passed. DEPLOY-002 is now the only
+`IN_PROGRESS` step.

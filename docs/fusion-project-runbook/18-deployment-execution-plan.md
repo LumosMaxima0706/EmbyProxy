@@ -10,6 +10,11 @@ documented BWG sidecar boundary and does not authorize production traffic change
 - Target host: BWG SSH alias `bwg`.
 - Deployment checkout/staging: `/root/staging/embyproxy-staging`.
 - New sidecar listener: `127.0.0.1:18082` only.
+- Service: `embyproxy-gsy-sidecar.service`.
+- Release root: `/opt/embyproxy-gsy-sidecar`.
+- Config root: `/etc/embyproxy-gsy-sidecar`.
+- Data root: `/var/lib/embyproxy-gsy-sidecar`.
+- Log root: `/var/log/embyproxy-gsy-sidecar`.
 - New assets must use an independent release directory, config, log path, service
   name, and binary backup.
 - Existing Nginx server blocks, `/admin/`, `/s/`, rathole, DNS, and production
@@ -42,3 +47,11 @@ Nginx or DNS as an implicit deployment step.
 - Health checks and local smoke tests pass, including auth rejection, managed-route
   behavior, legacy fallback, WebSocket/Range handling, and redacted logging.
 - A tested rollback path and backup locations are recorded.
+
+## DEPLOY-001 preflight result
+
+PASS. BWG staging is on `feature/failover-phase2-local` at `e0f2bb6` with a clean
+worktree. The listener, service name, and all independent target paths are free.
+Root filesystem has sufficient free space. Nginx and rathole are active and
+`nginx -t` passes. No existing Nginx test location or staging `.env` was found.
+No server mutation occurred during this check.

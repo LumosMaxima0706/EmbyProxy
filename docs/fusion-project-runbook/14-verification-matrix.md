@@ -172,9 +172,9 @@ Each completed row requires command, timestamp, result summary, and link to trac
 
 | Verification | When | Success standard | Failure handling | Current result |
 | --- | --- | --- | --- | --- |
-| BWG identity/checkout/status | DEPLOY-001 | Alias is `bwg`; intended checkout and clean state are confirmed | Record DEPLOY issue; do not mutate | PENDING |
-| Port/service conflict | DEPLOY-001 | New service name is unused and `127.0.0.1:18082` is free | Stop and choose no alternative implicitly | PENDING |
-| Disk and backup capacity | DEPLOY-001/002 | Independent release, config, log, and DB backup paths have capacity | Do not upload or switch release | PENDING |
+| BWG identity/checkout/status | DEPLOY-001 | Alias is `bwg`; intended checkout and clean state are confirmed | Record DEPLOY issue; do not mutate | PASS: feature branch at `e0f2bb6`, clean |
+| Port/service conflict | DEPLOY-001 | New service name is unused and `127.0.0.1:18082` is free | Stop and choose no alternative implicitly | PASS |
+| Disk and backup capacity | DEPLOY-001/002 | Independent release, config, log, and DB backup paths have capacity | Do not upload or switch release | PASS for preflight; backup creation pending |
 | Artifact checksum | DEPLOY-002 | BWG checksum equals local verified artifact | Remove only new staging artifact and record result | PENDING |
 | Config validation | DEPLOY-002/003 | New config validates without modifying existing Nginx/server blocks | Stop before service start | PENDING |
 | Sidecar health/smoke | DEPLOY-003 | Local health, auth, managed route, fallback, WebSocket/Range and redaction checks pass | Execute scoped rollback | PENDING |
@@ -188,3 +188,12 @@ Each completed row requires command, timestamp, result summary, and link to trac
 - `go vet ./...`: PASS.
 - `git diff --check`: PASS.
 - BWG checks: pending; no server mutation has occurred.
+
+## DEPLOY-001 BWG result
+
+- Checkout identity/status: PASS.
+- Port/service/path conflict checks: PASS.
+- Disk capacity: PASS.
+- Existing Nginx and rathole active: PASS.
+- `nginx -t`: PASS.
+- No remote mutation, DNS, traffic, Nginx, or NOSLA action occurred.

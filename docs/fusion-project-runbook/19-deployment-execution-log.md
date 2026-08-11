@@ -20,3 +20,21 @@ been performed in this deployment attempt.
 - `go vet ./...`: PASS.
 - `git diff --check`: PASS.
 - No source changes or server mutation occurred.
+
+## BWG read-only preflight
+
+- SSH alias `bwg`: reachable.
+- Architecture: x86_64.
+- Staging checkout: present, expected feature branch, HEAD `e0f2bb6`, clean.
+- `127.0.0.1:18082`: free.
+- `embyproxy-gsy-sidecar.service`: free.
+- Independent release/config/data/log paths: free.
+- Root filesystem free capacity: approximately 29 GiB.
+- Nginx: active; configuration test PASS.
+- rathole: active.
+- Existing test location: absent.
+- Staging `.env`: absent; staging data exists and will not be reused.
+- Result: PASS. No files, services, Nginx, DNS, or traffic were changed.
+
+Next gate: build a static artifact from the `e0f2bb6` source tree, verify its
+checksum, create an independent backup manifest, and upload to a new release path.

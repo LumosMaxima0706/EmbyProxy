@@ -344,3 +344,11 @@
 - First gate is read-only BWG preflight; no server mutation has occurred.
 - Required tracker, issue log, verification matrix, and delivery checklist updates
   are being made before each subsequent gate.
+
+## DEPLOY-001 BWG read-only preflight completed
+
+- Verified the BWG staging checkout, feature branch at `e0f2bb6`, and clean state.
+- Verified port 18082, the sidecar service name, and independent release/config/data/log paths are free.
+- Verified disk capacity, active Nginx/rathole, and a passing `nginx -t`.
+- No server file, service, Nginx, DNS, traffic, or NOSLA change occurred.
+- DEPLOY-001 is DONE; DEPLOY-002 artifact/backup preparation is IN_PROGRESS.

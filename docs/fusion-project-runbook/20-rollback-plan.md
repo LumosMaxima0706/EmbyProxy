@@ -25,3 +25,19 @@ configuration must not be deleted or overwritten.
 
 Rollback is not considered available until the target-specific commands and paths
 are recorded after preflight.
+
+## Target-specific rollback
+
+- Service: `embyproxy-gsy-sidecar.service`.
+- Release root: `/opt/embyproxy-gsy-sidecar`.
+- Config: `/etc/embyproxy-gsy-sidecar/embyproxy.env`.
+- Database: `/var/lib/embyproxy-gsy-sidecar/proxy.db`.
+- Logs: `/var/log/embyproxy-gsy-sidecar`.
+- Backup root: `/root/backups/embyproxy-gsy-sidecar`.
+
+This is the first deployment and all target paths were absent at preflight. Before
+service start, create a timestamped manifest stating that no previous release,
+config, database, or service existed. On a failed first start, use
+`systemctl disable --now embyproxy-gsy-sidecar.service`, verify port 18082 is free,
+and preserve the new release/config/database/log assets for diagnosis. Do not touch
+Nginx, rathole, staging data, or any unknown service.
