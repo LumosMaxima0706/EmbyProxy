@@ -2,36 +2,37 @@
 
 ## Implementation
 
-- [ ] Managed route storage CRUD is transaction-safe and tested.
-- [ ] Authenticated Admin API can create, update, list, and delete managed routes.
-- [ ] Admin UI can operate the API without changing existing authentication boundaries.
-- [ ] Runtime resolver loads managed routes and preserves flag-off/unknown legacy fallback.
-- [ ] Managed routes reach mediaproxy for HTTP, Range, WebSocket, headers, rewrite, and transport failures.
-- [ ] Migration/backward compatibility and rollback behavior are documented and tested.
+- [x] Managed route storage CRUD is transaction-safe and tested.
+- [x] Authenticated Admin API can create, update, list, and delete managed routes.
+- [x] Admin UI can operate the API without changing existing authentication boundaries; browser review remains pending.
+- [x] Runtime resolver loads managed routes and preserves flag-off/unknown legacy fallback.
+- [x] Managed routes reach mediaproxy for HTTP, Range, WebSocket, headers, rewrite, and transport failures.
+- [x] Migration/backward compatibility and rollback behavior are documented and tested.
 - [ ] Failover policy remains NOSLA primary, BWG fallback, DNS preferred, redirect optional.
 
 ## Tests And Security
 
-- [ ] Changed Go files pass gofmt.
-- [ ] Targeted packages pass.
-- [ ] `go test ./...` passes.
-- [ ] `go vet ./...` passes.
-- [ ] Auth, origin, target validation, WebSocket status mapping, unknown traffic, DNS mock, and log redaction checks pass.
+- [x] Changed Go files pass gofmt.
+- [x] Targeted packages pass.
+- [x] `go test ./...` passes.
+- [x] `go vet ./...` passes.
+- [x] Auth, origin, target validation, WebSocket status mapping, unknown traffic, DNS mock, and log redaction checks pass locally.
 - [ ] No secret, token, cookie, password, sensitive query, complete UUID, or subscription link is present in output or logs.
 
 ## Documentation And Audit
 
-- [ ] Tracker has a status, validation result, next action, and commit for every step.
-- [ ] Issue log records every blocker and its resolution evidence.
-- [ ] Verification matrix reflects current results, not planned results.
-- [ ] Progress log records each task close and external-impact boundary.
-- [ ] Gap log distinguishes implementation blockers from release hygiene.
+- [x] Tracker has a status, validation result, next action, and commit or issue for every completed/blocked step.
+- [x] Issue log records every blocker and its resolution evidence or owner-only dependency.
+- [x] Verification matrix reflects current results, not planned results.
+- [x] Progress log records each task close and external-impact boundary.
+- [x] Gap log distinguishes implementation blockers from release hygiene.
 
 ## Known Issues
 
-- `ISSUE-TOOLCHAIN-001`: Go/gofmt unavailable in the current environment; source commit is not safe until recovered.
-- Current managed-route source batch remains uncommitted until formatting and tests pass.
-- `GAP-PROV-002`: license/provenance/SBOM/notices remain non-blocking for implementation but block formal release/public distribution until reviewed.
+- `ISSUE-TOOLCHAIN-001`: resolved with a temporary user-local Go 1.26 toolchain; system package state was not changed.
+- Browser automation is unavailable; E-001 still needs human browser review against a local authenticated instance.
+- `GAP-PROV-002` / `ISSUE-PROV-002`: license/provenance/SBOM/notices remain non-blocking for implementation but block formal release/public distribution until owner/rightsholder review.
+- `GAP-RUNTIME-001`, `GAP-TRAFFIC-001`, `GAP-DNS-001`, `GAP-POLICY-001`, and `GAP-REDIRECT-001` remain open for later failover phases; this route fusion batch does not close them.
 
 ## Release Hygiene
 

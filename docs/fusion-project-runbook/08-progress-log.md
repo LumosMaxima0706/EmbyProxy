@@ -225,6 +225,43 @@
 - **是否有 secret 泄露**：否。
 - **下一步建议**：完成 UI 结构盘点后实现一个受现有认证保护的 managed-route CRUD editor，并增加静态契约测试或人工 review 证据。
 
+## 2026-08-11T23:05:00+08:00 | Phase F | Runtime resolver and flag fallback verified
+
+- **做了什么**：审计并验证已有 `proxyRouteHandler`、`StorageResolver` 与 `MEDIAPROXY_ROUTES_ENABLED` wiring；补充未知 flag 值 fail-closed，以及 flag 开启但 storage 不可用时继续 legacy fallback 的回归测试。
+- **验证命令**：`gofmt -w internal/config/config_test.go cmd/embyproxy/main_test.go`；`go test ./internal/config ./cmd/embyproxy ./internal/proxyadapter`；`go test ./...`；`go vet ./...`；`git diff --check`。
+- **结果**：全部 PASS；F-001 source/test commit 为 `29118fb`。未改变默认关闭和 legacy fallback 语义。
+- **下一步**：进入 G-001，执行 managed route 到 mediaproxy 的本地 HTTP/Range/WebSocket/header/rewrite/redaction 集成验证。
+- **是否 push/部署/重启/SSH**：否；仅本地验证和 commit，未 push、未部署、未重启、未 SSH BWG/NOSLA。
+
+## 2026-08-11T23:18:00+08:00 | Phase G/H | Runtime integration and persistence evidence completed
+
+- **G-001**：managed route 本地 httptest 验证覆盖 HTTP、Range、WebSocket、Location/Content-Location rewrite、fallback、unsafe target rejection 与 request redaction；新增断言后提交 `4e60097`。
+- **H-001**：新增 SQLite store close/reopen 后 route/line persistence 测试，提交 `fc00c61`；未触碰生产数据库或外部系统。
+- **验证**：`go test ./internal/proxyadapter ./internal/mediaproxy`、`go test ./internal/storage ./internal/proxyadapter`、`go test ./...`、`go vet ./...`、`git diff --check` 均 PASS。
+- **下一步**：I-001 full regression/security hardening；完成后再进入 release/docs hygiene。
+- **安全边界**：未 push、未部署、未重启、未 SSH BWG/NOSLA；未输出或写入 secret。
+
+## 2026-08-11T23:28:00+08:00 | Phase I | Regression and security hardening completed
+
+- **验证**：proxyadapter redaction tests、authenticated admin route/auth tests、`go test ./...`、`go vet ./...`、`git diff --check` 全部 PASS。
+- **审计**：未发现 tracked secret-named files 或 minified/bundled/WASM/source-map/generated artifacts；生产日志路径使用 redacted request URI helper，未发现新增敏感值输出路径。
+- **结果**：I-001 DONE；GAP-PROV-002、failover provider/traffic/policy 等 release/后续 phase gaps 仍按 gap log 保留，未被本轮误关闭。
+- **下一步**：J-001 release/docs hygiene 记录与人工权利人确认边界；该步骤不阻塞 implementation，但阻塞正式 public distribution。
+- **安全边界**：未 push、未部署、未重启、未 SSH BWG/NOSLA。
+
+## 2026-08-11T23:38:00+08:00 | Phase J/K | Release hygiene boundary and delivery preparation
+
+- **J-001**：本地 evidence matrix、GAP-PROV-002 和 delivery checklist 已对齐；无法在没有 owner/rightsholder 输入的情况下补写权利人、上游 revision/license、逐文件 provenance 或 SBOM，故 `ISSUE-PROV-002` 仅阻塞正式 release/public distribution，不阻塞 implementation。
+- **K-001**：开始本地交付 gate reconciliation；将核对 tracker、issue、verification、progress、gap、delivery checklist、工作区和提交路径。
+- **安全边界**：不 push、不部署、不重启、不 SSH BWG/NOSLA；发布仍须单独的 BWG publish bridge gate。
+
+## 2026-08-11T23:45:00+08:00 | Phase K | Local delivery reconciliation completed
+
+- **核对**：源码工作区 clean；当前未提交改动仅为本轮 runbook evidence 文档；路径 diff check PASS；tracker、issue、verification、progress、gap、delivery checklist 已互相对齐。
+- **状态**：A-001 至 I-001 DONE；J-001/`ISSUE-PROV-002` 仅为 release/public distribution provenance blocker；K-001 local delivery preparation DONE。
+- **未执行**：没有 push、bundle transfer、部署、重启、SSH BWG/NOSLA、DNS/Nginx/systemd 或生产 SQLite 操作。
+- **下一步**：停止等待人工 review；如需发布，必须另行进入 approved docs/source commit 的 BWG publish bridge gate；如需正式 public release，先解决 J-001 owner/rightsholder evidence。
+
 ## 2026-08-11T22:20:00+08:00 | Phase D | Admin API compile issue found
 
 - **操作人/工具**：Codex；临时 Go 1.26 toolchain。

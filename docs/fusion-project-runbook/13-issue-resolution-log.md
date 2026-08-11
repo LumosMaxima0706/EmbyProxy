@@ -53,3 +53,13 @@ Every issue is recorded when detected. Resolution work updates the same row with
 - Temporary Go 1.26 toolchain remains available at the recorded local path for verification; commands use `GOTOOLCHAIN=local` to avoid automatic toolchain downloads.
 - C-001, D-001, and E-001 verification completed successfully after recovery.
 - Status: DONE; related commits: `98229bd`, `0b7b590`, `8c00f1a`.
+
+| ISSUE-ROUTETEST-001 | G-001 | New header-rewrite assertion initially failed to compile with `undefined: upstream` | Test handler referenced the server variable while constructing that same server | G-001 verification was briefly blocked; production source was unchanged | No | Replace the self-reference with the request host, rerun targeted/full tests and vet | Replaced self-reference with `http://` plus request host; targeted/full tests and vet passed | DONE | `4e60097` |
+
+## I-001 regression/security result
+
+- No new issue was found during targeted redaction tests, authenticated managed-route API tests, full `go test ./...`, `go vet ./...`, and `git diff --check`.
+- Static audit found no tracked secret-named files or minified/bundled/WASM/source-map/generated artifacts. Production logging paths use redacted request URI helpers where sensitive route data is involved.
+- I-001 status: DONE; remaining open provenance and failover provider gaps are documented and are not silently closed by this regression pass.
+
+| ISSUE-PROV-002 | J-001 | Authoritative release provenance artifacts cannot be completed from local repo evidence alone | Root rights-holder/year, upstream revision/license/scope, per-file provenance, and dependency license/SBOM decisions require owner or rightsholder confirmation | Blocks formal public distribution/release sign-off; does not block implementation or local testing | Yes for J-001 release gate; No for implementation | Preserve pending evidence matrix, request owner/rightsholder decisions, then update notices/license/SBOM without inventing facts | Local skeleton and checklist are complete; owner/rightsholder evidence still pending | BLOCKED | TBD |

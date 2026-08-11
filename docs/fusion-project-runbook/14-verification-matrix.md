@@ -71,3 +71,58 @@ Each completed row requires command, timestamp, result summary, and link to trac
 - Formatting/diff hygiene: `gofmt -w internal/admin/managed_routes_ui_test.go` and `git diff --check` PASS.
 - Browser automation is not configured in this repository; manual review remains required for visual behavior and live authenticated CRUD.
 - Source commit: `8c00f1a`.
+
+## F-001 Completion Evidence
+
+- Runtime wiring audit: `proxyRouteHandler` selects the storage-backed router only when `MediaProxyRoutes` is true and a store is present; otherwise it returns the legacy handler.
+- Feature flag parsing: `MEDIAPROXY_ROUTES_ENABLED` defaults false and unknown values fail closed.
+- Tests: `go test ./internal/config ./cmd/embyproxy ./internal/proxyadapter` PASS.
+- Full suite/vet: `go test ./...` and `go vet ./...` PASS.
+- Formatting/diff hygiene: `gofmt -w internal/config/config_test.go cmd/embyproxy/main_test.go` and `git diff --check` PASS.
+- Source commit: `29118fb`.
+
+## G-001 Execution Evidence
+
+- Existing `internal/proxyadapter/production_test.go` covers managed HTTP forwarding, Range headers, WebSocket upgrade, Location rewriting, fallback boundaries, unsafe target rejection, and request-secret redaction through the shared mediaproxy executor.
+- Current task: rerun this matrix against the recovered local toolchain and add only a focused regression if a contract is missing.
+
+## G-001 Completion Evidence
+
+- Added managed slug assertions for `Location` and `Content-Location` rewrite in `internal/proxyadapter/production_test.go`.
+- `go test ./internal/proxyadapter ./internal/mediaproxy`: PASS.
+- `go test ./...`: PASS.
+- `go vet ./...`: PASS.
+- `git diff --check`: PASS.
+- Source commit: `4e60097`.
+
+## H-001 Completion Evidence
+
+- Added SQLite close/reopen persistence coverage for managed routes and lines in `internal/storage/managed_routes_test.go`.
+- `go test ./internal/storage ./internal/proxyadapter`: PASS.
+- `go test ./...`: PASS.
+- `go vet ./...`: PASS.
+- `git diff --check`: PASS.
+- Source commit: `fc00c61`.
+
+## I-001 Execution Evidence
+
+- Targeted redaction tests: PASS (`internal/proxyadapter`).
+- Authenticated managed-route API/auth tests: PASS (`internal/admin`).
+- Full suite: PASS (`go test ./...`).
+- Static analysis: PASS (`go vet ./...`).
+- Diff hygiene: PASS (`git diff --check`).
+- Local safety audit: no tracked secret-named files or minified/bundled/WASM/source-map/generated artifacts; no deploy/restart/SSH action performed.
+- I-001: DONE; J-001 is now the active release/docs hygiene task.
+
+## J-001 Release Hygiene Evidence
+
+- Local evidence matrix, gap checklist, and delivery checklist are current.
+- Authoritative license/attribution/SBOM artifacts are not fabricated; `ISSUE-PROV-002` remains release-only BLOCKED pending owner/rightsholder confirmation.
+- Implementation remains unblocked; no external network, GitHub, server SSH, deployment, or restart was used.
+
+## K-001 Execution Evidence
+
+- Reconciliation: PASS; source tree is clean and current diff is limited to declared runbook documents.
+- `git diff --check`: PASS.
+- Tracker status review: A-001 through I-001 DONE, J-001 BLOCKED only for release provenance evidence, K-001 DONE.
+- Publish/deploy boundary: PASS; no push, bundle transfer, server SSH, deployment, restart, DNS, Nginx, systemd, or production SQLite action performed.

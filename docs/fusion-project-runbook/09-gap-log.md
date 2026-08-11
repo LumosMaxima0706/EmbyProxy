@@ -94,14 +94,14 @@
 - **Phase**：Phase 1 / Phase 2
 - **严重程度**：High
 - **描述**：managed route schema、query 和 production resolver 已存在，但没有发现 create/update/delete storage API 或 admin route API；现有测试通过直接 SQL 插入 fixture。
-- **影响**：EmbyProxy 管理面不能驱动 managed route，未完成 management-plane 到 data-plane 的核心融合链路。
+- **影响**：已由 storage CRUD、authenticated Admin API、embedded UI 和 runtime resolver 完成 management-plane 到 data-plane 的核心融合链路；历史 gap 描述保留用于审计上下文。
 - **发现方式**：全仓搜索 managed route SQL、storage method 和 admin route。
 - **需要修改的文件**：设计后确定；预计涉及 `internal/storage/managed_routes.go`、`internal/admin/`、管理 UI 资源和相应 tests。
 - **需要新增的测试**：认证管理 API 创建/更新 route 后进入 proxyadapter/mediaproxy；非法 target、disabled/public、default line、事务失败和敏感字段边界。
-- **修复前禁止进入的 phase**：Phase 3
-- **状态**：OPEN
-- **证据/链接**：`internal/storage/managed_routes.go`、`internal/proxyadapter/storage_resolver.go`；INSERT 仅见测试文件。
-- **备注**：需先在 Phase 1 明确 schema migration、API contract 和 rollback，不能直接补 handler。
+- **修复前禁止进入的 phase**：无；实现已完成，后续回归由 I-001 管理。
+- **状态**：CLOSED / VERIFIED
+- **证据/链接**：`98229bd`、`0b7b590`、`8c00f1a`、`29118fb`、`4e60097`、`fc00c61`；storage/API/UI/runtime/integration tests。
+- **备注**：managed-route contract 已按 runbook 阶段完成；不得将该历史 gap 重新解释为未授权的实现阻塞。
 
 ## GAP-RUNTIME-001 | Production failover runtime 尚未接线
 
