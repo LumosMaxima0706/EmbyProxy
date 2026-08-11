@@ -1,0 +1,72 @@
+# Local Delivery Handoff
+
+Status: LOCAL DELIVERY READY FOR HUMAN REVIEW
+
+## Scope Delivered
+
+This local delivery implements the managed-route fusion path:
+
+Admin UI / Admin API -> SQLite managed route storage -> proxyadapter validation/loading -> mediaproxy routing behavior.
+
+## Completed Source Work
+
+- Managed-route SQLite storage with transactional CRUD and line replacement.
+- Authenticated Admin API for managed-route create, update, list, and delete operations.
+- Embedded Admin UI managed-route editor with route and line controls.
+- Feature-flagged fail-closed behavior with legacy fallback.
+- Managed-route response header rewrite regression coverage.
+- SQLite close/reopen persistence test coverage.
+
+## Key Commits
+
+- `98229bd` managed-route storage
+- `0b7b590` authenticated Admin API
+- `8c00f1a` embedded Admin UI managed-route editor
+- `29118fb` feature flag fail-closed and legacy fallback
+- `4e60097` managed-route response header rewrite regression
+- `fc00c61` SQLite close/reopen persistence test
+- `5af3c6f` full-project delivery gate results
+
+## Verification Completed
+
+- `gofmt`: PASS
+- Targeted Go tests: PASS
+- `go test ./...`: PASS
+- `go vet ./...`: PASS
+- Redaction/auth/API regression tests: PASS
+- `git diff --check`: PASS
+- Working tree before this handoff: clean
+
+## Manual Review Focus
+
+1. Managed-route schema and migration behavior.
+2. Admin API authentication, authorization, validation, and error behavior.
+3. Admin UI route creation, update, delete, refresh, and line editing flow.
+4. Feature flag disabled/unknown legacy fallback and enabled route loading.
+5. Runtime route loading and mediaproxy header rewrite behavior.
+6. Backward compatibility with existing node/config-based behavior.
+7. No secret leakage in logs, docs, API responses, or UI.
+
+Browser automation is not configured in this repository; live authenticated UI behavior remains a human review item.
+
+## Known Remaining Items
+
+### Non-blocking for implementation
+
+`ISSUE-PROV-002` / `GAP-PROV-002` remains open for formal license, attribution, provenance, dependency inventory, SBOM, and notices evidence. It does not block implementation, but may block formal public release/distribution.
+
+### Deployment/runtime still pending
+
+Failover runtime, traffic, DNS, and policy gaps remain open for later phases. They must be reviewed before any production traffic change.
+
+## Publish Readiness
+
+This branch is locally ready for human review. Publishing must use the BWG publish bridge gate and must not force push, push `main`/`master`, deploy, restart services, or SSH BWG/NOSLA without explicit authorization.
+
+## Rollback Principle
+
+Before production deployment, the target environment must have a recorded previous working commit, a reviewed configuration backup, a database backup or migration rollback plan, and a reviewed feature-flag rollback path. No restart or rollback action was executed in this handoff.
+
+## Next Gate
+
+Next required gate: BWG publish bridge readiness check. Do not publish until explicitly instructed.

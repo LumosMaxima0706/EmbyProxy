@@ -262,6 +262,13 @@
 - **未执行**：没有 push、bundle transfer、部署、重启、SSH BWG/NOSLA、DNS/Nginx/systemd 或生产 SQLite 操作。
 - **下一步**：停止等待人工 review；如需发布，必须另行进入 approved docs/source commit 的 BWG publish bridge gate；如需正式 public release，先解决 J-001 owner/rightsholder evidence。
 
+## Local delivery handoff package
+
+- Added `16-local-delivery-handoff.md`.
+- Documented delivered scope, key commits, verification results, manual review focus, known risks, publish boundary, and rollback principle.
+- This is a documentation-only handoff update; no source changes were made.
+- No push, deployment, restart, or SSH was performed.
+
 ## 2026-08-11T22:20:00+08:00 | Phase D | Admin API compile issue found
 
 - **操作人/工具**：Codex；临时 Go 1.26 toolchain。
