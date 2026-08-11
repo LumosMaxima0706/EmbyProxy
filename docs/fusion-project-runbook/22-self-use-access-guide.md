@@ -50,3 +50,6 @@ ssh bwg 'curl -fsS -o /dev/null http://127.0.0.1:18082/admin'
 
 Do not expose local port 28082 on a non-loopback interface. Do not add a public
 Nginx location, DNS record, or rathole mapping as part of self-use access.
+
+For recurring checks and incident handling, use `24-owner-operations-guide.md`,
+`25-troubleshooting-guide.md`, and `27-day2-checklist.md`.

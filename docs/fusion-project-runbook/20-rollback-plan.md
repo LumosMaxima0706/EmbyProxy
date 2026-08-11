@@ -54,3 +54,10 @@ configuration/data/log paths, and exact unit-only rollback command before closin
 
 Manifest formatting repair is pending; this does not require a service restart or
 change to the deployed binary.
+
+## Day-2 drill
+
+The non-destructive drill verifies the backup root, first-deploy manifest,
+current release link, independent config/database/log paths, and unit-only
+rollback boundary. No restore, delete, stop, or restart is performed while the
+service is healthy.

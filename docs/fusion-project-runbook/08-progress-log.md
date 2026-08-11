@@ -453,3 +453,16 @@
 - Bundle path whitelist: `docs/fusion-project-runbook/*` only.
 - BWG ff-only merge and feature-only push passed; remote feature ref verified at `1aaf193`.
 - Temporary ref/bundle cleaned; no service, DNS, traffic, Nginx, rathole, or NOSLA action.
+
+## 2026-08-12 | Day-2 operations | Self-use operations finalization
+
+- **操作人/工具**：Codex；本地 runbook 更新与经授权的 BWG 只读稳定性检查。
+- **做了什么**：建立 owner operations、troubleshooting、non-destructive backup/restore drill 和 day-2 checklist；复核 feature ref、sidecar 状态、loopback listener、日志边界、SSH tunnel 和 rollback manifest。
+- **验证命令**：本地 Git/ref 检查；BWG `systemctl`、`ss`、bounded `journalctl`、health/smoke、manifest/path metadata；既有服务状态和 `nginx -t` 只读核对。
+- **结果**：`DAY2-001` 已标记 IN_PROGRESS，待实际检查完成后更新；文档不改变运行时配置。
+- **是否修改代码**：否；仅 day-2 runbook 文档。
+- **是否 commit/push**：待检查完成后 docs-only commit，并通过 BWG bridge 发布 feature 分支。
+- **是否部署/重启**：计划为否；仅在 sidecar 异常时允许 scoped recovery。
+- **是否修改 Nginx/systemd/SQLite/DNS**：否；只读检查，不修改入口或数据库。
+- **是否有 secret 泄露**：否；凭据、完整 query、完整 UUID 和 cookie 不进入记录。
+- **下一步建议**：完成 BWG 检查；通过后关闭 `DAY2-001` 并发布运维文档。

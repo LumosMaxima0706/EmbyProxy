@@ -121,3 +121,9 @@ passed. Service remains inactive/disabled until DEPLOY-003.
 
 No publish issue occurred. Stabilization docs target `1aaf193` was verified and
 pushed through BWG to the feature branch; no runtime action was taken.
+
+## DAY2-001 entry
+
+No issue is known at day-2 finalization start. Checks are read-only and limited
+to the deployed sidecar. Any discrepancy must be recorded before a scoped
+recovery action.

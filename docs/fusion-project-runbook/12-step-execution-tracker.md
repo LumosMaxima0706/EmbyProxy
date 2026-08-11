@@ -68,3 +68,9 @@ Status: DONE
 - Target: `1aaf193`.
 - BWG bundle verification, path whitelist, ff-only merge, feature-only push, remote
   ref verification, and temporary cleanup: PASS.
+
+## Day-2 operations finalization
+
+| Step ID | Phase | Task | Status | Depends on | Files expected to change | Implementation notes | Validation command | Validation result | Commit hash | Next action |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| DAY2-001 | Operations | Finalize owner self-use operations, troubleshooting, backup/restore, and day-2 checklist | IN_PROGRESS | POSTDEPLOY-001 | `24-27`, `08`, `12-15`, `21-23` | Documentation-only stabilization; preserve loopback-only access and existing ingress boundaries | local/BWG/origin refs; systemd/listener/log checks; tunnel smoke; rollback metadata; `nginx -t` | PENDING | TBD | Run authorized BWG read-only checks, then mark DONE if all pass |

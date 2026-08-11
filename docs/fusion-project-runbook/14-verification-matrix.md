@@ -294,3 +294,16 @@ with cleanup and sidecar health under `POSTDEPLOY-ISSUE-002`.
 - Private/loopback target execution: fail closed as designed.
 - Successful upstream proxy: still PENDING under `DEPLOY-SMOKE-001`.
 - Cleanup, sidecar listener, Nginx, and rathole: PASS.
+
+## Day-2 operations verification
+
+| Verification | When | Success standard | Failure handling | Current result |
+| --- | --- | --- | --- | --- |
+| Feature refs | DAY2-001 start/finish | local, BWG, and origin feature refs reconciled | Stop publish; record mismatch | PENDING |
+| Service state | DAY2-001 | active/enabled, status 0, no unexpected restarts | Record issue; restart only sidecar if unhealthy | PENDING |
+| Listener boundary | DAY2-001 | only `127.0.0.1:18082` listens | Stop and investigate; do not change ports | PENDING |
+| Bounded logs | DAY2-001 | no panic/error/fatal or secret markers | Record redacted evidence and diagnose | PENDING |
+| Tunnel/access | DAY2-001 | tunnel reaches UI; unauthenticated API rejected | Recreate tunnel; do not expose public port | PENDING |
+| Owner smoke | DAY2-001 | CRUD/upstream/fail-closed/fallback/cleanup pass | Record issue and troubleshoot | PENDING |
+| Rollback readiness | DAY2-001 | manifest and release/config/data/log paths readable | Stop finalization until corrected | PENDING |
+| Existing ingress safety | DAY2-001 | Nginx/rathole active; `nginx -t` pass; no changes | Stop/report; do not mutate ingress | PENDING |

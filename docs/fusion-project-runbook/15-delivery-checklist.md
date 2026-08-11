@@ -74,3 +74,11 @@
 - [x] Rollback manifest and target-specific paths are complete and readable.
 - [x] Owner SSH-tunnel self-use guide exists without exposing credentials.
 - [x] No DNS, public traffic, existing Nginx block, rathole, or NOSLA change occurred.
+
+## Day-2 operations
+
+- [ ] Owner operations guide covers tunnel, UI, service, listener, logs, route basics, and exposure boundary.
+- [ ] Troubleshooting guide covers access, service, port, auth, CRUD, proxy, and log failures.
+- [ ] Non-destructive backup/restore drill verifies manifest and scoped rollback.
+- [ ] Day-2 checklist covers use, route changes, incidents, rollback, and future cutover.
+- [ ] `DAY2-001` closes only after current BWG read-only checks pass.

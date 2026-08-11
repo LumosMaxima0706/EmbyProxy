@@ -54,3 +54,9 @@ remained active. Retry is tracked as `POSTDEPLOY-ISSUE-002`.
 
 The completed stabilization record was published through BWG at `1aaf193`; no
 runtime mutation occurred during publication.
+
+## Day-2 finalization handoff
+
+`DAY2-001` adds recurring owner operations, troubleshooting, backup/restore, and
+day-2 checklist documentation. Runtime behavior remains unchanged and public
+traffic remains intentionally untouched.

@@ -2,7 +2,7 @@
 
 Status: PASS - BWG SIDECAR HEALTHY
 
-Post-deploy stabilization recheck: IN_PROGRESS.
+Post-deploy stabilization recheck: PASS; day-2 finalization in progress.
 
 ## Checks
 
@@ -40,3 +40,10 @@ Post-deploy stabilization recheck: IN_PROGRESS.
 Any failed check is recorded in `13-issue-resolution-log.md` and
 `19-deployment-execution-log.md`. Do not broaden the deployment scope; execute the
 scoped rollback before further diagnosis.
+
+## Day-2 recheck scope
+
+- Reconfirm local, BWG, and origin feature refs before documentation publish.
+- Recheck service state, restart count, loopback listener, and bounded logs.
+- Reuse the SSH tunnel smoke path without printing sensitive data.
+- Verify rollback manifest metadata and current release link without mutation.
