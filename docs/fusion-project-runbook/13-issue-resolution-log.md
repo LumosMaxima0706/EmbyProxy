@@ -82,3 +82,9 @@ Every issue is recorded when detected. Resolution work updates the same row with
 Every failed preflight, backup, artifact, service, health, or rollback check gets
 its own issue row before another attempt. Secrets and credential material are never
 recorded.
+
+### DEPLOY-001 local attempt result
+
+Local verification was successful with the recorded temporary Go toolchain. There
+is no local implementation blocker. BWG identity, port, service, disk, release,
+backup, and Nginx checks remain pending and are the next safe action.

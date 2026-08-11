@@ -180,3 +180,11 @@ Each completed row requires command, timestamp, result summary, and link to trac
 | Sidecar health/smoke | DEPLOY-003 | Local health, auth, managed route, fallback, WebSocket/Range and redaction checks pass | Execute scoped rollback | PENDING |
 | Existing service safety | DEPLOY-003 | Existing services remain active and unchanged | Roll back new sidecar only | PENDING |
 | No DNS/traffic/NOSLA action | Every deployment gate | No such mutation appears in command/log evidence | Stop and report immediately | PASS so far |
+
+## DEPLOY-001 local result
+
+- Temporary Go 1.26.4 toolchain: available; `gofmt`: PASS.
+- `go test ./...`: PASS.
+- `go vet ./...`: PASS.
+- `git diff --check`: PASS.
+- BWG checks: pending; no server mutation has occurred.

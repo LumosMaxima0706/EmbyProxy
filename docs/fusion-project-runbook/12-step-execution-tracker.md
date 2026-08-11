@@ -40,3 +40,7 @@ Scope was limited to the approved `feature/failover-phase2-local` branch. BWG-on
 | DEPLOY-002 | Deployment | Backup and upload independent sidecar artifact | TODO | DEPLOY-001 | deployment log, rollback plan | No mutation until preflight passes and exact paths are recorded | checksum, backup listing, transfer verification | PENDING | TBD | Start only new sidecar |
 | DEPLOY-003 | Deployment | Start sidecar and run health/smoke checks | TODO | DEPLOY-002 | healthcheck, execution log | No Nginx/DNS/traffic changes | service status, localhost checks, bounded logs | PENDING | TBD | Roll back on failure |
 | DEPLOY-004 | Deployment | Close deployment gate and record rollback/readiness | TODO | DEPLOY-003 | all deployment docs, progress log, checklist | Commit runbook result; no push unless separately authorized | final status and diff checks | PENDING | TBD | Stop for next explicit production gate |
+
+DEPLOY-001 local verification update: `go test ./...`, `go vet ./...`, `gofmt`, and
+`git diff --check` passed. The step remains `IN_PROGRESS` pending read-only BWG
+preflight.
