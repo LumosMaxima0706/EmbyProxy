@@ -278,6 +278,13 @@
 - **恢复路径**：等待人工在明确授权的 BWG gate 中转移并验证 bundle，或重新进入允许 BWG SSH/SCP 的 publish bridge gate；不得修改 remote/auth，不得改用其他 publisher。
 - **外部影响**：未 push、未 force push、未部署、未重启、未 SSH BWG/NOSLA；未输出 secret/token/cookie/password 等敏感信息。
 
+## BWG publish attempt 2 | merged, stopped before push
+
+- Bundle verification, BWG base/status, quoting-safe path whitelist, and `git merge --ff-only` passed; BWG branch advanced from `c7f475c` to `61de764`.
+- A script assertion incorrectly expected the remote feature ref to equal the new target before push; it stopped before `git push`.
+- Remote feature ref remains `c7f475c`; BWG worktree is clean at `61de764`; temporary ref/bundle cleanup completed.
+- Recorded as `ISSUE-PUBLISH-003`; next retry must assert remote=base before push and remote=target after push.
+
 ## 2026-08-11T22:20:00+08:00 | Phase D | Admin API compile issue found
 
 - **操作人/工具**：Codex；临时 Go 1.26 toolchain。

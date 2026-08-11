@@ -149,3 +149,11 @@ Each completed row requires command, timestamp, result summary, and link to trac
 - Path whitelist command: FAILED due shell `awk` quoting; recorded as `ISSUE-PUBLISH-002`.
 - BWG merge/push: NOT RUN.
 - Cleanup: PASS; temporary ref and bundle removed, BWG worktree clean.
+
+## BWG Publish Attempt 2 Result
+
+- BWG bundle/path checks: PASS.
+- `git merge --ff-only`: PASS; BWG HEAD is `61de764`.
+- Pre-push remote assertion: FAILED due retry script logic; expected remote was base `c7f475c`, not target.
+- Push: NOT RUN; remote feature ref remains base.
+- Cleanup: PASS; temporary ref and bundle removed; BWG worktree clean.
