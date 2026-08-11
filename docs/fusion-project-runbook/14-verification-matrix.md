@@ -238,6 +238,15 @@ Each completed row requires command, timestamp, result summary, and link to trac
 - Deployment status: COMPLETE for the isolated BWG localhost sidecar.
 - Public DNS/traffic and production failover remain intentionally unchanged.
 
+## Deployment record publish verification
+
+- Local bundle verify/list-heads: PASS.
+- BWG base/branch/status and path whitelist: PASS.
+- Fast-forward-only merge: PASS.
+- Feature-only remote push and post-push ref verification: PASS at `1f60e1c`.
+- Temporary ref/bundle cleanup: PASS.
+- Force push/main/master/deploy/restart/NOSLA SSH: NOT USED.
+
 ## DEPLOY-003 attempt 2
 
 - Fixture readiness, Admin UI, auth rejection/login, and route create/list: PASS.

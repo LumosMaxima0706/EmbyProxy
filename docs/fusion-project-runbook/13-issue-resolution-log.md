@@ -83,6 +83,12 @@ Every failed preflight, backup, artifact, service, health, or rollback check get
 its own issue row before another attempt. Secrets and credential material are never
 recorded.
 
+## Deployment publish result
+
+No publish issue occurred. The deployment record bundle was verified and pushed via
+the authorized BWG bridge to `feature/failover-phase2-local` at `1f60e1c`; the
+temporary BWG ref and bundle were cleaned.
+
 ### DEPLOY-001 local attempt result
 
 Local verification was successful with the recorded temporary Go toolchain. There

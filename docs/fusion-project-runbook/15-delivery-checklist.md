@@ -44,8 +44,8 @@
 
 ## Final Gate
 
-- [ ] Worktree and commit path whitelist are clean and reviewed.
-- [ ] No push has occurred without the BWG publish bridge gate.
+- [x] Worktree and commit path whitelist are clean and reviewed.
+- [x] Feature branch publication used the BWG publish bridge; no force push or main/master push occurred.
 - [x] Deployment was limited to the new BWG sidecar; no unapproved restart, Nginx
       server-block, DNS, traffic, real SQLite, or NOSLA action occurred.
 - [x] Owner accepted autonomous deployment; optional operations review remains

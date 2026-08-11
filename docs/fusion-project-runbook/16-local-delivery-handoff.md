@@ -65,6 +65,9 @@ gaps must be reviewed before any production traffic change.
 
 This branch was published to `origin/feature/failover-phase2-local` at `5cbbe54` through the authorized BWG publish bridge. Publishing must continue to use the BWG bridge and must not force push, push `main`/`master`, deploy, restart services, or SSH BWG/NOSLA without explicit authorization.
 
+The deployment closeout record was subsequently published through the same bridge;
+the remote feature ref was verified at `1f60e1c`.
+
 ## Rollback Principle
 
 Before any production traffic change, the target environment must have a recorded

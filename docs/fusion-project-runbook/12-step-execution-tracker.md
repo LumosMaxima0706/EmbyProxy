@@ -43,3 +43,13 @@ Scope was limited to the approved `feature/failover-phase2-local` branch. BWG-on
 
 DEPLOY-001 through DEPLOY-004 are DONE. Deployment documentation closeout passed;
 publish the record through the BWG bridge before stopping.
+
+## Deployment record publish bridge
+
+Status: DONE
+
+- Bundle target: `1f60e1c`.
+- BWG validation and ff-only merge: PASS.
+- Remote feature ref: `1f60e1c`.
+- Scope: `docs/fusion-project-runbook/*` and `deploy/*` only.
+- No force push, main/master push, DNS, traffic, or service action.

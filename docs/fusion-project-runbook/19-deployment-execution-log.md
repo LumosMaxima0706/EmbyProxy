@@ -128,3 +128,10 @@ localhost access. DEPLOY-004 documentation closeout is next.
 - No existing deployment directory, Nginx server block, rathole, DNS, public
   traffic, or host reboot was modified.
 - Deployment is complete for owner-controlled localhost/SSH-tunnel use.
+
+## Deployment record publish result
+
+- Bundle target `1f60e1c`: verified locally and on BWG.
+- BWG fast-forward-only merge and feature-only push: PASS.
+- Remote `feature/failover-phase2-local`: verified at `1f60e1c`.
+- Temporary BWG ref/bundle: cleaned.

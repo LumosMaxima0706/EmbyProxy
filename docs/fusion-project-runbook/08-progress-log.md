@@ -399,3 +399,13 @@
 - Rollback remains scoped to the new unit/assets and the first-deploy manifest is retained.
 - DEPLOY-001 through DEPLOY-004 are DONE.
 - The deployment record still needs publication through the documented BWG feature-branch bridge.
+
+## Deployment record BWG publish bridge completed
+
+- Published the deployment closeout target `1f60e1c` through BWG only.
+- BWG staging validated the bundle, allowed only `docs/fusion-project-runbook/*`
+  and `deploy/*`, merged fast-forward-only, and pushed only
+  `feature/failover-phase2-local`.
+- Remote feature ref verified at `1f60e1c`; temporary ref and bundle were cleaned.
+- No force push, main/master push, deployment mutation, restart, DNS, traffic,
+  Nginx block, or NOSLA SSH occurred during publishing.
