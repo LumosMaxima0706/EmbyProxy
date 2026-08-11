@@ -352,3 +352,10 @@
 - Verified disk capacity, active Nginx/rathole, and a passing `nginx -t`.
 - No server file, service, Nginx, DNS, traffic, or NOSLA change occurred.
 - DEPLOY-001 is DONE; DEPLOY-002 artifact/backup preparation is IN_PROGRESS.
+
+## DEPLOY-002 local artifact prepared
+
+- Built and verified a static Linux amd64 binary from the `e0f2bb6` source tree.
+- Confirmed later local commits only affect runbook documentation.
+- Recorded the build metadata and SHA-256 in the deployment execution log.
+- No remote mutation has occurred; backup manifest and artifact transfer are next.

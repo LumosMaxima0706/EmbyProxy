@@ -197,3 +197,11 @@ Each completed row requires command, timestamp, result summary, and link to trac
 - Existing Nginx and rathole active: PASS.
 - `nginx -t`: PASS.
 - No remote mutation, DNS, traffic, Nginx, or NOSLA action occurred.
+
+## DEPLOY-002 local artifact result
+
+- Source range check from `e0f2bb6`: PASS; only runbook docs differ.
+- Linux amd64 static build: PASS.
+- Embedded version/commit: PASS.
+- Local SHA-256 recorded in the deployment log.
+- Remote checksum and backup manifest: pending.
