@@ -17,13 +17,13 @@ func Evaluate(nodes []Node, state State, cfg PolicyConfig, now time.Time) Decisi
 	requested := ""
 	switch state.Mode {
 	case ModeForceNOSLA:
-		if !primary.Enabled || primary.Maintenance || primary.HealthStatus == HealthFailed {
-			return Decision{Reason: "forced_primary_not_eligible"}
+		if !primary.Enabled || primary.Maintenance {
+			return Decision{Reason: "manual_hold_nosla_not_eligible"}
 		}
 		requested = primary.ID
 	case ModeForceBWG:
-		if !fallback.Enabled || fallback.Maintenance || fallback.HealthStatus == HealthFailed {
-			return Decision{Reason: "forced_fallback_not_eligible"}
+		if !fallback.Enabled || fallback.Maintenance {
+			return Decision{Reason: "manual_hold_bwg_not_eligible"}
 		}
 		requested = fallback.ID
 	case ModeMaintenanceNOSLA:
@@ -58,6 +58,12 @@ func normalizePolicyConfig(cfg PolicyConfig) PolicyConfig {
 	}
 	if cfg.TrafficThresholdPct <= 0 {
 		cfg.TrafficThresholdPct = defaults.TrafficThresholdPct
+	}
+	if cfg.ReturnThresholdPct <= 0 {
+		cfg.ReturnThresholdPct = defaults.ReturnThresholdPct
+	}
+	if cfg.ResetGrace <= 0 {
+		cfg.ResetGrace = defaults.ResetGrace
 	}
 	if cfg.MaxSwitchesPerWindow <= 0 {
 		cfg.MaxSwitchesPerWindow = defaults.MaxSwitchesPerWindow
@@ -104,7 +110,7 @@ func autoDecision(primary, fallback Node, state State, cfg PolicyConfig, now tim
 		return primary.ID
 	}
 	if state.ActiveNodeID == fallback.ID && primaryEligible && fallbackEligible && cooldownExpired(state, now) {
-		if primary.ConsecutiveSuccesses < cfg.RecoverySuccesses || !newKnownCycle(primary, state, cfg, now) {
+		if cfg.DisableReturnAfterReset || primary.ConsecutiveSuccesses < cfg.RecoverySuccesses || !newKnownCycle(primary, state, cfg, now) {
 			return fallback.ID
 		}
 		return primary.ID
@@ -142,10 +148,24 @@ func newKnownCycle(node Node, state State, cfg PolicyConfig, now time.Time) bool
 	if node.ResetDay > 0 && sample.CycleKey != BillingCycleKey(now, node.ResetDay, node.ResetTimezone) {
 		return false
 	}
-	return sample.CycleKey != "" && sample.CycleKey != state.CurrentCycleKey
+	if sample.CycleKey == "" || sample.CycleKey == state.CurrentCycleKey {
+		return false
+	}
+	if now.Before(billingCycleStart(now, node.ResetDay, node.ResetTimezone).Add(cfg.ResetGrace)) {
+		return false
+	}
+	if sample.Quality == TrafficUnknown || sample.Quality == TrafficStale {
+		return cfg.AllowUnknownRecovery
+	}
+	used, known := sample.UsagePercent()
+	return known && used < cfg.ReturnThresholdPct
 }
 
 func BillingCycleKey(now time.Time, resetDay int, timezone string) string {
+	return billingCycleStart(now, resetDay, timezone).Format("2006-01-02")
+}
+
+func billingCycleStart(now time.Time, resetDay int, timezone string) time.Time {
 	location := time.UTC
 	if timezone != "" {
 		if loaded, err := time.LoadLocation(timezone); err == nil {
@@ -165,7 +185,7 @@ func BillingCycleKey(now time.Time, resetDay int, timezone string) string {
 		startDay = minInt(resetDay, daysInMonth(year, month, location))
 		start = time.Date(year, month, startDay, 0, 0, 0, 0, location)
 	}
-	return start.Format("2006-01-02")
+	return start
 }
 
 func daysInMonth(year int, month time.Month, location *time.Location) int {
@@ -184,6 +204,12 @@ func cooldownExpired(state State, now time.Time) bool {
 }
 
 func reasonFor(selected string, primary, fallback Node, state State) string {
+	if state.Mode == ModeForceNOSLA {
+		return "manual_hold_nosla"
+	}
+	if state.Mode == ModeForceBWG {
+		return "manual_hold_bwg"
+	}
 	if selected == fallback.ID {
 		if primary.Maintenance {
 			return "primary_maintenance"

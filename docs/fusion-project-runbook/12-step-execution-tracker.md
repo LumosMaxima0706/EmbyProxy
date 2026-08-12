@@ -95,3 +95,13 @@ pre-merge hash assertion failure and successful cleanup/retry are recorded in
 | PUB-005 | Public cutover | Apply BWG-only canary DNS/Nginx/TLS | DONE | PUB-004 | New canary file, A record, certificate | Scoped apply/reload PASS; existing entries unchanged | Public healthcheck |
 | PUB-006 | Public cutover | Public healthcheck/smoke/cleanup | DONE | PUB-005 | Temporary managed route only | Proxy non-gateway, Admin 404, fail-closed/fallback/log/service checks PASS; route cleaned | Owner observation; NOSLA gate remains separate |
 | PUB-007 | Public cutover | Validate owner-created `v1` route publicly | DONE | PUB-006, owner route creation | `08`, `12`, `14`, `15`, `30`, `31` | Public path HTTP 200/TLS PASS; Admin 404; services/listener/log scans PASS | Retain route for owner self-use |
+
+## NOSLA-primary / BWG-fallback and secure public Admin
+
+| Step ID | Phase | Task | Status | Depends on | Files expected to change | Validation result | Next action |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| FAILADMIN-000 | 0 | Establish stage runbook and safety boundary | DONE | PUB-007 | `33`, `08`, `12` | Starting canary state and authorized/prohibited scope recorded | Read-only topology discovery |
+| FAILADMIN-001 | 1 | Discover BWG/NOSLA topology, accounting, cache, scheduler, and Admin constraints | BLOCKED | FAILADMIN-000 | `33`, `08`, `12-15` | Topology passed; accounting/quota is not reliable for auto; no apply | Owner supplies/authorizes billing source and quotas |
+| FAILADMIN-002 | 2/7 | Implement and simulate fail-closed policy decision layer | DONE | FAILADMIN-001 topology evidence | `internal/failover/*`, `cmd/failover-policy/*`, `33`, trackers | 85% threshold, reset grace/new-cycle return, manual holds, dry-run non-mutation, auto refusal PASS | Keep local; do not deploy before accounting gate |
+| FAILADMIN-003 | 3 | Establish reliable traffic accounting and quotas | BLOCKED | FAILADMIN-001 | provider adapter/config, runbook | No verified provider feed; BWG usage unavailable | Owner provides/authorizes billing source and quota inputs |
+| FAILADMIN-004 | 5-9 | Backup, select apply adapter, canary, production apply, secure Admin | PENDING | FAILADMIN-003 | deployment/runbook files | NOT RUN | Resume only after FAILADMIN-003 |

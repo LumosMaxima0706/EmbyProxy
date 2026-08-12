@@ -165,4 +165,11 @@ configuration, subject to a safe record-specific dry-run after hostname input.
 
 No production-impacting issue occurred and rollback was not required.
 
+## Failover and public Admin discovery issues
+
+| Issue ID | Step | Symptom | Cause | Resolution | Status |
+| --- | --- | --- | --- | --- | --- |
+| FAILADMIN-DISC-001 | FAILADMIN-001 | Existing failover uses a manual NOSLA baseline and has no BWG usage or verified provider billing feed | Only static values and generic host counters were found | No apply; request secure billing source and confirmed quotas/accounting | BLOCKED |
+| FAILADMIN-DISC-002 | FAILADMIN-001 | Legacy bounded check appended health history during discovery | The legacy command combines small probes with state persistence | No switch/config change; record deviation and avoid the command in future discovery | DONE |
+
 | PUB-PUBLISH-001 | Canary runbook publish bridge attempt 1 | Local bundle verification passed but SCP could not find the Windows-side source path | Bundle was created in WSL `/tmp` while SCP received an unrelated Windows temp path | BWG staging/origin remained at the old ref, clean, with no temporary ref or bundle; retry uses a workspace-visible bundle path | DONE |

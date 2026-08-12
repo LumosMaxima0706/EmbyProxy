@@ -544,6 +544,36 @@ the retry will repeat bundle, path, ff-only, feature-only, and cleanup checks.
 
 - Route `v1` is retained as the BWG-only canary self-use route at the dedicated
   canary entry below `/s/v1/`.
+
+## 2026-08-12 | Failover and public Admin | Phase 0
+
+- Established `33-nosla-bwg-failover-admin-runbook.md` with the accepted BWG
+  canary baseline and explicit authorization/prohibition boundaries.
+- Phase 1 is read-only discovery across local source, BWG, and NOSLA. No
+  service, route, Nginx, rathole, DNS, timer, traffic, or Admin exposure change
+  has occurred.
+- Automated checks are limited to metadata and small non-media health paths;
+  media cache, prefetch, warmup, and background fetch are prohibited.
+
+## 2026-08-12 | Failover and public Admin | Phase 1 blocked
+
+- Discovery found the existing DNS failover active on BWG with target `bwg`;
+  both nodes passed bounded non-media health checks.
+- Existing threshold is 95%, not the requested 85%; provider-billing usage is
+  unverified and BWG usage is unset. No reliable API/CLI or vnstat was found.
+- Stopped before backup, dry-run, apply, DNS/timer changes, and public Admin.
+  Owner accounting/quota input is required for formal auto mode.
+
+## 2026-08-12 | Failover policy | Local dry-run implementation
+
+- Updated shared policy defaults to NOSLA threshold 85%, return threshold 15%,
+  six-hour reset grace, and explicit reset-cycle validation.
+- Added a lock-protected stdin/stdout dry-run runner with configurable reset
+  days and manual hold. Auto mode refuses mutation until an apply adapter is
+  explicitly configured.
+- Local scenario matrix, targeted tests, full tests, vet, and diff checks PASS.
+- No artifact was deployed; no DNS, route, Nginx, rathole, systemd, timer,
+  service, public Admin, or production traffic state changed.
 - Public health and Admin isolation remain PASS; route count is 1.
 - Production traffic remains unchanged. No NOSLA access or automatic failover
   action occurred.

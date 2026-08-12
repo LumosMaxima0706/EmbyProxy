@@ -364,3 +364,26 @@ started.
   syntax: PASS.
 - Bounded secret/severe/error marker scans: zero.
 - Validation-only scope: no route/config/service/DNS/ingress mutation.
+
+## Failover and public Admin discovery
+
+- Phase 0 runbook and boundaries: PASS.
+- BWG/NOSLA topology and service inventory: PASS.
+- Small non-media health checks: HTTP 200; one legacy check persisted bounded
+  history and is recorded separately.
+- Traffic accounting/quota: BLOCKED; provider billing equivalence is unproven
+  and BWG current-cycle usage is unavailable.
+- Scoped Nginx no-cache scan: PASS; app image-cache runtime state is pending.
+- Policy/timer/DNS/Admin apply: NOT RUN pending accounting input.
+
+## Local failover policy dry-run
+
+- Default NOSLA switch threshold 85%: PASS.
+- NOSLA health failure to BWG: PASS.
+- Reset-cycle return after six-hour grace and below 15% usage: PASS.
+- Unknown/stale usage fails closed by default: PASS.
+- Manual holds for NOSLA and BWG: PASS.
+- Runner lock and dry-run non-mutation: PASS.
+- Auto without apply adapter: fail-closed PASS.
+- `go test ./...`, `go vet ./...`, and `git diff --check`: PASS.
+- Live deployment/canary/rollback/public Admin: NOT RUN.

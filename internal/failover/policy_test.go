@@ -53,7 +53,7 @@ func TestRecoveryRequiresNewKnownCycle(t *testing.T) {
 	nodes[0].ConsecutiveSuccesses = 3
 	nodes[0].ResetDay = 21
 	nodes[0].ResetTimezone = "UTC"
-	nodes[0].Traffic = TrafficSample{NodeID: "nosla", CycleKey: "2026-08-21", Quality: TrafficKnown}
+	nodes[0].Traffic = TrafficSample{NodeID: "nosla", CycleKey: "2026-08-21", Quality: TrafficKnown, TotalBytes: 10, QuotaBytes: 1000}
 	state := State{Mode: ModeAuto, ActiveNodeID: "bwg", CurrentCycleKey: "2026-07-21"}
 	decision := Evaluate(nodes, state, DefaultPolicyConfig(), time.Date(2026, 8, 22, 0, 0, 0, 0, time.UTC))
 	if decision.NodeID != "nosla" {
@@ -81,6 +81,36 @@ func TestMissingCycleCannotRecover(t *testing.T) {
 	decision := Evaluate(nodes, state, DefaultPolicyConfig(), time.Now())
 	if decision.NodeID != "bwg" {
 		t.Fatalf("decision = %+v", decision)
+	}
+}
+
+func TestRecoveryWaitsForResetGrace(t *testing.T) {
+	nodes := testNodes()
+	nodes[0].ConsecutiveSuccesses = 3
+	nodes[0].ResetDay = 21
+	nodes[0].ResetTimezone = "Asia/Shanghai"
+	nodes[0].Traffic = TrafficSample{NodeID: "nosla", CycleKey: "2026-08-21", Quality: TrafficKnown, TotalBytes: 10, QuotaBytes: 1000}
+	state := State{Mode: ModeAuto, ActiveNodeID: "bwg", CurrentCycleKey: "2026-07-21"}
+	now := time.Date(2026, 8, 21, 5, 59, 0, 0, time.FixedZone("Asia/Shanghai", 8*60*60))
+	if decision := Evaluate(nodes, state, DefaultPolicyConfig(), now); decision.NodeID != "bwg" {
+		t.Fatalf("decision before grace = %+v", decision)
+	}
+	now = now.Add(2 * time.Minute)
+	if decision := Evaluate(nodes, state, DefaultPolicyConfig(), now); decision.NodeID != "nosla" {
+		t.Fatalf("decision after grace = %+v", decision)
+	}
+}
+
+func TestRecoveryRequiresUsageBelowReturnThreshold(t *testing.T) {
+	nodes := testNodes()
+	nodes[0].ConsecutiveSuccesses = 3
+	nodes[0].ResetDay = 21
+	nodes[0].ResetTimezone = "Asia/Shanghai"
+	nodes[0].Traffic = TrafficSample{NodeID: "nosla", CycleKey: "2026-08-21", Quality: TrafficKnown, TotalBytes: 150, QuotaBytes: 1000}
+	state := State{Mode: ModeAuto, ActiveNodeID: "bwg", CurrentCycleKey: "2026-07-21"}
+	now := time.Date(2026, 8, 22, 0, 0, 0, 0, time.FixedZone("Asia/Shanghai", 8*60*60))
+	if decision := Evaluate(nodes, state, DefaultPolicyConfig(), now); decision.NodeID != "bwg" {
+		t.Fatalf("decision at return threshold = %+v", decision)
 	}
 }
 
@@ -184,6 +214,36 @@ func TestManualModesAndMaintenance(t *testing.T) {
 	decision := Evaluate(testNodes(), State{Mode: ModeForceNOSLA, ActiveNodeID: "bwg"}, DefaultPolicyConfig(), time.Now())
 	if decision.NodeID != "nosla" {
 		t.Fatalf("force_nosla decision = %+v", decision)
+	}
+}
+
+func TestManualHoldNOSLARecordsRiskButDoesNotFailOver(t *testing.T) {
+	nodes := testNodes()
+	nodes[0].HealthStatus = HealthFailed
+	nodes[0].ConsecutiveFailures = 3
+	decision := Evaluate(nodes, State{Mode: ModeForceNOSLA, ActiveNodeID: "nosla"}, DefaultPolicyConfig(), time.Now())
+	if decision.NodeID != "nosla" || decision.Reason != "manual_hold_nosla" || decision.Change {
+		t.Fatalf("decision = %+v", decision)
+	}
+}
+
+func TestReturnAfterResetCanBeDisabled(t *testing.T) {
+	nodes := testNodes()
+	nodes[0].ConsecutiveSuccesses = 3
+	nodes[0].ResetDay = 21
+	nodes[0].Traffic = TrafficSample{NodeID: "nosla", CycleKey: "2026-08-21", Quality: TrafficKnown, TotalBytes: 1, QuotaBytes: 1000}
+	state := State{Mode: ModeAuto, ActiveNodeID: "bwg", CurrentCycleKey: "2026-07-21"}
+	cfg := DefaultPolicyConfig()
+	cfg.DisableReturnAfterReset = true
+	decision := Evaluate(nodes, state, cfg, time.Date(2026, 8, 22, 0, 0, 0, 0, time.UTC))
+	if decision.NodeID != "bwg" {
+		t.Fatalf("decision = %+v", decision)
+	}
+}
+
+func TestDefaultTrafficThresholdIsOwnerRequested85Percent(t *testing.T) {
+	if got := DefaultPolicyConfig().TrafficThresholdPct; got != 85 {
+		t.Fatalf("threshold = %v", got)
 	}
 }
 

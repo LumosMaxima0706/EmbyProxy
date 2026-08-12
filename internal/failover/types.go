@@ -84,13 +84,16 @@ type State struct {
 }
 
 type PolicyConfig struct {
-	FailureThreshold     int
-	RecoverySuccesses    int
-	Cooldown             time.Duration
-	TrafficThresholdPct  float64
-	AllowUnknownRecovery bool
-	MaxSwitchesPerWindow int
-	SwitchWindow         time.Duration
+	FailureThreshold        int
+	RecoverySuccesses       int
+	Cooldown                time.Duration
+	TrafficThresholdPct     float64
+	ReturnThresholdPct      float64
+	ResetGrace              time.Duration
+	DisableReturnAfterReset bool
+	AllowUnknownRecovery    bool
+	MaxSwitchesPerWindow    int
+	SwitchWindow            time.Duration
 }
 
 func DefaultPolicyConfig() PolicyConfig {
@@ -98,7 +101,9 @@ func DefaultPolicyConfig() PolicyConfig {
 		FailureThreshold:     3,
 		RecoverySuccesses:    3,
 		Cooldown:             30 * time.Minute,
-		TrafficThresholdPct:  97,
+		TrafficThresholdPct:  85,
+		ReturnThresholdPct:   15,
+		ResetGrace:           6 * time.Hour,
 		AllowUnknownRecovery: false,
 		MaxSwitchesPerWindow: 3,
 		SwitchWindow:         24 * time.Hour,

@@ -104,3 +104,13 @@
 - [x] Production traffic and existing production/staging entries remain unchanged.
 - [x] Admin access remains owner-only through the documented SSH tunnel.
 - [x] NOSLA was not accessed and automatic failover was not entered.
+
+## NOSLA/BWG failover and secure Admin next gate
+
+- [x] Phase 0 safety boundary is recorded.
+- [x] BWG/NOSLA read-only topology discovery completed.
+- [x] No media smoke, prefetch, warmup, or production apply was performed.
+- [ ] Provider-billing traffic source and NOSLA/BWG quota/current usage confirmed.
+- [x] Requested 85% policy and fail-closed dry-run scenario matrix implemented locally.
+- [ ] Policy live-canary and rollback tested after accounting input.
+- [ ] Separate two-layer public Admin entry backed up, dry-run, and verified.
