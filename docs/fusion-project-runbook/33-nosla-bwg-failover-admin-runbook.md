@@ -1,6 +1,94 @@
 # NOSLA-primary / BWG-fallback And Public Admin Runbook
 
-Status: PHASE A/B IMPLEMENTED LOCALLY; REMOTE BACKUP/DRY-RUN PENDING
+Status: PRODUCTION AUTO FAILOVER AND SECURE PUBLIC ADMIN VERIFIED
+
+## Final live state (2026-08-12)
+
+- Policy mode: `auto`; manual hold: `none`; preferred/active target: NOSLA;
+  fallback: BWG.
+- Last decision: `nosla_healthy_below_threshold`. Production `stream`
+  A record is uniquely set to the allowlisted NOSLA address with TTL 60.
+- New five-minute policy timer is active/enabled. The legacy timer is
+  inactive/disabled; there is exactly one production controller.
+- Current hybrid estimates after the closeout cycle: NOSLA 484.550231 GB
+  (44.050021%) and BWG 217.129397 GB (10.856470%). They are owner-panel opening balances plus
+  host RX+TX deltas, not a claim of live provider billing.
+- Public small checks: production health HTTP 200, production system info HTTP
+  200, retained canary `v1` system info HTTP 200.
+- Secure Admin entry is live at `owner-admin.149077530.xyz`: unauthenticated
+  Admin UI/API returns 401; after Basic Auth the UI returns 200 while the app
+  API still returns 401 until application login. `/s/v1/` returns 404.
+- Canary `/admin` and `/api/admin/status` remain 404. Sidecar remains on
+  `127.0.0.1:18082`, active with `NRestarts=0`.
+- BWG and NOSLA Nginx no-cache/streaming checks, Range/If-Range preservation,
+  service checks, unchanged scoped Nginx hashes, and bounded log redaction all
+  pass. No media object was requested.
+
+## Production apply and rollback evidence
+
+- Primary backup root on both hosts:
+  `/var/backups/embyproxy-failover-policy/20260812T085807Z`.
+- Pre-auto snapshot:
+  `/var/backups/embyproxy-failover-policy/20260812T085807Z/pre-auto`.
+- BWG rollback script:
+  `/var/backups/embyproxy-failover-policy/20260812T085807Z/rollback-bwg.sh`.
+- NOSLA rollback script:
+  `/var/backups/embyproxy-failover-policy/20260812T085807Z/rollback-nosla.sh`.
+- Both rollback scripts passed `bash -n`; backup manifests/checksums passed.
+- The first pre-auto attempt stopped before auto because a presumed Nginx file
+  name did not exist. Mode stayed dry-run, new timer stayed active, legacy
+  stayed inactive, and DNS remained BWG. The corrected exact file allowlist
+  produced a verified snapshot before the successful apply.
+- Auto apply stopped the timer, changed the root-only mode to auto, ran one
+  policy evaluation, backed up prior DNS, switched through the restricted
+  adapter, verified public resolution and both small endpoints, persisted the
+  switch, then re-enabled the timer. Any failed postcheck would have restored
+  BWG automatically.
+
+## Timer closeout correction
+
+- Read-only closeout observation found the new timer active/enabled but in
+  `active (elapsed)` with no next trigger. Policy state remained NOSLA, legacy
+  stayed inactive/disabled, and public health remained intact.
+- Root cause: after the timer was stopped, the auto apply manually ran the
+  oneshot and then restarted a timer based on `OnUnitActiveSec`; systemd had no
+  usable timer-owned monotonic activation anchor.
+- The existing unit was backed up inside the phase backup root. An initial
+  staging correction with only `OnUnitInactiveSec` still lacked its first
+  anchor and was not accepted as fixed. The final timer combines
+  `OnActiveSec=5min` for its first trigger with `OnUnitInactiveSec=5min` to
+  schedule subsequent runs from oneshot completion.
+- The unit was syntax-verified before restart. Closeout requires a finite next
+  trigger and one subsequent completed policy cycle; no DNS, Nginx, rathole,
+  sidecar, or legacy controller change is part of this correction.
+- Timer-specific backup:
+  `/var/backups/embyproxy-failover-policy/20260812T085807Z/timer-closeout/embyproxy-failover-policy.timer.before`.
+  A timer-only rollback copies that file back to the live timer path, runs
+  `systemctl daemon-reload`, and restarts only the policy timer.
+- The natural 10:47 UTC cycle completed successfully without mutation, retained
+  NOSLA, and scheduled the next cycle. Production `/health` and the configured
+  small system-info path returned 200. A canary-shaped `/s/v1/` path on the
+  production host returned the expected 404 because that mapping is canary-only.
+
+## ACME signal and retry freeze
+
+- Owner reported `exceeded retry limit, last status: 429 Too Many Requests` on
+  2026-08-12; no more precise server-side event time is available without
+  inventing evidence.
+- Certificate issuance/renewal status: `blocked_by_acme_rate_limit`; action:
+  `wait_and_retry_later`.
+- No further Certbot invocation or production ACME retry is allowed in this
+  stage. Future renewal troubleshooting must first use the Let's Encrypt
+  staging endpoint, validate DNS/port 80/challenge once, wait for any provider
+  cooldown, then make at most one production attempt.
+- Read-only live audit shows a usable certificate already present, valid from
+  `2026-08-12T08:46:18Z` through `2026-11-10T08:46:17Z`; DNS, Nginx syntax,
+  and public two-layer checks pass. The local Certbot log search found no
+  `Too Many Requests` or retry-limit text; a `...,429` match was only the
+  millisecond part of a timestamp. The live entry remains safe and usable on
+  the already-valid certificate, while all new production ACME work remains
+  blocked and deferred. No partial TLS block capable of breaking Nginx was
+  enabled, and the failed path required no live cleanup.
 
 ## Owner-confirmed billing source (2026-08-12)
 
@@ -75,7 +163,7 @@ latest read-only audit because it mutates health history.
 - Unknown usage holds an already-active NOSLA but blocks BWG-to-NOSLA return.
 - Dry-run calls no DNS mutation adapter.
 - Simulated post-switch health failure restores the previous target.
-- Nine Python policy/rollback tests, Python compile, shell syntax,
+- Thirteen Python policy/rollback tests, Python compile, shell syntax,
   `git diff --check`, full Go tests, and Go vet pass locally.
 
 ## Runtime no-cache evidence
@@ -204,9 +292,13 @@ rollback, and bounded post-change verification first.
 - NOSLA reports Asia/Shanghai and BWG UTC, so policy time must explicitly use Asia/Shanghai.
 - No public Admin hostname/server block was created; canary Admin paths remain denied.
 
-## Owner input required
+## Historical owner-input gate (resolved)
 
-Provide or authorize a safe BWG-local source for NOSLA monthly quota/current-cycle usage, BWG monthly quota/current-cycle usage, and whether accounting is provider billing RX+TX or an explicitly approved alternative. No secret belongs in chat. Until then no new auto runner, timer, DNS switch, or public Admin entry is applied.
+This gate required a safe source for NOSLA/BWG quota/current usage and billing
+direction. It was resolved by the owner-confirmed panel seeds and explicit
+RX+TX definition recorded above. Provider API credentials were not required or
+requested. The remaining calibration debt does not change the documented
+hybrid source into provider billing.
 
 ## Phase 2 local policy result
 
@@ -234,7 +326,7 @@ reset/grace return, both manual holds, dry-run non-mutation, and auto refusal.
 Targeted tests, `go test ./...`, `go vet ./...`, and `git diff --check` passed
 with the temporary non-installed Go 1.26 toolchain.
 
-## Phase status at owner-input gate
+## Historical phase status at owner-input gate
 
 - Phase 0: DONE.
 - Phase 1: DONE, with one documented state-history write deviation.
@@ -247,3 +339,40 @@ with the temporary non-installed Go 1.26 toolchain.
   simulation not run.
 - Phase 8: NOT RUN.
 - Phase 9: NOT RUN; SSH tunnel remains the only Admin access method.
+
+The phase status above is retained as historical evidence and is superseded by
+the final live state at the top of this document.
+
+## Owner operations and overrides
+
+Use a trusted BWG shell; do not place credentials in command arguments.
+
+```bash
+# Hold BWG or NOSLA, or return to automatic policy evaluation.
+sudoedit /etc/embyproxy-failover-policy/policy.env
+# Set exactly one of: MANUAL_HOLD=none, MANUAL_HOLD=nosla, MANUAL_HOLD=bwg
+sudo systemctl start embyproxy-failover-policy.service
+sudo systemctl status embyproxy-failover-policy.service --no-pager
+
+# Temporarily observe without mutation.
+sudoedit /etc/embyproxy-failover-policy/policy.env
+# Set FAILOVER_MODE=dry-run, then:
+sudo systemctl start embyproxy-failover-policy.service
+```
+
+`MANUAL_HOLD=nosla` intentionally overrides health/traffic fallback and records
+risk; use it only while accepting that risk. `MANUAL_HOLD=bwg` prevents return
+to NOSLA. Restore `MANUAL_HOLD=none` for normal operation. Any edit must retain
+mode 0600 on the EnvironmentFile.
+
+The generated outer Basic Auth password is stored only at
+`/etc/embyproxy-failover-policy/owner-admin-password` (root 0600). Read it only
+in a trusted BWG shell with `sudo`; never paste it into chat, runbook, URL, or
+logs. Application Admin authentication remains separate.
+
+Cleanup is documented but not executed: set policy dry-run, disable the new
+timer, run the verified host-specific rollback scripts, and verify public
+health, Admin isolation, Nginx, DNS, and services. The BWG rollback restores
+the legacy controller and the exact saved production DNS value; NOSLA rollback
+removes only the restricted meter account/script. Do not delete deployment
+directories or clear the database.

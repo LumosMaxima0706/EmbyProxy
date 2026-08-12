@@ -2,8 +2,11 @@
 Description=Evaluate EmbyProxy failover policy every five minutes
 
 [Timer]
-OnBootSec=2min
-OnUnitActiveSec=5min
+# OnActiveSec establishes the first trigger even when this timer starts after
+# boot. The policy service is Type=oneshot, so subsequent runs are scheduled
+# from completion and cannot overlap a slow health/accounting check.
+OnActiveSec=5min
+OnUnitInactiveSec=5min
 AccuracySec=15s
 Persistent=true
 Unit=embyproxy-failover-policy.service

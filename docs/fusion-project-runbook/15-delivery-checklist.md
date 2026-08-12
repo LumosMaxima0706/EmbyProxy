@@ -98,6 +98,9 @@
 
 ## Final owner self-use handoff
 
+Historical BWG-only canary milestone; superseded for production target and
+Admin access by the failover/secure-Admin gate below.
+
 - [x] BWG-only public canary is accepted for owner self-use.
 - [x] Retained managed route slug: `v1`.
 - [x] Public entry: `canary.149077530.xyz`, media path `/s/v1/`.
@@ -111,7 +114,20 @@
 - [x] BWG/NOSLA read-only topology discovery completed.
 - [x] No media smoke, prefetch, warmup, or production apply was performed.
 - [x] Owner provider-panel opening balances, quotas, reset cycles, and RX+TX billing definition confirmed.
-- [ ] Restricted host-counter auxiliary source deployed and calibrated; it must not be described as provider billing.
+- [x] Restricted host-counter auxiliary source deployed; it is explicitly documented as an estimate, not provider billing.
+- [ ] Hybrid estimate calibrated against the provider panel at the next reset cycle.
 - [x] Requested 85% policy and fail-closed dry-run scenario matrix implemented locally.
-- [ ] Policy live-canary and rollback tested after accounting input.
-- [ ] Separate two-layer public Admin entry backed up, dry-run, and verified.
+- [x] Policy dry-run/live apply and simulated rollback tested after accounting input.
+- [x] Separate two-layer public Admin entry backed up, dry-run, applied, and verified.
+- [x] Legacy timer is inactive/disabled; the new timer is the only controller.
+- [x] Production small endpoints and retained canary pass; no media object was requested.
+- [x] BWG/NOSLA no-cache, Range headers, services, Nginx hashes, and bounded logs pass.
+- [x] Production `stream` is policy-controlled and currently targets NOSLA;
+  canary, staging-stream, stream-b, and rathole remained unchanged.
+- [x] Independent Admin hostname has Basic Auth plus application auth; canary
+  Admin remains 404 and the SSH tunnel remains the private fallback method.
+- [x] Corrected policy timer has a finite next trigger and completed a natural
+  no-mutation cycle; the legacy timer remains inactive/disabled.
+- [ ] ACME issuance/renewal is `blocked_by_acme_rate_limit`; action is
+  `wait_and_retry_later`. Do not retry production ACME; validate with staging
+  first and wait for the reported 429 cooldown.

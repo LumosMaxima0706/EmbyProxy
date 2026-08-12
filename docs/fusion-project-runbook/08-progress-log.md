@@ -574,7 +574,49 @@ the retry will repeat bundle, path, ff-only, feature-only, and cleanup checks.
 - Local scenario matrix, targeted tests, full tests, vet, and diff checks PASS.
 - No artifact was deployed; no DNS, route, Nginx, rathole, systemd, timer,
   service, public Admin, or production traffic state changed.
+
+## 2026-08-12 | Failover and secure Admin | Production closeout
+
+- Owner billing seeds were installed as decimal provider-panel GB opening
+  balances. Restricted NOSLA/BWG host RX+TX counters add local deltas and are
+  explicitly not represented as provider billing.
+- Verified backups and rollback scripts were created on both hosts at
+  `/var/backups/embyproxy-failover-policy/20260812T085807Z`; pre-auto snapshot
+  and exact Nginx hashes were also verified.
+- Restricted NOSLA meter forced-command, arbitrary-command blocking, pinned
+  host key, and TCP-forward denial passed. No private key left BWG.
+- Thirteen local/BWG policy scenarios passed. Real dry-run accumulated seven
+  health successes at the five-minute cadence and recommended NOSLA without
+  mutation.
+- Legacy timer was disabled before the new dry-run timer was enabled. New
+  timer is now the only controller and runs in auto mode.
+- Production `stream` changed from BWG to NOSLA after a verified backup,
+  health/debounce/usage gate, public DNS convergence, and small endpoint checks.
+  Existing canary/staging/stream-b and rathole were not modified.
+- Secure owner Admin DNS, certificate, Basic Auth, app auth, rate limit,
+  query-free logging, and path isolation passed. Canary Admin remains 404 and
+  sidecar remains loopback-only.
+- Owner reported an ACME 429 signal. No production ACME retry was made after
+  that instruction. Read-only audit confirms the current certificate is valid;
+  future renewal work must validate against staging before one production try.
+- ACME issuance/renewal is recorded as `blocked_by_acme_rate_limit`, action
+  `wait_and_retry_later`; this does not block the independently verified
+  failover mainline or the safe live entry using its existing certificate.
+- Production/canary small endpoints, both hosts' services/no-cache/Range
+  behavior, unchanged scoped Nginx hashes, and bounded secret/severe log scans
+  all pass. No media payload was requested.
+- Closeout observation caught the new timer in `active (elapsed)` with no next
+  trigger. Its unit was backed up and corrected from `OnUnitActiveSec` to a
+  first-trigger `OnActiveSec` plus completion-based `OnUnitInactiveSec`; unit
+  verification, finite scheduling, another policy cycle, and single-controller
+  checks passed without an ingress/DNS/app change.
+- The first natural corrected cycle completed at 10:47 UTC with no mutation:
+  active NOSLA, reason `nosla_healthy_below_threshold`, fresh hybrid estimate,
+  and the next cycle scheduled. Production and canary small checks passed;
+  canary/Admin isolation remained 404/401 as designed.
 - Public health and Admin isolation remain PASS; route count is 1.
-- Production traffic remains unchanged. No NOSLA access or automatic failover
-  action occurred.
+- The earlier BWG-only canary milestone left production unchanged and did not
+  access NOSLA. This later authorized failover phase changed only production
+  `stream` from BWG to NOSLA; canary, staging-stream, stream-b, and rathole
+  remained unchanged.
 - Cleanup instructions are documented for future owner use but were not run.

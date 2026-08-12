@@ -387,3 +387,21 @@ started.
 - Auto without apply adapter: fail-closed PASS.
 - `go test ./...`, `go vet ./...`, and `git diff --check`: PASS.
 - Live deployment/canary/rollback/public Admin: NOT RUN.
+
+## NOSLA/BWG production failover and secure Admin
+
+| Verification | Result | Evidence/boundary |
+| --- | --- | --- |
+| Backups/rollback | PASS | Both-host root-only backup, manifests, `bash -n`, pre-auto snapshot |
+| Traffic source | PASS WITH CALIBRATION DEBT | Owner provider seeds + restricted host RX+TX deltas; not provider API billing |
+| Policy matrix | PASS | 13 scenarios including threshold, failures, reset, stale, holds, debounce, dry-run, rollback, counter reset |
+| Split brain/schedule | PASS | Legacy timer inactive/disabled; new five-minute timer active/enabled with a finite next trigger and observed recurring cycle |
+| Policy apply | PASS | Mode auto, active NOSLA, decision `nosla_recovered_below_return_threshold` |
+| Production public health | PASS | `/health` and small system info HTTP 200; no media request |
+| Canary isolation | PASS | Retained `v1` info HTTP 200; Admin paths 404 |
+| Secure public Admin | PASS | No Basic 401; Basic UI 200; app API still 401; `/s/` 404 |
+| Listener/service | PASS | Sidecar loopback `127.0.0.1:18082`, active, `NRestarts=0`; both Nginx/container healthy |
+| No-cache/streaming | PASS | Both hosts cache/buffering disabled, no cache path/slice/background update; Range/If-Range preserved |
+| Config integrity | PASS | Pre/post scoped BWG Nginx hashes unchanged except separately authorized new Admin file already in baseline |
+| Log safety | PASS | Bounded policy/sidecar/Nginx logs contain no severe or credential markers; Admin access format omits args/headers/cookies |
+| ACME issuance/renewal | BLOCKED/DEFERRED | `blocked_by_acme_rate_limit`; action `wait_and_retry_later`. No further production call; existing certificate remains valid and live Admin remains safely isolated |
