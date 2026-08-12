@@ -61,7 +61,8 @@ latest read-only audit because it mutates health history.
 - NOSLA switch threshold 85%; return hysteresis 80%; new reset-cycle return
   threshold 15% after a six-hour grace window.
 - Health switch requires three consecutive failures; return requires three
-  consecutive successes; switch cooldown is one hour.
+  consecutive successes; samples less than 240 seconds apart cannot advance
+  debounce counters; switch cooldown is one hour.
 - Timezone is explicitly `Asia/Shanghai`; reset days are NOSLA 21 and BWG 7.
 
 ## Local scenario and safety validation
@@ -119,6 +120,29 @@ latest read-only audit because it mutates health history.
    the live health and traffic samples remain fresh.
 7. Apply the independent Admin entry and verify outer 401, inner application
    authentication, `/s/` 404, canary Admin 404, loopback listener, and logs.
+
+## Phase B backup and restricted meter log
+
+- Verified root-only backup root on both hosts:
+  `/var/backups/embyproxy-failover-policy/20260812T085807Z`.
+- BWG backup contains the legacy runner/provider adapter/config/state, legacy
+  units and timer status, production DNS metadata, scoped Nginx/rathole/app
+  config and service baselines. NOSLA backup contains scoped Nginx, container,
+  Admin sidecar, listener, and service baselines.
+- Initial checksum manifests incorrectly included the manifest being written;
+  verification stopped before deployment. The manifests were regenerated with
+  self/checksum exclusions and both hosts then passed full verification.
+- Both rollback scripts pass `bash -n` and have separate checksum files. The BWG
+  rollback order was corrected before dry-run so a future Admin DNS record is
+  removed through its exact adapter before that adapter is deleted.
+- A direct BWG-to-NOSLA public-key transfer failed because BWG does not have the
+  local workstation's NOSLA SSH alias/trust configuration. No account had been
+  created. The public key only was then transferred with SCP third-party mode;
+  the private key never left BWG.
+- NOSLA restricted account and BWG root-only pinned host/key files are now
+  installed. Meter verification passes fixed JSON schema, arbitrary-command
+  override protection, and TCP-forwarding denial. No timer, DNS, Nginx, route,
+  or service state changed during this step.
 
 ## Verified starting point
 

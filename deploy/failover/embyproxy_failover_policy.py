@@ -11,6 +11,7 @@ import datetime as dt
 import fcntl
 import json
 import os
+import socket
 import subprocess
 import sys
 import tempfile
@@ -111,6 +112,7 @@ def remote_counter(config):
         "ssh", "-F", "/dev/null", "-i", meter["identity_file"],
         "-o", f"UserKnownHostsFile={meter['known_hosts_file']}",
         "-o", "StrictHostKeyChecking=yes", "-o", "BatchMode=yes",
+        "-o", "IdentitiesOnly=yes", "-T",
         "-o", f"ConnectTimeout={int(meter['timeout_seconds'])}",
         f"{meter['user']}@{meter['host']}",
     ], timeout=int(meter["timeout_seconds"]) + 3)
@@ -135,22 +137,28 @@ def traffic_sample(config, state, target, moment, counter):
     seed_cycle = str(traffic["seed_cycle_start"])[0:10]
     opening = float(traffic["opening_balance_gb"]) if seed_cycle == key else 0.0
     reset_baseline = not baseline or baseline.get("cycle_key") != key
+    seed_age = moment - parse_time(config["usage_seed_observed_at"])
     if reset_baseline:
         baseline = {"cycle_key": key, "counter_bytes": counter,
-                    "captured_at": moment.isoformat()}
+                    "captured_at": moment.isoformat(),
+                    "seed_aligned": (seed_cycle != key or seed_age <= dt.timedelta(
+                        hours=int(config["usage_seed_max_age_hours"]))) }
         counters[target] = baseline
     delta = max(0, counter - int(baseline["counter_bytes"]))
     usage_gb = opening + (delta / GB)
     quota_gb = float(traffic["quota_gb"])
     grace_end = start + dt.timedelta(hours=int(config["reset_grace_hours"]))
     quality = "fresh_estimate"
-    if seed_cycle != key and moment.astimezone(start.tzinfo) < grace_end:
+    if seed_cycle == key and not baseline.get("seed_aligned", False):
+        quality = "stale"
+    elif seed_cycle != key and moment.astimezone(start.tzinfo) < grace_end:
         quality = "reset_grace"
     return {
         "cycle_start": start.isoformat(), "cycle_end": end.isoformat(),
         "cycle_key": key, "counter_bytes": counter,
         "counter_baseline": int(baseline["counter_bytes"]),
         "opening_balance_gb": opening, "usage_gb": round(usage_gb, 6),
+        "usage_bytes_decimal": int(round(usage_gb * GB)),
         "quota_gb": quota_gb, "usage_percent": round(usage_gb / quota_gb * 100, 6),
         "quality": quality, "source": "owner_provider_seed_plus_host_rx_tx_estimate",
         "sampled_at": moment.isoformat(), "traffic_direction": "rx_plus_tx",
@@ -183,6 +191,25 @@ def apply_dns(config, target):
     payload = json.loads(result.stdout.splitlines()[-1])
     if not payload.get("applied") and not payload.get("verified"):
         raise RuntimeError("DNS adapter did not verify apply")
+
+
+def public_target_verified(config, target):
+    expected = config["node_ips"][target]
+    deadline = dt.datetime.now().timestamp() + int(config["dns_verify_timeout_seconds"])
+    while dt.datetime.now().timestamp() < deadline:
+        try:
+            addresses = {row[4][0] for row in socket.getaddrinfo(
+                config["stream_host"], 443, socket.AF_INET, socket.SOCK_STREAM)}
+        except socket.gaierror:
+            addresses = set()
+        if expected in addresses:
+            statuses = [curl_status(config["stream_host"], expected, path,
+                                    int(config["health_timeout_seconds"]))
+                        for path in config["health_paths"]]
+            if statuses and all(status == 200 for status in statuses):
+                return True
+        __import__("time").sleep(5)
+    return False
 
 
 def evaluate(config, state, nosla_health, nosla_traffic, moment):
@@ -218,7 +245,13 @@ def evaluate(config, state, nosla_health, nosla_traffic, moment):
     return "bwg", "nosla_return_hysteresis"
 
 
-def update_health_state(state, healthy, moment):
+def update_health_state(state, healthy, moment, minimum_interval_seconds):
+    previous = state.get("last_health_sample_at")
+    if previous and moment < parse_time(previous) + dt.timedelta(
+            seconds=int(minimum_interval_seconds)):
+        state["last_healthcheck"] = {"healthy": healthy, "at": moment.isoformat(),
+                                     "counted": False}
+        return False
     if healthy:
         state["nosla_consecutive_successes"] = int(
             state.get("nosla_consecutive_successes", 0)) + 1
@@ -227,7 +260,10 @@ def update_health_state(state, healthy, moment):
         state["nosla_consecutive_failures"] = int(
             state.get("nosla_consecutive_failures", 0)) + 1
         state["nosla_consecutive_successes"] = 0
-    state["last_healthcheck"] = {"healthy": healthy, "at": moment.isoformat()}
+    state["last_health_sample_at"] = moment.isoformat()
+    state["last_healthcheck"] = {"healthy": healthy, "at": moment.isoformat(),
+                                 "counted": True}
+    return True
 
 
 def cooldown_active(config, state, moment):
@@ -238,7 +274,8 @@ def cooldown_active(config, state, moment):
 
 
 def switch_with_rollback(config, state, target, health_fn=health_target,
-                         dns_apply_fn=apply_dns, dns_read_fn=dns_record):
+                         dns_apply_fn=apply_dns, dns_read_fn=dns_record,
+                         public_verify_fn=public_target_verified):
     previous = dns_read_fn(config)
     backup_dir = Path(config["switch_backup_dir"])
     stamp = now_utc().strftime("%Y%m%dT%H%M%SZ")
@@ -246,13 +283,16 @@ def switch_with_rollback(config, state, target, health_fn=health_target,
     atomic_json(backup, previous)
     dns_apply_fn(config, target)
     after = dns_read_fn(config)
-    verified = after["target"] == target and health_fn(config, target)["healthy"]
+    verified = (after["target"] == target
+                and health_fn(config, target)["healthy"]
+                and public_verify_fn(config, target))
     if verified:
         return str(backup), False
     try:
         dns_apply_fn(config, previous["target"])
         restored = dns_read_fn(config)
-        if restored["target"] != previous["target"]:
+        if (restored["target"] != previous["target"]
+                or not public_verify_fn(config, previous["target"])):
             raise RuntimeError("rollback DNS verification failed")
     except Exception as exc:
         raise RuntimeError("DNS rollback failed; owner intervention required") from exc
@@ -284,7 +324,8 @@ def run_policy(config_path, output):
     state["active_target"] = current["target"]
     nosla_health = health_target(config, "nosla")
     bwg_health = health_target(config, "bwg")
-    update_health_state(state, nosla_health["healthy"], moment)
+    update_health_state(state, nosla_health["healthy"], moment,
+                        config["health_min_sample_interval_seconds"])
     samples = {}
     for target in ("nosla", "bwg"):
         try:
@@ -325,8 +366,16 @@ def run_policy(config_path, output):
         "usage_seed_source": config["usage_seed_source"],
         "nosla_usage_gb": samples["nosla"].get("usage_gb"),
         "bwg_usage_gb": samples["bwg"].get("usage_gb"),
+        "nosla_usage_bytes": samples["nosla"].get("usage_bytes_decimal"),
+        "bwg_usage_bytes": samples["bwg"].get("usage_bytes_decimal"),
         "nosla_usage_percent": samples["nosla"].get("usage_percent"),
         "bwg_usage_percent": samples["bwg"].get("usage_percent"),
+        "nosla_cycle_start": samples["nosla"].get("cycle_start"),
+        "nosla_cycle_end": samples["nosla"].get("cycle_end"),
+        "bwg_cycle_start": samples["bwg"].get("cycle_start"),
+        "bwg_cycle_end": samples["bwg"].get("cycle_end"),
+        "nosla_counter_baseline": state.get("counter_baselines", {}).get("nosla"),
+        "bwg_counter_baseline": state.get("counter_baselines", {}).get("bwg"),
         "usage_state": samples["nosla"].get("quality"),
         "traffic_samples": samples, "updated_at": moment.isoformat(),
     })

@@ -82,11 +82,24 @@ class RollbackTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             cfg = {"switch_backup_dir": directory}
             with self.assertRaisesRegex(RuntimeError, "rollback succeeded"):
-                policy.switch_with_rollback(cfg, {}, "nosla", failed_health, apply, read)
+                policy.switch_with_rollback(cfg, {}, "nosla", failed_health, apply, read,
+                                            lambda _c, _t: True)
             self.assertEqual(calls, ["nosla", "bwg"])
 
 
 class RunnerTests(unittest.TestCase):
+    def test_health_debounce_rejects_rapid_repeat(self):
+        moment = dt.datetime.fromisoformat("2026-08-12T17:00:00+08:00")
+        state_value = {"nosla_consecutive_successes": 0,
+                       "nosla_consecutive_failures": 0}
+        self.assertTrue(policy.update_health_state(state_value, True, moment, 240))
+        self.assertFalse(policy.update_health_state(
+            state_value, True, moment + dt.timedelta(seconds=30), 240))
+        self.assertEqual(state_value["nosla_consecutive_successes"], 1)
+        self.assertTrue(policy.update_health_state(
+            state_value, True, moment + dt.timedelta(seconds=300), 240))
+        self.assertEqual(state_value["nosla_consecutive_successes"], 2)
+
     def test_dry_run_never_calls_dns_apply(self):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
@@ -94,6 +107,7 @@ class RunnerTests(unittest.TestCase):
                 "mode": "dry-run", "manual_hold": "none",
                 "state_file": str(root / "state.json"), "timezone": "Asia/Shanghai",
                 "health_failures_to_switch": 3, "health_successes_to_return": 3,
+                "health_min_sample_interval_seconds": 240,
                 "cooldown_seconds": 3600, "nosla_switch_threshold_percent": 85,
                 "nosla_return_threshold_percent": 80,
                 "nosla_reset_return_threshold_percent": 15,
@@ -122,6 +136,22 @@ class RunnerTests(unittest.TestCase):
                     mock.patch.object(policy, "switch_with_rollback") as switch:
                 policy.run_policy(config_path, __import__("io").StringIO())
                 switch.assert_not_called()
+
+    def test_late_seed_alignment_stays_stale(self):
+        cfg = {
+            "timezone": "Asia/Shanghai", "reset_grace_hours": 6,
+            "usage_seed_observed_at": "2026-08-12T16:21:00+08:00",
+            "usage_seed_max_age_hours": 24,
+            "traffic": {"nosla": {"reset_day": 21, "seed_cycle_start": "2026-07-21",
+                                    "opening_balance_gb": 484, "quota_gb": 1100}},
+        }
+        state_value = {"counter_baselines": {}}
+        late = dt.datetime.fromisoformat("2026-08-14T16:21:00+08:00")
+        first = policy.traffic_sample(cfg, state_value, "nosla", late, 1000)
+        second = policy.traffic_sample(cfg, state_value, "nosla",
+                                       late + dt.timedelta(minutes=5), 2000)
+        self.assertEqual(first["quality"], "stale")
+        self.assertEqual(second["quality"], "stale")
 
 
 if __name__ == "__main__":
