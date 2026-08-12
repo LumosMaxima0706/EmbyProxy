@@ -85,3 +85,14 @@ passed and the sidecar remained loopback-only. Bounded sidecar and
 canary-specific Nginx log scans found zero secret/token/cookie/password/private
 key/panic/fatal markers and zero sidecar error markers. No configuration,
 route, DNS, service, Nginx, or rathole mutation was performed by this check.
+
+## Final owner handoff
+
+- Retain route slug `v1` for current BWG-only canary self-use.
+- Public media entry is `canary.149077530.xyz` below `/s/v1/`.
+- Admin UI remains available only through the loopback SSH tunnel; public Admin
+  UI/API paths remain 404.
+- Current production traffic, existing stream/staging entries, DNS policy,
+  rathole mappings, and NOSLA state are unchanged.
+- Route cleanup is intentionally documented but was not executed. Delete `v1`
+  from the private Admin UI, then verify the public `/s/v1/` path returns 404.

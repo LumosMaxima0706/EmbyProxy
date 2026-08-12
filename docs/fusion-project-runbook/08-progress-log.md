@@ -539,3 +539,12 @@ the retry will repeat bundle, path, ff-only, feature-only, and cleanup checks.
   bounded redaction/severity log scans passed.
 - The validation was read-only and retained the owner route; no ingress, DNS,
   service, route, or configuration mutation occurred.
+
+## 2026-08-12 | Owner self-use handoff accepted
+
+- Route `v1` is retained as the BWG-only canary self-use route at the dedicated
+  canary entry below `/s/v1/`.
+- Public health and Admin isolation remain PASS; route count is 1.
+- Production traffic remains unchanged. No NOSLA access or automatic failover
+  action occurred.
+- Cleanup instructions are documented for future owner use but were not run.

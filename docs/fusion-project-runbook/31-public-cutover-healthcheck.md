@@ -45,3 +45,8 @@ sidecar and canary access scans contained no sensitive marker.
 | Bounded secret/severe log scan | PASS; zero markers |
 
 This was read-only validation of an owner-created route. The route was retained.
+
+## Owner handoff state
+
+Route `v1` is intentionally retained as the current BWG-only canary self-use
+route. No cleanup action was performed during this validation.

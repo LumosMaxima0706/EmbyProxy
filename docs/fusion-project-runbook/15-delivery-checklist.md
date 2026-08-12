@@ -95,3 +95,12 @@
 - [x] Rollback threshold and exact rollback script recorded; no failure required execution.
 - [x] Owner-created `v1` route returns HTTP 200 publicly with valid TLS while Admin UI/API remain 404.
 - [x] Post-route service/listener and bounded secret/severe log scans pass.
+
+## Final owner self-use handoff
+
+- [x] BWG-only public canary is accepted for owner self-use.
+- [x] Retained managed route slug: `v1`.
+- [x] Public entry: `canary.149077530.xyz`, media path `/s/v1/`.
+- [x] Production traffic and existing production/staging entries remain unchanged.
+- [x] Admin access remains owner-only through the documented SSH tunnel.
+- [x] NOSLA was not accessed and automatic failover was not entered.
