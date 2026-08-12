@@ -58,3 +58,8 @@ those decisions are recorded in `28-29`.
 The owner has approved a new BWG-only canary exposing `/s/` only. Admin UI/API
 remain private through the documented SSH tunnel. Existing production and
 staging stream entries remain untouched. Exact canary hostname is pending.
+
+The canary is live at `canary.149077530.xyz`. Public users may access only
+managed media routes below `/s/`; all Admin UI/API and unmatched paths return
+404. Continue using the SSH tunnel for administration. The canary does not
+change production traffic or the later NOSLA/BWG failover policy.

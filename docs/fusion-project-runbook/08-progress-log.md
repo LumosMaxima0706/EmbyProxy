@@ -514,3 +514,14 @@ The publish-result record retry used a Git-resolved full target hash and passed 
   outputting credentials.
 - Phase 4 is blocked on the exact canary hostname. No Nginx/DNS/service/traffic
   mutation has occurred.
+
+## 2026-08-12 | Public cutover | BWG-only canary complete
+
+- Dedicated `canary.149077530.xyz` DNS, Nginx, and certificate were created.
+- Only Nginx was reloaded after successful syntax checks. Rathole and sidecar
+  remained active without restart; NOSLA was not accessed.
+- Public TLS, redirect, media proxy, Admin isolation, fail-closed, fallback,
+  cleanup, service/listener, config integrity, and canary log checks passed.
+- Existing staging/stream/stream-b and other production entries are unchanged.
+- Probe/payload issues were diagnosed without widening scope; rollback was not
+  required. Exact rollback script and verified backup remain available.

@@ -341,3 +341,17 @@ started.
 - DNS automation metadata: existing secure provider configuration found; no
   secret content read or recorded.
 - Phase 4 dry-run: BLOCKED pending exact canary hostname.
+
+## BWG-only public canary final verification
+
+- Dedicated staging/live `nginx -t`: PASS.
+- DNS readiness/apply/public convergence: PASS for canary only, TTL 60.
+- Dedicated certificate and hostname verification: PASS.
+- Public `/s/` proxy: PASS with non-gateway upstream status.
+- Admin UI/API variants: 404 PASS.
+- Unknown/disabled routes: 404 fail-closed PASS.
+- Legacy fallback: non-5xx PASS.
+- Nginx/rathole/sidecar and listener boundary: PASS.
+- Existing production/staging/rathole/app files unchanged: PASS.
+- Temporary route cleanup and canary-specific log redaction: PASS.
+- Rollback script syntax/checksum: PASS; execution not required.

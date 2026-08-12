@@ -50,3 +50,8 @@ Status: DONE - OWNER SELF-USE READY
 Current handoff: backup and checksum validation are complete. The next gate is
 the exact dedicated canary hostname; no DNS or Nginx apply is allowed before it
 is recorded.
+
+BWG-only canary cutover is complete. Recurring checks now include certificate
+validity, DNS target, `/s/` proxy status, Admin 404 isolation, canary-specific
+logs, and unchanged production entry hashes. NOSLA/BWG automatic failover is a
+separate gate.

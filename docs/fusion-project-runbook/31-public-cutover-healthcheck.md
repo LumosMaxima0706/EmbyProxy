@@ -1,6 +1,6 @@
 # Public Cutover Healthcheck
 
-Status: PLAN ONLY - NO PUBLIC CUTOVER
+Status: PASS - BWG-ONLY PUBLIC CANARY HEALTHY
 
 The pre-cutover baseline is healthy: sidecar active/enabled with zero restarts,
 loopback-only listener, Nginx and rathole active, and Nginx syntax valid.
@@ -14,3 +14,21 @@ aborts the canary and invokes `32-public-cutover-rollback.md`.
 The approved public surface is only `/s/`. The public checker must assert 404
 for `/`, `/admin`, `/admin/`, `/api/admin`, and `/api/admin/` before any proxy
 smoke can pass the gate.
+
+## Final results
+
+| Check | Result |
+| --- | --- |
+| Public DNS/TLS/redirect | PASS; TTL 60, valid certificate, HTTP to HTTPS |
+| Admin isolation | PASS; `/admin` and every `/api/admin` form return 404 |
+| Required `/s/` proxy | PASS; temporary owner route reached an upstream application status, not a gateway failure |
+| Unknown/disabled route | PASS; 404 fail-closed |
+| Legacy fallback | PASS; non-5xx localhost result |
+| Cleanup | PASS; temporary route and line counts returned to zero |
+| Services/listener | PASS; Nginx/rathole/sidecar active/enabled, status zero, `NRestarts=0`; sidecar loopback-only |
+| Existing ingress/config | PASS; all backed-up production/staging/rathole/app files unchanged |
+| Canary-specific logs | PASS; no panic/error/secret marker |
+
+The shared Nginx error log contains unrelated public TLS handshake noise and
+other upstream-close entries. Canary-specific filtering found no canary error;
+sidecar and canary access scans contained no sensitive marker.

@@ -27,3 +27,39 @@ credential was emitted.
 Phase 4 is blocked before rendering the exact server block because the owner has
 not yet supplied the dedicated canary hostname. Nginx, DNS, rathole, services,
 and traffic remain unchanged.
+
+## Phase 4 dry-run result
+
+- Isolated staging `nginx -t`: PASS.
+- Loopback-only staging server returned 404 for `/`, all Admin UI/API variants,
+  and empty `/s/`: PASS.
+- DNS provider read/status and absent-canary readiness checks: PASS.
+- Nginx `/s/` allowlist provides the required separation from the mixed app
+  listener; no app change was needed.
+
+## Phase 5 controlled cutover result
+
+- Installed only `/etc/nginx/conf.d/embyproxy-gsy-canary.conf`.
+- Created only the `canary` A record with TTL 60 through the root-only provider
+  module; public DNS verification passed.
+- Issued a dedicated canary certificate.
+- Every Nginx reload followed a successful `nginx -t`; no other service was
+  reloaded or restarted.
+
+## Phase 6 public smoke result
+
+- TLS and HTTP-to-HTTPS redirect: PASS.
+- `/`, all Admin UI/API variants, unknown route, and empty `/s/`: 404.
+- Authenticated temporary public route creation/read: PASS; target and
+  credentials were not emitted.
+- Public proxy returned an upstream application status rather than
+  502/503/504: PASS.
+- Disabled route 404, legacy fallback non-5xx, and temporary route cleanup:
+  PASS. Managed route and line counts returned to zero.
+- Nginx/rathole/sidecar state, loopback listener, unchanged existing files,
+  DNS, certificate, and canary-specific log scans: PASS.
+
+## Phase 7 disposition
+
+Rollback was not triggered because all critical checks passed. Its exact
+script was syntax-checked and hashed in the protected backup.

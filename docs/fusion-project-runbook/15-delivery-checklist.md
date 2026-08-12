@@ -87,9 +87,9 @@
 
 - [x] Read-only Nginx/rathole/systemd/public-entry discovery recorded in `28`.
 - [x] Execution, healthcheck, rollback, and owner decision gates recorded in `29-32`.
-- [ ] Exact public hostname approved by owner; `/s/` and Admin isolation are approved.
-- [x] Existing secure DNS automation identified; record-specific dry-run remains pending.
+- [x] Exact public hostname approved by owner; `/s/` and Admin isolation are approved.
+- [x] Existing secure DNS automation used for one verified canary record.
 - [x] Pre-cutover backups created and verified.
-- [ ] Nginx staging dry-run and localhost validation passed.
-- [ ] Public cutover, DNS, and any rathole change executed and verified.
-- [ ] Public rollback drill/abort threshold observed with evidence.
+- [x] Nginx staging dry-run and localhost validation passed.
+- [x] BWG-only canary DNS/Nginx/TLS cutover executed and verified; rathole unchanged.
+- [x] Rollback threshold and exact rollback script recorded; no failure required execution.

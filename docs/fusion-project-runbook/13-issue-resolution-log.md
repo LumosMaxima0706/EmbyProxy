@@ -154,3 +154,13 @@ canary, `/s/` only, Admin UI/API denied, no existing entry changes, no rathole,
 and no NOSLA. `PUB-OWNER-001` remains blocked only on the exact hostname;
 `PUB-OWNER-002` is resolved by the existing secure mode-0600 BWG DNS provider
 configuration, subject to a safe record-specific dry-run after hostname input.
+
+## Public canary execution issues
+
+| Issue ID | Step | Symptom | Cause | Resolution | Status |
+| --- | --- | --- | --- | --- | --- |
+| PUB-CHECK-001 | PUB-005/006 | Initial probes returned redirects or certificate mismatch while later paths differed | Curl inherited proxy environment variables and bypassed the intended direct path | Cleared proxy variables and used direct/SNI-bound probes; the full matrix passed | DONE |
+| PUB-SMOKE-001 | PUB-006 | Temporary route PUT returned `INVALID_MANAGED_ROUTE_JSON` | Smoke payload contained unsupported line field `note`; strict decoder correctly rejected it | Removed the field, retried the authenticated API, completed smoke, then cleaned the route | DONE |
+| PUB-DNS-001 | PUB-005 | Restricted DNS CLI had no arbitrary canary command | Adapter intentionally exposes only fixed project records | Used the same root-only module for one exact record, retained private snapshots, and verified public DNS | DONE |
+
+No production-impacting issue occurred and rollback was not required.

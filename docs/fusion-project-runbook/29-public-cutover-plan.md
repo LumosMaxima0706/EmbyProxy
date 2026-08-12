@@ -1,6 +1,6 @@
 # Public Cutover Plan
 
-Status: PHASE 2 COMPLETE - BWG-ONLY CANARY, HOSTNAME PENDING
+Status: EXECUTED - BWG-ONLY CANARY
 
 ## Preconditions
 
@@ -73,3 +73,12 @@ all Admin UI/API paths denied, BWG-only canary, no rathole change, no NOSLA, and
 no modification to existing production/staging stream entries. The exact
 hostname is still required before the staged server block and DNS record can be
 rendered.
+
+## Executed design
+
+The confirmed hostname is `canary.149077530.xyz`. The canary uses only the new
+file `/etc/nginx/conf.d/embyproxy-gsy-canary.conf`, a dedicated certificate, an
+A record with TTL 60, and `/s/` as the only proxied surface. All other HTTPS
+paths return 404. HTTP redirects to HTTPS except ACME challenge traffic. No
+rathole, NOSLA, production stream, staging stream, or app config change is part
+of this design.

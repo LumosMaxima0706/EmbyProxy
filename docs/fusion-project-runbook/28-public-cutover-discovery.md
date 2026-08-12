@@ -1,6 +1,6 @@
 # Public Cutover Discovery
 
-Status: PHASE 1 COMPLETE - OWNER SCOPE ACCEPTED, HOSTNAME PENDING
+Status: COMPLETE - CANARY HOSTNAME CONFIRMED
 
 Discovery date: 2026-08-12 (Asia/Shanghai)
 Branch/ref: `feature/failover-phase2-local` / `2953dabe`
@@ -90,3 +90,12 @@ BWG has an existing DNS automation implementation and mode-0600 provider
 configuration. No credential was read into the runbook or printed. The exact
 new canary hostname remains an owner business-domain decision and is the only
 remaining prerequisite before generating an exact Nginx/DNS change.
+
+## Final discovery disposition
+
+The owner selected `canary.149077530.xyz`. No prior DNS record, Nginx file, or
+certificate existed for that name. Existing certificates did not cover it, so
+a separate certificate was required. The restricted DNS CLI lacked an arbitrary
+canary command; the same root-only provider module and mode-0600 credentials
+were used for one exact record operation, with private snapshots retained only
+in the protected backup.
