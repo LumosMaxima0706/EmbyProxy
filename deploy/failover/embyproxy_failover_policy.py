@@ -144,6 +144,7 @@ def traffic_sample(config, state, target, moment, counter):
                     "seed_aligned": (seed_cycle != key or seed_age <= dt.timedelta(
                         hours=int(config["usage_seed_max_age_hours"]))) }
         counters[target] = baseline
+    counter_reset = counter < int(baseline["counter_bytes"])
     delta = max(0, counter - int(baseline["counter_bytes"]))
     usage_gb = opening + (delta / GB)
     quota_gb = float(traffic["quota_gb"])
@@ -151,6 +152,8 @@ def traffic_sample(config, state, target, moment, counter):
     quality = "fresh_estimate"
     if seed_cycle == key and not baseline.get("seed_aligned", False):
         quality = "stale"
+    elif counter_reset:
+        quality = "counter_reset"
     elif seed_cycle != key and moment.astimezone(start.tzinfo) < grace_end:
         quality = "reset_grace"
     return {
@@ -287,6 +290,10 @@ def switch_with_rollback(config, state, target, health_fn=health_target,
                 and health_fn(config, target)["healthy"]
                 and public_verify_fn(config, target))
     if verified:
+        state.setdefault("switch_history", []).append({
+            "at": now_utc().isoformat(), "previous_target": previous["target"],
+            "target": target, "result": "verified", "backup": str(backup)})
+        state["switch_history"] = state["switch_history"][-50:]
         return str(backup), False
     try:
         dns_apply_fn(config, previous["target"])
@@ -296,6 +303,13 @@ def switch_with_rollback(config, state, target, health_fn=health_target,
             raise RuntimeError("rollback DNS verification failed")
     except Exception as exc:
         raise RuntimeError("DNS rollback failed; owner intervention required") from exc
+    state.setdefault("switch_history", []).append({
+        "at": now_utc().isoformat(), "previous_target": previous["target"],
+        "target": target, "result": "rolled_back", "backup": str(backup)})
+    state["switch_history"] = state["switch_history"][-50:]
+    state["last_rollback"] = {"at": now_utc().isoformat(),
+                              "restored_target": previous["target"],
+                              "result": "verified"}
     raise RuntimeError("post-switch verification failed; DNS rollback succeeded")
 
 
@@ -314,6 +328,8 @@ def run_policy(config_path, output):
     config = load_json(config_path)
     required_mode = os.getenv("FAILOVER_MODE", config.get("mode", "dry-run"))
     config["mode"] = required_mode
+    config["manual_hold"] = os.getenv(
+        "MANUAL_HOLD", config.get("manual_hold", "none")).strip().lower()
     if required_mode not in ("dry-run", "auto"):
         raise ValueError("mode must be dry-run or auto")
     state_path = Path(config.get("state_file", DEFAULT_STATE))
@@ -346,11 +362,17 @@ def run_policy(config_path, output):
     elif change and desired == "bwg" and not bwg_health["healthy"]:
         blocked = "bwg_healthcheck_failed"
     elif change and config["mode"] == "auto":
-        backup, _ = switch_with_rollback(config, state, desired)
-        state["previous_target"] = state["active_target"]
-        state["active_target"] = desired
-        state["last_switch_at"] = moment.isoformat()
-        applied = True
+        try:
+            backup, _ = switch_with_rollback(config, state, desired)
+            state["previous_target"] = state["active_target"]
+            state["active_target"] = desired
+            state["last_switch_at"] = moment.isoformat()
+            applied = True
+        except Exception:
+            state["decision_reason"] = reason
+            state["updated_at"] = moment.isoformat()
+            atomic_json(state_path, state)
+            raise
     state.update({
         "decision_reason": reason, "mode": config["mode"],
         "manual_hold": config["manual_hold"], "preferred_primary": "nosla",

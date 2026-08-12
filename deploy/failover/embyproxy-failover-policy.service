@@ -17,4 +17,4 @@ ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true
-ReadWritePaths=/var/lib/embyproxy-gsy-sidecar /var/backups/embyproxy-failover-policy /run
+ReadWritePaths=/var/lib/embyproxy-gsy-sidecar /var/backups/embyproxy-failover-policy

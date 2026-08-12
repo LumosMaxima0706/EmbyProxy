@@ -85,6 +85,22 @@ class RollbackTests(unittest.TestCase):
                 policy.switch_with_rollback(cfg, {}, "nosla", failed_health, apply, read,
                                             lambda _c, _t: True)
             self.assertEqual(calls, ["nosla", "bwg"])
+            self.assertEqual(cfg.get("unused"), None)
+
+    def test_counter_reset_is_not_treated_as_zero_usage_delta(self):
+        cfg = {
+            "timezone": "Asia/Shanghai", "reset_grace_hours": 6,
+            "usage_seed_observed_at": "2026-08-12T16:21:00+08:00",
+            "usage_seed_max_age_hours": 24,
+            "traffic": {"nosla": {"reset_day": 21, "seed_cycle_start": "2026-07-21",
+                                    "opening_balance_gb": 484, "quota_gb": 1100}},
+        }
+        state_value = {"counter_baselines": {"nosla": {
+            "cycle_key": "2026-07-21", "counter_bytes": 2000,
+            "captured_at": "2026-08-12T16:21:00+08:00", "seed_aligned": True}}}
+        moment = dt.datetime.fromisoformat("2026-08-12T17:00:00+08:00")
+        sample = policy.traffic_sample(cfg, state_value, "nosla", moment, 1000)
+        self.assertEqual(sample["quality"], "counter_reset")
 
 
 class RunnerTests(unittest.TestCase):
@@ -135,6 +151,42 @@ class RunnerTests(unittest.TestCase):
                                       side_effect=lambda _c, _s, target, _m, _n: samples[target]), \
                     mock.patch.object(policy, "switch_with_rollback") as switch:
                 policy.run_policy(config_path, __import__("io").StringIO())
+                switch.assert_not_called()
+
+    def test_environment_manual_hold_overrides_config(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            cfg = {
+                "mode": "dry-run", "manual_hold": "none",
+                "state_file": str(root / "state.json"), "timezone": "Asia/Shanghai",
+                "health_failures_to_switch": 3, "health_successes_to_return": 3,
+                "health_min_sample_interval_seconds": 240,
+                "cooldown_seconds": 3600, "nosla_switch_threshold_percent": 85,
+                "nosla_return_threshold_percent": 80,
+                "nosla_reset_return_threshold_percent": 15,
+                "usage_seed_observed_at": "2026-08-12T16:21:00+08:00",
+                "usage_seed_source": "owner_provider_panel",
+                "traffic": {
+                    "nosla": {"quota_gb": 1100, "opening_balance_gb": 484,
+                              "reset_day": 21, "seed_cycle_start": "2026-07-21"},
+                    "bwg": {"quota_gb": 2000, "opening_balance_gb": 217,
+                            "reset_day": 7, "seed_cycle_start": "2026-08-07"},
+                },
+            }
+            config_path = root / "config.json"
+            config_path.write_text(__import__("json").dumps(cfg), encoding="utf-8")
+            sample = {"quality": "fresh_estimate", "usage_gb": 1,
+                      "usage_percent": 1, "new_cycle_baseline": False}
+            with mock.patch.dict(__import__("os").environ, {"MANUAL_HOLD": "bwg"}), \
+                    mock.patch.object(policy, "dns_record", return_value={"target": "nosla"}), \
+                    mock.patch.object(policy, "health_target", return_value={"healthy": True}), \
+                    mock.patch.object(policy, "collect_counter", return_value=1), \
+                    mock.patch.object(policy, "traffic_sample", return_value=sample), \
+                    mock.patch.object(policy, "switch_with_rollback") as switch:
+                output = __import__("io").StringIO()
+                policy.run_policy(config_path, output)
+                result = __import__("json").loads(output.getvalue())
+                self.assertEqual(result["desired_target"], "bwg")
                 switch.assert_not_called()
 
     def test_late_seed_alignment_stays_stale(self):

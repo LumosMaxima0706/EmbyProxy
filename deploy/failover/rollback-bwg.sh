@@ -30,6 +30,7 @@ rm -f /etc/systemd/system/embyproxy-failover-policy.service
 rm -f /usr/local/sbin/embyproxy-failover-policy
 rm -f /opt/stream-failover/spaceship_owner_admin.py
 rm -rf /etc/embyproxy-failover-policy
+rm -f /var/lib/embyproxy-gsy-sidecar/failover-state.json
 
 restore /etc/systemd/system/stream-failover.timer
 restore /etc/systemd/system/stream-failover-check.service

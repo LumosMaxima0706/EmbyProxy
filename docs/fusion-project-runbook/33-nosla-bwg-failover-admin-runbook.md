@@ -103,7 +103,11 @@ latest read-only audit because it mutates health history.
   `127.0.0.1:18082`; every other path, including `/s/`, returns 404.
 - The dedicated access format records method plus `$uri`, never request args,
   Authorization, Cookie, or Referer. Rate limiting and no-store/fail-closed
-  headers are enabled. The htpasswd/password files will be mode 0600/root-only.
+  headers are enabled. The generated password file remains root-only 0600. The
+  hashed htpasswd must be readable by the Nginx worker, so it is root-owned,
+  group-readable only by the Nginx service group, and mode 0640; pure root 0600
+  was tested and correctly failed closed with HTTP 500 because workers could
+  not read it.
 - The canary Admin deny remains unchanged. The sidecar listener remains
   loopback-only.
 
