@@ -403,3 +403,46 @@ health, Admin isolation, Nginx, DNS, and services. The BWG rollback restores
 the legacy controller and the exact saved production DNS value; NOSLA rollback
 removes only the restricted meter account/script. Do not delete deployment
 directories or clear the database.
+
+## Owner Admin basic-only apply attempt
+
+- Source commit `0fc2334`, its static artifact, the dedicated Nginx staging
+  file, and the root-only backup/rollback at
+  `/var/backups/embyproxy-owner-admin-basic-only/20260812T143642Z` passed their
+  pre-apply gates.
+- The first live apply was automatically rolled back after the public HTML
+  verification client returned an HTTP/2 stream error. The old release and
+  exact prior configuration were restored; Nginx, loopback-only sidecar,
+  failover timer, and active NOSLA target remained healthy.
+- No production ACME request, DNS change, failover-policy change, media probe,
+  or unrelated ingress change is part of the retry. Public validation will use
+  HTTP/1.1, a root-only temporary response file, and fixed-string checks.
+
+## Owner Admin basic-only final result
+
+- BWG release `0fc2334` is live. Nginx Basic Auth is the only interactive
+  owner-admin login; after it succeeds, the UI receives `basic_proxy` status
+  and does not display or submit the ADMIN_TOKEN login control. ADMIN_TOKEN
+  remains configured for localhost/SSH-tunnel and non-owner-admin contexts.
+- Trust is default-off and requires exact owner-admin Host, loopback TCP peer,
+  Nginx-overwritten header value `1`, and an Admin UI/API path. A public forged
+  header without Basic Auth returned 401. The sidecar remains restricted to
+  `127.0.0.1:18082`.
+- The public matrix returned: unauthenticated owner-admin 401; Basic UI,
+  trusted status, and managed-routes API 200; token login 404; owner-admin
+  `/s/` 404; canary Admin paths 404; production stream Admin exact/prefix UI
+  and API paths 404. Stream health and canary small information checks are 200.
+- The dedicated Nginx block no longer includes shared `proxy_params`, because
+  that produced duplicate Host headers and a pre-handler HTTP 400. It sets one
+  exact Host, clears backend Authorization, supplies the minimum forwarding
+  headers, and overwrites the trusted header.
+- Root-only BWG backup and rollback remain at
+  `/var/backups/embyproxy-owner-admin-basic-only/20260812T143642Z` and its
+  `rollback.sh`. The additional NOSLA media-host isolation backup and rollback
+  are at
+  `/var/backups/embyproxy-owner-admin-basic-only/20260812T152000Z-nosla-stream-isolation`.
+- No production ACME request, DNS mutation, failover-policy mutation, media
+  fetch, route cleanup, or service-host reboot occurred. The policy remains
+  auto on NOSLA with `MANUAL_HOLD=none`, decision
+  `nosla_healthy_below_threshold`; its timer is active/enabled/waiting and the
+  legacy timer is inactive/disabled.

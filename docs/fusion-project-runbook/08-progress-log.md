@@ -634,3 +634,51 @@ the retry will repeat bundle, path, ff-only, feature-only, and cleanup checks.
 - Local targeted/full Go tests, vet, shell syntax, and diff checks pass.
 - Runtime apply remains gated on commit, static build, staged binary/config,
   Nginx syntax, rollback syntax, and localhost fail-closed checks.
+
+### First guarded live apply and automatic rollback
+
+- Commit `0fc2334` was built as a static Linux artifact and passed isolated
+  trusted-proxy tests plus remote Nginx syntax validation.
+- The first guarded live apply started the new release and reloaded Nginx
+  successfully, but the public verification client reported an HTTP/2 stream
+  error while fetching the Admin page. The apply error trap restored release
+  `e0f2bb6`, the prior sidecar EnvironmentFile, and the prior owner-admin
+  Nginx configuration.
+- Post-rollback checks passed: sidecar and Nginx active, `NRestarts=0`, listener
+  restricted to `127.0.0.1:18082`, failover timer active, legacy timer
+  inactive, and active target NOSLA.
+- No application panic or fatal event was found. The retry verification will
+  force HTTP/1.1 and store the HTML in a root-only temporary file instead of a
+  shell variable, so a verification transport error cannot be confused with
+  an application authentication failure.
+
+### Owner Admin Basic-only correction deployed
+
+- Release `0fc2334` is live on BWG. The sidecar remains active/enabled on
+  `127.0.0.1:18082` with `NRestarts=0`.
+- The guarded retry exposed and resolved two deployment-script defects before
+  final verification: an unsupported version flag and an immediate listener
+  check that raced service startup. Both attempts invoked the verified
+  rollback and restored the old release/configuration before retry.
+- Public Basic Auth initially reached Nginx but received HTTP 400 because the
+  dedicated location inherited one `Host` header from `proxy_params` and then
+  supplied the exact owner-admin Host again. The dedicated owner-admin block
+  now sets one explicit Host and only the required forwarding headers.
+- Final owner-admin matrix passes: unauthenticated 401, Basic-authenticated UI
+  200 with basic-only marker, trusted auth status and managed-route API 200,
+  token-login endpoint 404, and `/s/` 404. A forged trusted header without
+  Basic Auth remains 401.
+- The isolation matrix found an older NOSLA stream include that still exposed
+  Admin paths through the production media hostname. After a separate NOSLA
+  backup, staging `nginx -t`, and rollback check, only that include was changed
+  so `/admin`, `/admin/`, `/api/admin`, and `/api/admin/*` return 404; `/s/`,
+  stream health, no-cache behavior, DNS, and failover policy were unchanged.
+- Canary Admin remains 404 and its small public information endpoint remains
+  HTTP 200. Production stream health remains HTTP 200. The policy remains
+  auto, active NOSLA, `MANUAL_HOLD=none`, reason
+  `nosla_healthy_below_threshold`; the new timer is active/enabled/waiting with
+  a finite next trigger, and the legacy timer is inactive/disabled.
+- Final local verification passed targeted Admin/config tests, full
+  `go test ./...`, `go vet ./...`, all new shell `bash -n` checks, and
+  `git diff --check`. The temporary Go toolchain was extracted under `/tmp`
+  without a system package installation.

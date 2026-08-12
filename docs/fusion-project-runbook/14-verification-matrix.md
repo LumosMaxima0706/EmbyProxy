@@ -414,4 +414,17 @@ started.
 | Trusted proxy unit matrix | PASS | Loopback/exact Host/header/path required; external, wrong Host/value, missing header, and disabled mode fail closed |
 | UI/auth behavior | PASS LOCALLY | `basic_proxy` status, token login 404, first-render token/2FA controls hidden |
 | Regression | PASS LOCALLY | Targeted/full Go tests and vet; existing token/session tests unchanged |
-| Runtime | PENDING | Commit/build/staging/Nginx/apply/public matrix not yet run |
+| Runtime | PASS | Release `0fc2334`; outer 401, Basic UI/status/API 200, token login and owner media path 404; loopback listener, `NRestarts=0`, timer/NOSLA policy unchanged |
+
+First guarded runtime attempt: ROLLED BACK SAFELY. The release and Nginx reload
+initially succeeded, but an HTTP/2 verification-client error triggered the
+rollback trap. The retry must use HTTP/1.1 and a root-only temporary HTML file;
+all runtime rows remain pending until that complete matrix passes.
+
+The complete retry matrix subsequently passed. The dedicated owner-admin
+locations now emit one Host header, and the production stream/canary media
+hosts return 404 for Admin UI/API paths. Small stream and canary health checks
+remain HTTP 200; no media object was requested.
+
+Final local regression: targeted `internal/config` and `internal/admin` tests,
+full `go test ./...`, `go vet ./...`, shell syntax, and `git diff --check` PASS.
