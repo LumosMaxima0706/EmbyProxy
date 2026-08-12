@@ -1,6 +1,6 @@
 # Public Cutover Discovery
 
-Status: PHASE 1 COMPLETE - OWNER DECISION REQUIRED
+Status: PHASE 1 COMPLETE - OWNER SCOPE ACCEPTED, HOSTNAME PENDING
 
 Discovery date: 2026-08-12 (Asia/Shanghai)
 Branch/ref: `feature/failover-phase2-local` / `2953dabe`
@@ -72,3 +72,21 @@ Phase 1 cannot safely advance to backup or cutover until the owner supplies:
 
 Until these are answered, public entry, DNS, Nginx, and rathole remain
 unchanged.
+
+## Owner decision received
+
+The owner selected a new dedicated BWG-only canary server block. Existing
+`staging-stream`, `stream`, and `stream-b` entries must remain byte-for-byte
+unchanged. Public exposure is media-only; `/admin`, `/admin/`, `/api/admin`,
+and `/api/admin/` must return 404 publicly. Admin access remains through the
+loopback SSH tunnel.
+
+The app exposes managed media routes below `/s/`. A dedicated Nginx server can
+therefore proxy only `location ^~ /s/` to `127.0.0.1:18082`, explicitly deny the
+admin paths, and return 404 for every other path. App changes are not required
+for this separation.
+
+BWG has an existing DNS automation implementation and mode-0600 provider
+configuration. No credential was read into the runbook or printed. The exact
+new canary hostname remains an owner business-domain decision and is the only
+remaining prerequisite before generating an exact Nginx/DNS change.

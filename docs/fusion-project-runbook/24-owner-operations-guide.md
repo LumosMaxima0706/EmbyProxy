@@ -54,3 +54,7 @@ hostname/path, decide whether Admin UI/API remain private (recommended),
 authorize DNS provider operations, and choose BWG-only canary versus
 NOSLA-primary failover. Existing Nginx/rathole topology remains unchanged until
 those decisions are recorded in `28-29`.
+
+The owner has approved a new BWG-only canary exposing `/s/` only. Admin UI/API
+remain private through the documented SSH tunnel. Existing production and
+staging stream entries remain untouched. Exact canary hostname is pending.

@@ -87,9 +87,9 @@
 
 - [x] Read-only Nginx/rathole/systemd/public-entry discovery recorded in `28`.
 - [x] Execution, healthcheck, rollback, and owner decision gates recorded in `29-32`.
-- [ ] Exact public hostname/path and Admin exposure policy approved by owner.
-- [ ] DNS provider/apply authorization and failover scope approved by owner.
-- [ ] Pre-cutover backups created and verified.
+- [ ] Exact public hostname approved by owner; `/s/` and Admin isolation are approved.
+- [x] Existing secure DNS automation identified; record-specific dry-run remains pending.
+- [x] Pre-cutover backups created and verified.
 - [ ] Nginx staging dry-run and localhost validation passed.
 - [ ] Public cutover, DNS, and any rathole change executed and verified.
 - [ ] Public rollback drill/abort threshold observed with evidence.

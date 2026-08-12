@@ -89,4 +89,6 @@ pre-merge hash assertion failure and successful cleanup/retry are recorded in
 | Step ID | Phase | Task | Status | Depends on | Files expected to change | Validation result | Next action |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | PUB-001 | Public cutover | Discover live Nginx/rathole/DNS entry topology | DONE | DAY2-001 | `28`, `08`, `13`, `14` | PASS read-only; services active and `nginx -t` PASS; no mutation | Owner selects exact hostname/path and scope |
-| PUB-002 | Public cutover | Write execution, healthcheck, and rollback plan | BLOCKED | PUB-001 | `29-32`, `12`, `15`, `24`, `27` | Plan complete; backup/dry-run/cutover not started | Wait for owner hostname, exposure, DNS, and failover decisions |
+| PUB-002 | Public cutover | Write execution, healthcheck, and rollback plan | DONE | PUB-001 | `29-32`, `12`, `15`, `24`, `27` | Owner approved new BWG-only `/s/` canary with Admin denied and existing entries untouched | Create verified backup |
+| PUB-003 | Public cutover | Create verified pre-cutover backup | DONE | PUB-002 | BWG backup root, `30`, `32` | 14 files present; all 12 checksum entries PASS | Obtain exact canary hostname |
+| PUB-004 | Public cutover | Render and dry-run dedicated canary entry | BLOCKED | PUB-003, exact hostname | New Nginx file only | Not started; business hostname required | Owner supplies exact canary hostname |

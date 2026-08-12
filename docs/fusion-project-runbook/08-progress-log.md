@@ -501,3 +501,16 @@ The publish-result record retry used a Git-resolved full target hash and passed 
   `127.0.0.1:18082`.
 - Next safe action: record those decisions, then create and verify timestamped
   backups before any dry-run or public cutover mutation.
+
+## 2026-08-12 | Public cutover | Owner scope and Phase 3 backup
+
+- Owner approved a new BWG-only hostname, `/s/` media-only exposure, explicit
+  public Admin UI/API denial, no existing stream/staging changes, no rathole,
+  and no NOSLA action.
+- Phase 3 backup completed at
+  `/root/backups/embyproxy-public-cutover/20260812T014601Z`; all checksum entries
+  passed.
+- Existing secure DNS automation/config metadata was found without reading or
+  outputting credentials.
+- Phase 4 is blocked on the exact canary hostname. No Nginx/DNS/service/traffic
+  mutation has occurred.

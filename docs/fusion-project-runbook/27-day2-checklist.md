@@ -46,3 +46,7 @@ Status: DONE - OWNER SELF-USE READY
 - [ ] Complete staging Nginx syntax validation and localhost smoke before apply.
 - [ ] Apply one smallest public change at a time and verify immediately.
 - [ ] Keep the exact backup path and rollback command in the execution log.
+
+Current handoff: backup and checksum validation are complete. The next gate is
+the exact dedicated canary hostname; no DNS or Nginx apply is allowed before it
+is recorded.

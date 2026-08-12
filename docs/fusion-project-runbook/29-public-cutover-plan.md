@@ -1,6 +1,6 @@
 # Public Cutover Plan
 
-Status: PHASE 2 PLANNED - BLOCKED ON OWNER DECISIONS
+Status: PHASE 2 COMPLETE - BWG-ONLY CANARY, HOSTNAME PENDING
 
 ## Preconditions
 
@@ -67,3 +67,9 @@ Owner approval is required before: selecting the hostname/path, deciding admin
 exposure, authorizing DNS provider access/apply, choosing BWG-only versus
 NOSLA-primary failover, changing an existing Nginx server block, changing
 rathole, or accepting a public traffic canary. No such action has been taken.
+
+Owner-approved scope is now: new hostname, new Nginx file only, `/s/` public,
+all Admin UI/API paths denied, BWG-only canary, no rathole change, no NOSLA, and
+no modification to existing production/staging stream entries. The exact
+hostname is still required before the staged server block and DNS record can be
+rendered.

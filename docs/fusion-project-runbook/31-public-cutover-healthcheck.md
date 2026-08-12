@@ -10,3 +10,7 @@ in this order: service/listener, Nginx syntax, TLS/HTTP reachability, admin/API
 isolation, authenticated owner CRUD, bounded owner upstream smoke, fail-closed,
 fallback, DNS convergence, and redacted log scans. A failed critical check
 aborts the canary and invokes `32-public-cutover-rollback.md`.
+
+The approved public surface is only `/s/`. The public checker must assert 404
+for `/`, `/admin`, `/admin/`, `/api/admin`, and `/api/admin/` before any proxy
+smoke can pass the gate.

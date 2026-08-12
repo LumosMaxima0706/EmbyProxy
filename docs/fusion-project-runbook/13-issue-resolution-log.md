@@ -148,3 +148,9 @@ temporary artifact cleanup.
 
 Phase 1/2 produced no runtime issue. No backup, dry-run, DNS apply, Nginx
 reload, rathole reload, or public traffic change occurred.
+
+Owner resolved the exposure and traffic-scope decisions: dedicated BWG-only
+canary, `/s/` only, Admin UI/API denied, no existing entry changes, no rathole,
+and no NOSLA. `PUB-OWNER-001` remains blocked only on the exact hostname;
+`PUB-OWNER-002` is resolved by the existing secure mode-0600 BWG DNS provider
+configuration, subject to a safe record-specific dry-run after hostname input.

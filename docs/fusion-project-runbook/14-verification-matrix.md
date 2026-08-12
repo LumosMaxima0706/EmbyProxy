@@ -333,3 +333,11 @@ and temporary cleanup all PASS.
 
 No public reachability or DNS convergence result exists because cutover has not
 started.
+
+- Phase 3 backup: PASS at the recorded timestamped path; checksum verification
+  passed for every manifest entry.
+- Route separation review: PASS as a plan. A new server block can expose only
+  `/s/` while denying all Admin UI/API paths and all other locations.
+- DNS automation metadata: existing secure provider configuration found; no
+  secret content read or recorded.
+- Phase 4 dry-run: BLOCKED pending exact canary hostname.
