@@ -32,3 +32,16 @@ smoke can pass the gate.
 The shared Nginx error log contains unrelated public TLS handshake noise and
 other upstream-close entries. Canary-specific filtering found no canary error;
 sidecar and canary access scans contained no sensitive marker.
+
+## Owner route validation
+
+| Check | Result |
+| --- | --- |
+| Owner route `v1` public information path | PASS; HTTP 200, TLS verified |
+| Public `/admin` | PASS; 404 |
+| Public `/api/admin` and nested status path | PASS; 404 |
+| Sidecar/Nginx/rathole | PASS; active, zero restarts, Nginx syntax valid |
+| Sidecar listener | PASS; loopback present, public bind absent |
+| Bounded secret/severe log scan | PASS; zero markers |
+
+This was read-only validation of an owner-created route. The route was retained.

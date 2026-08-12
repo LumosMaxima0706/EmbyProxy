@@ -71,3 +71,17 @@ bundle path was not the Windows path passed to SCP. BWG staging and origin
 remained unchanged and clean; no temporary ref/bundle existed and no merge,
 push, service, or runtime action occurred. The retry uses a workspace-visible
 bundle path and repeats every bridge check.
+
+## Owner managed-route public validation
+
+The owner created public managed route `v1` through the private Admin UI. A
+read-only public request to `/s/v1/System/Info/Public` returned HTTP 200 with
+valid TLS. Public `/admin`, `/api/admin`, and `/api/admin/status` each returned
+404. No response body, upstream target, credential, cookie, query, UUID, or
+subscription value was recorded.
+
+Nginx, rathole, and sidecar remained active with `NRestarts=0`; Nginx syntax
+passed and the sidecar remained loopback-only. Bounded sidecar and
+canary-specific Nginx log scans found zero secret/token/cookie/password/private
+key/panic/fatal markers and zero sidecar error markers. No configuration,
+route, DNS, service, Nginx, or rathole mutation was performed by this check.

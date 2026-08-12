@@ -529,3 +529,13 @@ The publish-result record retry used a Git-resolved full target hash and passed 
 The first runbook publish bundle transfer stopped before SCP due to a WSL versus
 Windows local-path mismatch. BWG staging/origin remained unchanged and clean;
 the retry will repeat bundle, path, ff-only, feature-only, and cleanup checks.
+
+## 2026-08-12 | Owner managed route | Public validation
+
+- Owner-created route `v1` returned HTTP 200 on the public information path
+  with valid TLS.
+- Public Admin UI/API checks returned 404.
+- Nginx/rathole/sidecar, restart counts, loopback listener, Nginx syntax, and
+  bounded redaction/severity log scans passed.
+- The validation was read-only and retained the owner route; no ingress, DNS,
+  service, route, or configuration mutation occurred.

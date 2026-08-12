@@ -93,3 +93,5 @@
 - [x] Nginx staging dry-run and localhost validation passed.
 - [x] BWG-only canary DNS/Nginx/TLS cutover executed and verified; rathole unchanged.
 - [x] Rollback threshold and exact rollback script recorded; no failure required execution.
+- [x] Owner-created `v1` route returns HTTP 200 publicly with valid TLS while Admin UI/API remain 404.
+- [x] Post-route service/listener and bounded secret/severe log scans pass.

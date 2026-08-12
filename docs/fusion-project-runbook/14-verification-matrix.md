@@ -355,3 +355,12 @@ started.
 - Existing production/staging/rathole/app files unchanged: PASS.
 - Temporary route cleanup and canary-specific log redaction: PASS.
 - Rollback script syntax/checksum: PASS; execution not required.
+
+## Owner-created route verification
+
+- Public `v1` information path: HTTP 200 with valid TLS.
+- Public Admin UI/API isolation: 404 for all requested paths.
+- Sidecar/Nginx/rathole state, restart count, listener boundary, and Nginx
+  syntax: PASS.
+- Bounded secret/severe/error marker scans: zero.
+- Validation-only scope: no route/config/service/DNS/ingress mutation.
