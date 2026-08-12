@@ -164,3 +164,5 @@ configuration, subject to a safe record-specific dry-run after hostname input.
 | PUB-DNS-001 | PUB-005 | Restricted DNS CLI had no arbitrary canary command | Adapter intentionally exposes only fixed project records | Used the same root-only module for one exact record, retained private snapshots, and verified public DNS | DONE |
 
 No production-impacting issue occurred and rollback was not required.
+
+| PUB-PUBLISH-001 | Canary runbook publish bridge attempt 1 | Local bundle verification passed but SCP could not find the Windows-side source path | Bundle was created in WSL `/tmp` while SCP received an unrelated Windows temp path | BWG staging/origin remained at the old ref, clean, with no temporary ref or bundle; retry uses a workspace-visible bundle path | DONE |

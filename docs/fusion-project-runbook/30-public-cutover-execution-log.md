@@ -63,3 +63,11 @@ and traffic remain unchanged.
 
 Rollback was not triggered because all critical checks passed. Its exact
 script was syntax-checked and hashed in the protected backup.
+
+## Runbook publish attempt
+
+The first bundle transfer attempt stopped before SCP because the verified WSL
+bundle path was not the Windows path passed to SCP. BWG staging and origin
+remained unchanged and clean; no temporary ref/bundle existed and no merge,
+push, service, or runtime action occurred. The retry uses a workspace-visible
+bundle path and repeats every bridge check.

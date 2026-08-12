@@ -525,3 +525,7 @@ The publish-result record retry used a Git-resolved full target hash and passed 
 - Existing staging/stream/stream-b and other production entries are unchanged.
 - Probe/payload issues were diagnosed without widening scope; rollback was not
   required. Exact rollback script and verified backup remain available.
+
+The first runbook publish bundle transfer stopped before SCP due to a WSL versus
+Windows local-path mismatch. BWG staging/origin remained unchanged and clean;
+the retry will repeat bundle, path, ff-only, feature-only, and cleanup checks.
