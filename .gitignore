@@ -25,3 +25,5 @@ CLAUDE.md
 !/docs/fusion-project-runbook/
 /docs/fusion-project-runbook/*
 !/docs/fusion-project-runbook/*.md
+__pycache__/
+*.py[cod]
