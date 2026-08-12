@@ -46,3 +46,11 @@ firewall configuration for self-use; public cutover is a separate approved gate.
 
 Day-2 validation confirmed this access path, service state, listener boundary,
 health smoke, and rollback readiness.
+
+## Public cutover gate
+
+Public cutover is planned but blocked. The owner must select the public
+hostname/path, decide whether Admin UI/API remain private (recommended),
+authorize DNS provider operations, and choose BWG-only canary versus
+NOSLA-primary failover. Existing Nginx/rathole topology remains unchanged until
+those decisions are recorded in `28-29`.

@@ -319,3 +319,17 @@ with cleanup and sidecar health under `POSTDEPLOY-ISSUE-002`.
 Publish-result docs retry at `a576863`: bundle verify, dynamic target equality,
 runbook-only path check, ff-only merge, feature-only push, remote verification,
 and temporary cleanup all PASS.
+
+## Public cutover discovery and planning
+
+| Verification | Current result | Evidence/boundary |
+| --- | --- | --- |
+| Nginx service/config | PASS read-only | Active/enabled; `nginx -t` successful; live files inventoried |
+| Rathole service/config | PASS read-only | Active/enabled; unit/config path inventoried; no change |
+| Sidecar boundary | PASS baseline | Active/enabled, `NRestarts=0`, status 0, listener `127.0.0.1:18082` |
+| Public topology | RECORDED | Existing stream/admin/staging/failover blocks and upstream ports documented |
+| Cutover plan/rollback | COMPLETE AS PLAN | `29-32` added; exact backup path awaits Phase 3 |
+| Owner decisions | BLOCKING | Hostname/path, Admin exposure, DNS authorization, failover scope pending |
+
+No public reachability or DNS convergence result exists because cutover has not
+started.

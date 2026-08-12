@@ -138,3 +138,13 @@ runbook-only path validation, ff-only feature update, remote verification, and
 temporary artifact cleanup.
 
 | DAY2-PUBLISH-ISSUE-001 | Day-2 publish-result docs bridge | Bundle verify/fetch passed, then the target equality assertion failed before merge/push | Retry script contained an incorrect manually entered full hash for short commit `32746f7` | Final publish-result docs briefly remained local; BWG/origin stayed safely at `3419686` | No runtime impact | Clean temporary ref/bundles, resolve the full hash from Git instead of transcribing it, and rerun all bridge checks | Cleanup passed; dynamic-hash retry passed bundle/path/ff-only/push/ref/cleanup checks and published `a576863` | DONE | `a576863` |
+
+## Public cutover discovery
+
+| Issue ID | Step | Symptom/uncertainty | Impact | Required action | Status |
+| --- | --- | --- | --- | --- | --- |
+| PUB-OWNER-001 | PUB-002 | Exact public hostname/path and Admin exposure policy are unspecified; live stream locations already serve other upstreams | Guessing could expose the wrong service or Admin UI | Owner selects dedicated route/hostname and media-only versus Admin exposure | BLOCKED |
+| PUB-OWNER-002 | PUB-002 | DNS provider/apply authorization and BWG-only versus NOSLA-primary scope are unavailable | DNS/failover mutation cannot be authorized safely | Provide provider method/authorization and scope without posting secrets | BLOCKED |
+
+Phase 1/2 produced no runtime issue. No backup, dry-run, DNS apply, Nginx
+reload, rathole reload, or public traffic change occurred.

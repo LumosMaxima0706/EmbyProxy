@@ -82,3 +82,14 @@
 - [x] Non-destructive backup/restore drill verifies manifest and scoped rollback.
 - [x] Day-2 checklist covers use, route changes, incidents, rollback, and future cutover.
 - [x] `DAY2-001` closed after current BWG read-only checks passed.
+
+## Public cutover planning
+
+- [x] Read-only Nginx/rathole/systemd/public-entry discovery recorded in `28`.
+- [x] Execution, healthcheck, rollback, and owner decision gates recorded in `29-32`.
+- [ ] Exact public hostname/path and Admin exposure policy approved by owner.
+- [ ] DNS provider/apply authorization and failover scope approved by owner.
+- [ ] Pre-cutover backups created and verified.
+- [ ] Nginx staging dry-run and localhost validation passed.
+- [ ] Public cutover, DNS, and any rathole change executed and verified.
+- [ ] Public rollback drill/abort threshold observed with evidence.

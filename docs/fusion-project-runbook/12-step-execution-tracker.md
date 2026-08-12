@@ -83,3 +83,10 @@ ff-only staging update, feature-only push, remote verification, and cleanup pass
 The subsequent publish-result docs retry is DONE at `a576863`; its initial
 pre-merge hash assertion failure and successful cleanup/retry are recorded in
 `DAY2-PUBLISH-ISSUE-001`.
+
+## Public traffic cutover
+
+| Step ID | Phase | Task | Status | Depends on | Files expected to change | Validation result | Next action |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| PUB-001 | Public cutover | Discover live Nginx/rathole/DNS entry topology | DONE | DAY2-001 | `28`, `08`, `13`, `14` | PASS read-only; services active and `nginx -t` PASS; no mutation | Owner selects exact hostname/path and scope |
+| PUB-002 | Public cutover | Write execution, healthcheck, and rollback plan | BLOCKED | PUB-001 | `29-32`, `12`, `15`, `24`, `27` | Plan complete; backup/dry-run/cutover not started | Wait for owner hostname, exposure, DNS, and failover decisions |

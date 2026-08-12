@@ -488,3 +488,16 @@ Day-2 runbook start and closeout evidence commits are `412987e` and `1d285e9`.
 The publish-result record retry used a Git-resolved full target hash and passed at
 `a576863`. The failed pre-merge attempt and cleanup are recorded as
 `DAY2-PUBLISH-ISSUE-001`; no unsafe push or runtime action occurred.
+
+## 2026-08-12 | Public cutover | Discovery and plan
+
+- Phase 1 read-only BWG discovery completed: Nginx/rathole/systemd are active,
+  `nginx -t` passes, and no DNS, ingress, service, database, or traffic mutation
+  occurred.
+- Phase 2 execution, healthcheck, and rollback plans are in `28-32`.
+- The exact public hostname/path, Admin exposure policy, DNS authorization, and
+  BWG-only versus NOSLA-primary scope are owner decisions. Existing stream
+  locations route to other local services; the sidecar remains on
+  `127.0.0.1:18082`.
+- Next safe action: record those decisions, then create and verify timestamped
+  backups before any dry-run or public cutover mutation.
