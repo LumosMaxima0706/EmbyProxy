@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -67,6 +68,7 @@ type trafficCaptureScan struct {
 
 const trafficCaptureClearWriterBuffer = 256 * 1024
 const telegramServerRemarkMaxRunes = 80
+const ownerAdminAuthenticatedHeader = "X-Owner-Admin-Authenticated"
 
 type Handler struct {
 	cfg             config.Config
@@ -128,7 +130,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": "INTERNAL_ERROR"})
 		return
 	}
-	res := h.checker.Check(r)
+	res := h.checkAdminRequest(r)
 	if !res.OK {
 		writeJSON(w, res.Status, map[string]any{"error": res.Error})
 		return
@@ -154,13 +156,31 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) serveIndex(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	http.ServeContent(w, r, "index.html", time.Time{}, strings.NewReader(indexHTML))
+	html := indexHTML
+	if h.trustedOwnerAdminRequest(r) {
+		html = strings.Replace(html, "<body>", `<body data-owner-admin-auth="basic_only">`, 1)
+	}
+	http.ServeContent(w, r, "index.html", time.Time{}, strings.NewReader(html))
 }
 
 func (h *Handler) handleAuth(w http.ResponseWriter, r *http.Request, path string) {
 	capture.Suppress(r)
 	capture.SetMeta(r, map[string]any{"mode": "admin", "stage": "admin-auth", "adminAction": strings.TrimPrefix(path, "/admin/")})
 	w.Header().Set("Cache-Control", "no-store")
+	if h.trustedOwnerAdminRequest(r) {
+		switch {
+		case r.Method == http.MethodGet && path == "/admin/auth/status":
+			writeJSON(w, http.StatusOK, map[string]any{
+				"ok": true, "authenticated": true, "authMethod": "basic_proxy",
+			})
+		case r.Method == http.MethodPost && path == "/admin/auth/logout":
+			auth.ClearSessionCookie(w, r)
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "authMethod": "basic_proxy"})
+		default:
+			http.NotFound(w, r)
+		}
+		return
+	}
 	if r.Method == http.MethodPost && !validAdminOrigin(r) {
 		writeJSON(w, http.StatusForbidden, map[string]any{"ok": false, "error": auth.ErrorCrossSiteRequest})
 		return
@@ -195,7 +215,7 @@ func (h *Handler) handleAuth(w http.ResponseWriter, r *http.Request, path string
 		auth.ClearSessionCookie(w, r)
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	case r.Method == http.MethodGet && path == "/admin/auth/status":
-		res := h.checker.Check(r)
+		res := h.checkAdminRequest(r)
 		if !res.OK {
 			writeJSON(w, res.Status, map[string]any{"ok": false, "authenticated": false, "error": res.Error})
 			return
@@ -322,6 +342,50 @@ func validAdminOrigin(r *http.Request) bool {
 	return strings.EqualFold(u.Hostname(), requestAuthority.Hostname())
 }
 
+func (h *Handler) checkAdminRequest(r *http.Request) auth.Result {
+	if h.trustedOwnerAdminRequest(r) {
+		return auth.Result{OK: true, UID: "admin", Role: "admin", AuthMethod: "basic_proxy"}
+	}
+	if h == nil || h.checker == nil {
+		return auth.Result{Status: http.StatusInternalServerError, Error: "INTERNAL_ERROR"}
+	}
+	return h.checker.Check(r)
+}
+
+func (h *Handler) checkAdminRequestWithStateGuard(r *http.Request) (auth.Result, func()) {
+	if h.trustedOwnerAdminRequest(r) {
+		return auth.Result{OK: true, UID: "admin", Role: "admin", AuthMethod: "basic_proxy"}, noOpAdminAuthRelease
+	}
+	if h == nil || h.checker == nil {
+		return auth.Result{Status: http.StatusInternalServerError, Error: "INTERNAL_ERROR"}, noOpAdminAuthRelease
+	}
+	return h.checker.CheckWithStateGuard(r)
+}
+
+func noOpAdminAuthRelease() {}
+
+func (h *Handler) trustedOwnerAdminRequest(r *http.Request) bool {
+	if h == nil || r == nil || h.cfg.OwnerAdminAuthMode != "basic_only" {
+		return false
+	}
+	host := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(r.Host), "."))
+	configuredHost := strings.TrimSuffix(h.cfg.OwnerAdminHost, ".")
+	if configuredHost == "" || host != configuredHost {
+		return false
+	}
+	peer, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
+	peerIP := net.ParseIP(peer)
+	if err != nil || peerIP == nil || !peerIP.IsLoopback() {
+		return false
+	}
+	if r.Header.Get(ownerAdminAuthenticatedHeader) != "1" {
+		return false
+	}
+	path := strings.TrimSuffix(r.URL.Path, "/")
+	return path == "/admin" || strings.HasPrefix(path, "/admin/") ||
+		path == "/api/admin" || strings.HasPrefix(path, "/api/admin/")
+}
+
 func (h *Handler) logSecurityEvent(event, message string, r *http.Request) {
 	if h == nil || h.log == nil {
 		return
@@ -384,17 +448,17 @@ func (h *Handler) streamLogs(w http.ResponseWriter, r *http.Request, initialAuth
 }
 
 func (h *Handler) logStreamAuthorizationValid(r *http.Request, initial auth.Result) bool {
-	if h == nil || h.checker == nil || !initial.OK {
+	if h == nil || !initial.OK {
 		return false
 	}
-	current := h.checker.Check(r)
+	current := h.checkAdminRequest(r)
 	if !current.OK || current.AuthMethod != initial.AuthMethod {
 		return false
 	}
 	if initial.AuthMethod == "session" {
 		return initial.SessionKey != "" && current.SessionKey == initial.SessionKey
 	}
-	return initial.AuthMethod == "token"
+	return initial.AuthMethod == "token" || initial.AuthMethod == "basic_proxy"
 }
 
 func (h *Handler) serveAdminTokenError(w http.ResponseWriter, errText string) {
@@ -441,7 +505,7 @@ func (h *Handler) handleAuthorizedAPI(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	res, releaseAuthState := h.checker.CheckWithStateGuard(r)
+	res, releaseAuthState := h.checkAdminRequestWithStateGuard(r)
 	if !res.OK {
 		releaseAuthState()
 		writeJSON(w, res.Status, map[string]any{"error": res.Error})

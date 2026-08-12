@@ -2,6 +2,29 @@
 
 Status: PRODUCTION AUTO FAILOVER AND SECURE PUBLIC ADMIN VERIFIED
 
+## Owner Admin Basic-only correction (2026-08-12)
+
+- Owner reported a browser login loop caused by Nginx Basic Auth followed by
+  the application ADMIN_TOKEN/session flow. The failover controller and media
+  paths were healthy and are outside this correction.
+- Owner authorized Nginx Basic Auth as the only interactive authentication for
+  `owner-admin.149077530.xyz`. ADMIN_TOKEN remains configured for localhost,
+  SSH-tunnel, and all non-owner-admin contexts.
+- Backup root, verified before source or runtime changes:
+  `/var/backups/embyproxy-owner-admin-basic-only/20260812T143642Z`.
+- The bypass is default-off and requires all of: mode `basic_only`, exact
+  owner-admin Host, TCP peer loopback, trusted header value `1`, and an
+  `/admin` or `/api/admin` path. Nginx clears the client Authorization header
+  and overwrites the trusted header only after Basic Auth succeeds. Sidecar
+  remains loopback-only.
+- In basic-only mode the token-login and 2FA mutation endpoints return 404,
+  auth status reports `basic_proxy`, and the embedded UI hides the token login,
+  app logout, and 2FA controls from first render. Other hosts retain the
+  existing token/session behavior.
+- Rollback restores the saved release, root-only environment, systemd unit,
+  and owner-admin Nginx file, then restarts only the sidecar and reloads Nginx
+  after `nginx -t`. It does not change DNS, ACME, failover policy, or routes.
+
 ## Final live state (2026-08-12)
 
 - Policy mode: `auto`; manual hold: `none`; preferred/active target: NOSLA;
@@ -181,6 +204,10 @@ latest read-only audit because it mutates health history.
   in the bounded container audit. No media request was made.
 
 ## Secure public Admin design
+
+The two-layer design below is historical and was superseded by the
+owner-authorized Basic-only correction above after it caused an interactive
+login loop.
 
 - Dedicated hostname: `owner-admin.149077530.xyz`; dedicated exact-allowlist A
   record to BWG with TTL 60.

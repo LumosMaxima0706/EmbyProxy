@@ -405,3 +405,13 @@ started.
 | Config integrity | PASS | Pre/post scoped BWG Nginx hashes unchanged except separately authorized new Admin file already in baseline |
 | Log safety | PASS | Bounded policy/sidecar/Nginx logs contain no severe or credential markers; Admin access format omits args/headers/cookies |
 | ACME issuance/renewal | BLOCKED/DEFERRED | `blocked_by_acme_rate_limit`; action `wait_and_retry_later`. No further production call; existing certificate remains valid and live Admin remains safely isolated |
+
+## Owner Admin Basic-only correction
+
+| Verification | Result | Evidence/boundary |
+| --- | --- | --- |
+| Backup | PASS | Root-only source/config/unit/Nginx/release snapshot with verified checksums |
+| Trusted proxy unit matrix | PASS | Loopback/exact Host/header/path required; external, wrong Host/value, missing header, and disabled mode fail closed |
+| UI/auth behavior | PASS LOCALLY | `basic_proxy` status, token login 404, first-render token/2FA controls hidden |
+| Regression | PASS LOCALLY | Targeted/full Go tests and vet; existing token/session tests unchanged |
+| Runtime | PENDING | Commit/build/staging/Nginx/apply/public matrix not yet run |

@@ -135,6 +135,96 @@ func TestBrowserSessionAuthenticatesAPIAdminAndKeepsOriginGuard(t *testing.T) {
 	}
 }
 
+func TestOwnerAdminBasicOnlyRequiresExactTrustedProxyContext(t *testing.T) {
+	cfg := config.Config{
+		AdminToken:         "strong-admin-token",
+		OwnerAdminAuthMode: "basic_only",
+		OwnerAdminHost:     "owner-admin.example",
+	}
+	handler := newAuthTestHandler(t, cfg)
+
+	tests := []struct {
+		name       string
+		remoteAddr string
+		host       string
+		header     string
+		want       int
+	}{
+		{name: "trusted loopback proxy", remoteAddr: "127.0.0.1:41234", host: "owner-admin.example", header: "1", want: http.StatusOK},
+		{name: "ipv6 loopback proxy", remoteAddr: "[::1]:41234", host: "owner-admin.example", header: "1", want: http.StatusOK},
+		{name: "external header spoof", remoteAddr: "192.0.2.10:41234", host: "owner-admin.example", header: "1", want: http.StatusUnauthorized},
+		{name: "wrong host", remoteAddr: "127.0.0.1:41234", host: "canary.example", header: "1", want: http.StatusUnauthorized},
+		{name: "missing trusted header", remoteAddr: "127.0.0.1:41234", host: "owner-admin.example", want: http.StatusUnauthorized},
+		{name: "wrong trusted header", remoteAddr: "127.0.0.1:41234", host: "owner-admin.example", header: "true", want: http.StatusUnauthorized},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "http://sidecar/api/admin/managed-routes", nil)
+			req.RemoteAddr = tt.remoteAddr
+			req.Host = tt.host
+			req.Header.Set(ownerAdminAuthenticatedHeader, tt.header)
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != tt.want {
+				t.Fatalf("status=%d want=%d body=%s", rec.Code, tt.want, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestOwnerAdminBasicOnlyStatusAndUI(t *testing.T) {
+	cfg := config.Config{
+		AdminToken:         "strong-admin-token",
+		OwnerAdminAuthMode: "basic_only",
+		OwnerAdminHost:     "owner-admin.example",
+	}
+	handler := newAuthTestHandler(t, cfg)
+
+	request := func(path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "http://sidecar"+path, nil)
+		req.RemoteAddr = "127.0.0.1:41234"
+		req.Host = "owner-admin.example"
+		req.Header.Set(ownerAdminAuthenticatedHeader, "1")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+
+	status := request("/admin/auth/status")
+	if status.Code != http.StatusOK || !strings.Contains(status.Body.String(), `"authMethod":"basic_proxy"`) {
+		t.Fatalf("status=%d body=%s", status.Code, status.Body.String())
+	}
+	page := request("/admin")
+	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), `data-owner-admin-auth="basic_only"`) {
+		t.Fatalf("page status=%d body=%s", page.Code, page.Body.String())
+	}
+	if !strings.Contains(page.Body.String(), `body[data-owner-admin-auth="basic_only"] #loginWrap`) {
+		t.Fatal("owner Admin page does not hide token login")
+	}
+	loginReq := httptest.NewRequest(http.MethodPost, "http://sidecar/admin/auth/login", strings.NewReader(`{"token":"unused"}`))
+	loginReq.RemoteAddr = "127.0.0.1:41234"
+	loginReq.Host = "owner-admin.example"
+	loginReq.Header.Set(ownerAdminAuthenticatedHeader, "1")
+	loginRec := httptest.NewRecorder()
+	handler.ServeHTTP(loginRec, loginReq)
+	if loginRec.Code != http.StatusNotFound {
+		t.Fatalf("basic-only token login status=%d", loginRec.Code)
+	}
+}
+
+func TestOwnerAdminHeaderDoesNotBypassWhenModeDisabled(t *testing.T) {
+	handler := newAuthTestHandler(t, config.Config{AdminToken: "strong-admin-token"})
+	req := httptest.NewRequest(http.MethodGet, "http://sidecar/api/admin/managed-routes", nil)
+	req.RemoteAddr = "127.0.0.1:41234"
+	req.Host = "owner-admin.example"
+	req.Header.Set(ownerAdminAuthenticatedHeader, "1")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestAuthRoutesCompleteTwoFactorEnrollment(t *testing.T) {
 	handler := newAuthTestHandler(t, config.Config{AdminToken: "strong-admin-token"})
 	setup := beginAuthRouteTwoFactorSetup(t, handler)

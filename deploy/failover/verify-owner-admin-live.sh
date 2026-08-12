@@ -11,17 +11,23 @@ admin_code=$(curl -sS -o /dev/null -w '%{http_code}' \
     https://owner-admin.149077530.xyz/admin)
 api_code=$(curl -sS -o /dev/null -w '%{http_code}' \
     -u "owner:$password" --max-time 15 \
-    https://owner-admin.149077530.xyz/api/admin/status)
+    https://owner-admin.149077530.xyz/api/admin/managed-routes)
+token_login_code=$(curl -sS -o /dev/null -w '%{http_code}' \
+    -u "owner:$password" --max-time 15 \
+    -H 'Content-Type: application/json' -d '{}' \
+    https://owner-admin.149077530.xyz/admin/auth/login)
 media_code=$(curl -sS -o /dev/null -w '%{http_code}' \
     -u "owner:$password" --max-time 15 \
     https://owner-admin.149077530.xyz/s/v1/)
 unset password
 
 test "$admin_code" = 200
-test "$api_code" = 401
+test "$api_code" = 200
+test "$token_login_code" = 404
 test "$media_code" = 404
 printf 'BASIC_ADMIN_CODE=%s\n' "$admin_code"
-printf 'APP_AUTH_REQUIRED_CODE=%s\n' "$api_code"
+printf 'BASIC_ONLY_ADMIN_API_CODE=%s\n' "$api_code"
+printf 'TOKEN_LOGIN_DISABLED_CODE=%s\n' "$token_login_code"
 printf 'ADMIN_MEDIA_BLOCK_CODE=%s\n' "$media_code"
 
 if grep -Eiq '(authorization|cookie|token|password|private.?key|[?&][^ ]+=)' \

@@ -28,6 +28,8 @@ type Config struct {
 	AdminListenAddr           string
 	AdminToken                string
 	Admin2FADisabled          bool
+	OwnerAdminAuthMode        string
+	OwnerAdminHost            string
 	MediaProxyRoutes          bool
 	FailoverDNSProviderMode   string
 	FailoverDNSAllowedRecords string
@@ -80,6 +82,8 @@ func Load() (Config, error) {
 		AdminListenAddr:           adminListenAddr,
 		AdminToken:                os.Getenv("ADMIN_TOKEN"),
 		Admin2FADisabled:          envBool("ADMIN_2FA_DISABLED", false),
+		OwnerAdminAuthMode:        strings.ToLower(strings.TrimSpace(os.Getenv("OWNER_ADMIN_AUTH_MODE"))),
+		OwnerAdminHost:            strings.ToLower(strings.TrimSpace(os.Getenv("OWNER_ADMIN_HOST"))),
 		MediaProxyRoutes:          envBool("MEDIAPROXY_ROUTES_ENABLED", false),
 		FailoverDNSProviderMode:   strings.ToLower(strings.TrimSpace(os.Getenv("FAILOVER_DNS_PROVIDER_MODE"))),
 		FailoverDNSAllowedRecords: strings.TrimSpace(os.Getenv("FAILOVER_DNS_ALLOWED_RECORDS")),
@@ -94,6 +98,13 @@ func Load() (Config, error) {
 			StaticCacheTTL:     604800,
 			ProgressThrottleMS: 1200,
 		},
+	}
+	if cfg.OwnerAdminAuthMode != "" && cfg.OwnerAdminAuthMode != "basic_only" {
+		return Config{}, fmt.Errorf("OWNER_ADMIN_AUTH_MODE must be empty or basic_only")
+	}
+	if cfg.OwnerAdminAuthMode == "basic_only" &&
+		(cfg.OwnerAdminHost == "" || strings.ContainsAny(cfg.OwnerAdminHost, " /\\:\t\r\n")) {
+		return Config{}, fmt.Errorf("OWNER_ADMIN_HOST must be an exact hostname for basic_only mode")
 	}
 	return cfg, nil
 }

@@ -429,6 +429,11 @@ tr:last-child td{border-bottom:0}
 }
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important}}
 </style>
+<style>
+body[data-owner-admin-auth="basic_only"] #loginWrap,
+body[data-owner-admin-auth="basic_only"] #appLogoutButton,
+body[data-owner-admin-auth="basic_only"] #twoFactorCard { display:none!important }
+</style>
 </head>
 <body>
 <div id="loginWrap">
@@ -482,7 +487,7 @@ tr:last-child td{border-bottom:0}
       <div class="rail-bottom">
         <button class="rail-mini" onclick="openConfigModal()">配置</button>
         <button class="rail-mini" onclick="openTgModal()">通知</button>
-        <button class="rail-mini danger" onclick="doLogout()">退出</button>
+        <button class="rail-mini danger" id="appLogoutButton" onclick="doLogout()">退出</button>
         <div class="rail-version" id="appVersion" title="版本信息">dev</div>
       </div>
     </aside>
@@ -1187,6 +1192,7 @@ tr:last-child td{border-bottom:0}
 
 <script>
 let SAVED_TOKEN = localStorage.getItem('ep_token') || '';
+const OWNER_ADMIN_BASIC_ONLY = document.body.dataset.ownerAdminAuth === 'basic_only';
 let authGeneration = 0;
 let loginInFlight = false;
 let AUTH_STATUS = null;
@@ -1279,6 +1285,7 @@ async function restoreSession() {
   const r = await authFetch('/admin/auth/status');
   if (generation !== authGeneration) return;
   if (r.ok && r.authenticated) {
+    if (r.authMethod === 'basic_proxy') clearSavedToken();
     applyAuthStatus(r.twoFactor);
     initApp();
     return;
@@ -1376,7 +1383,7 @@ function showLogin(message = '') {
   stopLogRealtime();
   resetProtectedUI();
   document.getElementById('app').style.display = 'none';
-  document.getElementById('loginWrap').style.display = 'grid';
+  document.getElementById('loginWrap').style.display = OWNER_ADMIN_BASIC_ONLY ? 'none' : 'grid';
   document.getElementById('totpLoginWrap').hidden = true;
   document.getElementById('totpInput').value = '';
   if (!document.getElementById('tokenInput').value && SAVED_TOKEN) document.getElementById('tokenInput').value = SAVED_TOKEN;

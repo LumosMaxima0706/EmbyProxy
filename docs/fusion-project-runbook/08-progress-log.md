@@ -620,3 +620,17 @@ the retry will repeat bundle, path, ff-only, feature-only, and cleanup checks.
   `stream` from BWG to NOSLA; canary, staging-stream, stream-b, and rathole
   remained unchanged.
 - Cleanup instructions are documented for future owner use but were not run.
+
+## 2026-08-12 | Owner Admin Basic-only login-loop correction
+
+- Confirmed the loop was caused by the outer Basic Auth succeeding while the
+  embedded UI still required an independent ADMIN_TOKEN session.
+- Created and checksum-verified root-only backup
+  `/var/backups/embyproxy-owner-admin-basic-only/20260812T143642Z` before source
+  or runtime edits.
+- Implemented a default-off owner-admin trusted-proxy mode bound to loopback,
+  exact Host, fixed Nginx header, and Admin-only paths. Token/session auth for
+  every other ingress remains unchanged.
+- Local targeted/full Go tests, vet, shell syntax, and diff checks pass.
+- Runtime apply remains gated on commit, static build, staged binary/config,
+  Nginx syntax, rollback syntax, and localhost fail-closed checks.

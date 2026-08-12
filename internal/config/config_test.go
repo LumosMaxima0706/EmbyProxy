@@ -55,6 +55,30 @@ func TestLoadReadsMediaProxyRoutesFlag(t *testing.T) {
 	}
 }
 
+func TestLoadReadsOwnerAdminBasicOnlyMode(t *testing.T) {
+	t.Setenv("OWNER_ADMIN_AUTH_MODE", "BASIC_ONLY")
+	t.Setenv("OWNER_ADMIN_HOST", "Owner-Admin.Example")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.OwnerAdminAuthMode != "basic_only" || cfg.OwnerAdminHost != "owner-admin.example" {
+		t.Fatalf("owner Admin mode=%q host=%q", cfg.OwnerAdminAuthMode, cfg.OwnerAdminHost)
+	}
+}
+
+func TestOwnerAdminBasicOnlyRequiresExactHost(t *testing.T) {
+	for _, host := range []string{"", "owner-admin.example:443", "owner-admin.example/path"} {
+		t.Run(host, func(t *testing.T) {
+			t.Setenv("OWNER_ADMIN_AUTH_MODE", "basic_only")
+			t.Setenv("OWNER_ADMIN_HOST", host)
+			if _, err := Load(); err == nil {
+				t.Fatalf("Load() accepted unsafe owner Admin host %q", host)
+			}
+		})
+	}
+}
+
 func TestMediaProxyRoutesUnknownValuesFailClosed(t *testing.T) {
 	for _, value := range []string{"enabled", "maybe", "2", "unexpected"} {
 		t.Run(value, func(t *testing.T) {
