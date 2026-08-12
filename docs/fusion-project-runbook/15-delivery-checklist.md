@@ -110,7 +110,8 @@
 - [x] Phase 0 safety boundary is recorded.
 - [x] BWG/NOSLA read-only topology discovery completed.
 - [x] No media smoke, prefetch, warmup, or production apply was performed.
-- [ ] Provider-billing traffic source and NOSLA/BWG quota/current usage confirmed.
+- [x] Owner provider-panel opening balances, quotas, reset cycles, and RX+TX billing definition confirmed.
+- [ ] Restricted host-counter auxiliary source deployed and calibrated; it must not be described as provider billing.
 - [x] Requested 85% policy and fail-closed dry-run scenario matrix implemented locally.
 - [ ] Policy live-canary and rollback tested after accounting input.
 - [ ] Separate two-layer public Admin entry backed up, dry-run, and verified.

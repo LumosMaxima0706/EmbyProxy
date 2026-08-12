@@ -1,0 +1,16 @@
+#!/bin/sh
+set -eu
+
+interface="${EMBYPROXY_METER_INTERFACE:-enp3s0}"
+case "$interface" in
+  *[!A-Za-z0-9_.:-]*|'') exit 1 ;;
+esac
+base="/sys/class/net/$interface/statistics"
+test -r "$base/rx_bytes"
+test -r "$base/tx_bytes"
+rx=$(sed -n '1p' "$base/rx_bytes")
+tx=$(sed -n '1p' "$base/tx_bytes")
+case "$rx:$tx" in
+  *[!0-9:]*|:*) exit 1 ;;
+esac
+printf '{"interface":"%s","rx_bytes":%s,"tx_bytes":%s}\n' "$interface" "$rx" "$tx"
