@@ -439,3 +439,17 @@ full `go test ./...`, `go vet ./...`, shell syntax, and `git diff --check` PASS.
 | Regression | PASS LOCALLY | Targeted/full Go tests, vet, shell syntax, and diff check |
 | Runtime | PASS | Deployed `f4d2d9d`; isolated dry-run, verified backup/rollback, Basic-only UI/API, UHD public URL contract, entry isolation, small stream checks, listener/policy/timer, Nginx hash, and logs pass |
 | Upstream Web UI | EXTERNAL LIMITATION | Direct and proxied common Web paths return the same upstream/Cloudflare 404; no result is fabricated and upstream is unchanged |
+
+## Yamby UHD playback ingress correction
+
+| Verification | Result | Evidence/boundary |
+| --- | --- | --- |
+| Failure localization | PASS | Query-free sequence: PlaybackInfo 200, primary media 302, `v1-vod1` 403 with no upstream timing |
+| Backup/rollback | PASS | Separate fixed-path BWG/NOSLA backups, checksums, root-only permissions, rollback `bash -n` |
+| Dry-run | PASS | Isolated no-slash sidecar contract and staged NOSLA Nginx syntax |
+| Minimal route apply | PASS | One explicit `v1-vod1` exact/prefix pair; no arbitrary-host route; Nginx reload only |
+| Public URL contract | PASS | UHD display/copy/preview use stream origin and `/443` without trailing slash or query |
+| Small endpoint | PASS | `v1-vod1`, primary, and canary public-info endpoints return 200; no media fetched |
+| Streaming directives | PASS | Range/If-Range and response range headers retained; buffering/cache disabled; no cache path/slice/background update |
+| Isolation and failover | PASS | Owner-admin media paths and all media-host Admin paths blocked; sidecar loopback; policy auto/NOSLA; timer unchanged |
+| Authenticated playback transfer | PENDING OWNER ACTION | No new post-apply media request; owner must trigger one small playback without sharing its URL/token |

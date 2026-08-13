@@ -81,12 +81,12 @@ func TestOwnerAdminBasicOnlyRequiresExactHost(t *testing.T) {
 
 func TestLoadReadsPublicMediaURLConfiguration(t *testing.T) {
 	t.Setenv("PUBLIC_MEDIA_BASE_URL", "https://stream.example/")
-	t.Setenv("PUBLIC_MEDIA_NODE_PATHS_JSON", `{"uhd":"/https/media.example/443/"}`)
+	t.Setenv("PUBLIC_MEDIA_NODE_PATHS_JSON", `{"uhd":"/https/media.example/443"}`)
 	cfg, err := Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.PublicMediaBaseURL != "https://stream.example" || cfg.PublicMediaNodePaths["uhd"] != "/https/media.example/443/" {
+	if cfg.PublicMediaBaseURL != "https://stream.example" || cfg.PublicMediaNodePaths["uhd"] != "/https/media.example/443" {
 		t.Fatalf("public media config = %q %+v", cfg.PublicMediaBaseURL, cfg.PublicMediaNodePaths)
 	}
 }

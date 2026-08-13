@@ -34,7 +34,7 @@ public_url = nodes[0].get("publicUrl", "")
 parsed = urllib.parse.urlsplit(public_url)
 if parsed.scheme != "https" or parsed.hostname != "stream.149077530.xyz":
     raise SystemExit("UHD public host is invalid")
-if parsed.path != "/https/v1.uhdnow.com/443/":
+if parsed.path != "/https/v1.uhdnow.com/443":
     raise SystemExit("UHD public path is invalid")
 if parsed.username or parsed.password or parsed.query or parsed.fragment:
     raise SystemExit("UHD public URL contains sensitive or unsupported parts")

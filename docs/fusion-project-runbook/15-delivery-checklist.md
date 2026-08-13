@@ -131,3 +131,12 @@ Admin access by the failover/secure-Admin gate below.
 - [ ] ACME issuance/renewal is `blocked_by_acme_rate_limit`; action is
   `wait_and_retry_later`. Do not retry production ACME; validate with staging
   first and wait for the reported 429 cooldown.
+
+## Yamby UHD playback ingress correction
+
+- [x] Owner-admin UHD display/copy/preview base uses production stream and has no trailing slash.
+- [x] Existing no-slash and slash client base forms remain compatible.
+- [x] Observed redirect host `v1-vod1` has a minimal explicit production allowlist route.
+- [x] Separate backups, rollback scripts, dry-runs, Nginx syntax, apply, and isolation checks pass.
+- [x] No upstream, DNS, ACME, managed node, or failover-policy change occurred.
+- [ ] Owner-triggered authenticated playback confirms sustained transfer and statistics change.

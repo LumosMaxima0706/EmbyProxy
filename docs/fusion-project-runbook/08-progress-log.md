@@ -709,3 +709,22 @@ the retry will repeat bundle, path, ff-only, feature-only, and cleanup checks.
   `/var/backups/embyproxy-owner-public-url/20260813T054045Z`.
 - The upstream's common browser Web UI paths remain upstream/Cloudflare 404;
   this external limitation is recorded separately from the fixed URL bug.
+
+## 2026-08-13 | Yamby UHD playback ingress correction
+
+- Read-only query-free logs isolated the playback spinner to a deterministic
+  chain: PlaybackInfo 200, primary media 302, then redirected `v1-vod1` 403
+  before any upstream timing. NOSLA had no explicit `v1-vod1` location, while
+  its localhost sidecar returned 200 for that host's small public-info path.
+- Updated the UHD owner-admin public mapping to omit the trailing slash and
+  added only the observed `v1-vod1` exact/prefix allowlist locations, matching
+  existing Range/header/no-cache streaming behavior. The UHD upstream was not
+  changed and arbitrary dynamic hosts were not enabled.
+- Separate BWG/NOSLA backups, checksum and rollback syntax checks, sidecar
+  isolation dry-run, staged Nginx syntax test, guarded apply, and post-apply
+  security/service/failover/log checks passed. Rollback paths are recorded in
+  `35-yamby-playback-vod1-fix.md`.
+- The new public `v1-vod1` small information check returns 200. No media URL
+  was replayed from logs and no media file was fetched automatically. Final
+  playback-transfer and statistics evidence awaits one owner-triggered small
+  video using the owner's existing authenticated Yamby session.

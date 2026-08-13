@@ -20,7 +20,7 @@ printf '%s\n' \
     'LISTEN_ADDR=127.0.0.1:28083' \
     "DB_PATH=$temporary/proxy.db" \
     'PUBLIC_MEDIA_BASE_URL=https://stream.149077530.xyz' \
-    "PUBLIC_MEDIA_NODE_PATHS_JSON='{\"uhd\":\"/https/v1.uhdnow.com/443/\"}'" >>"$temporary/test.env"
+    "PUBLIC_MEDIA_NODE_PATHS_JSON='{\"uhd\":\"/https/v1.uhdnow.com/443\"}'" >>"$temporary/test.env"
 chmod 600 "$temporary/test.env"
 
 systemd-run --quiet --unit="$unit" --property=Type=simple \
@@ -57,7 +57,7 @@ nodes = [node for node in payload.get("nodes", []) if node.get("name") == "uhd"]
 if len(nodes) != 1:
     raise SystemExit("dry-run UHD node mismatch")
 parsed = urllib.parse.urlsplit(nodes[0].get("publicUrl", ""))
-if parsed.scheme != "https" or parsed.hostname != "stream.149077530.xyz" or parsed.path != "/https/v1.uhdnow.com/443/":
+if parsed.scheme != "https" or parsed.hostname != "stream.149077530.xyz" or parsed.path != "/https/v1.uhdnow.com/443":
     raise SystemExit("dry-run public URL mismatch")
 if parsed.username or parsed.password or parsed.query or parsed.fragment:
     raise SystemExit("dry-run public URL is unsafe")
