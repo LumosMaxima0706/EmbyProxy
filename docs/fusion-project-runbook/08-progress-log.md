@@ -694,3 +694,18 @@ the retry will repeat bundle, path, ff-only, feature-only, and cleanup checks.
 - Implemented a backend-provided, validated, secret-free public URL contract
   and updated display/copy/preview to use it. Runtime deployment remains gated
   on commit, backup, static build, rollback verification, and staged checks.
+
+### Owner Admin public URL correction deployed
+
+- Commits `f4d2d9d` and `baeea65` completed implementation and deployment
+  dry-run support. Static artifact, isolated dry-run, root-only backup, guarded
+  apply, and public/runtime/log matrices passed.
+- UHD display/copy/preview now use one backend-provided stream public URL; the
+  Admin origin and node secret are never used to construct it.
+- Nginx hash and upstream/database routing remained unchanged. Owner-admin,
+  canary, and stream Admin isolation passed; small stream information checks
+  passed without media traffic.
+- Backup and rollback are under
+  `/var/backups/embyproxy-owner-public-url/20260813T054045Z`.
+- The upstream's common browser Web UI paths remain upstream/Cloudflare 404;
+  this external limitation is recorded separately from the fixed URL bug.

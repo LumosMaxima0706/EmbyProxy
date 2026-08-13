@@ -49,5 +49,35 @@
 
 ## Current status
 
-Implementation and local verification are in progress. No runtime, Nginx,
-upstream, DNS, ACME, or failover-policy change has occurred in this stage yet.
+Status: DONE.
+
+- Source/deployed commit: `f4d2d9d`; static Linux amd64 artifact provenance,
+  checksum, targeted/full tests, vet, shell syntax, and diff checks passed.
+- Isolated BWG dry-run used a temporary database and listener and returned the
+  expected safe UHD public URL contract before any live mutation.
+- Root-only verified backup:
+  `/var/backups/embyproxy-owner-public-url/20260813T054045Z`.
+- Rollback script:
+  `/var/backups/embyproxy-owner-public-url/20260813T054045Z/rollback.sh`;
+  checksums and `bash -n` pass.
+- Live owner-admin returned 401 without Basic Auth and 200 with Basic Auth.
+  Node-list JSON maps UHD to the configured stream host/path with no userinfo,
+  query, fragment, or node secret. Static/runtime HTML checks confirm display,
+  copy, and preview consume only `publicUrl`.
+- owner-admin `/uhd` and `/s/`, canary Admin, and production stream Admin all
+  return 404. Two small public information paths through stream return 200.
+- Sidecar is active/enabled with `NRestarts=0` and only
+  `127.0.0.1:18082`. Nginx config hash is unchanged and `nginx -t` passes.
+- Failover remains mode auto, active NOSLA, `MANUAL_HOLD=none`, reason
+  `nosla_healthy_below_threshold`; timer is active/waiting and legacy timer is
+  inactive.
+- Bounded sidecar/journal/owner-admin access scans contain no severe or
+  credential markers and no recent owner-admin 502/503/504.
+- No Nginx reload/change, upstream change, DNS action, ACME request, route
+  mutation, media fetch, cleanup, or failover-policy mutation occurred.
+
+The displayed address is a real public media/client base. Automated checks
+prove its small Emby information endpoints are reachable. The upstream itself
+continues to return Cloudflare 404 for common browser Web UI paths, both direct
+and proxied; this external behavior was not misreported as a successful login
+page and the upstream was not changed.

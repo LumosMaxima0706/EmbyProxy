@@ -437,5 +437,5 @@ full `go test ./...`, `go vet ./...`, shell syntax, and `git diff --check` PASS.
 | Backend URL validation | PASS LOCALLY | HTTPS origin only; no userinfo/path/query/fragment; owner-admin host rejected; mapped paths must be absolute and query-free |
 | UI address source | PASS LOCALLY | Display, copy, and preview use backend `publicUrl`; no Admin-origin or node-secret concatenation |
 | Regression | PASS LOCALLY | Targeted/full Go tests, vet, shell syntax, and diff check |
-| Runtime | PENDING | Commit/build, root-only backup, guarded apply, and public matrix remain gated |
+| Runtime | PASS | Deployed `f4d2d9d`; isolated dry-run, verified backup/rollback, Basic-only UI/API, UHD public URL contract, entry isolation, small stream checks, listener/policy/timer, Nginx hash, and logs pass |
 | Upstream Web UI | EXTERNAL LIMITATION | Direct and proxied common Web paths return the same upstream/Cloudflare 404; no result is fabricated and upstream is unchanged |
