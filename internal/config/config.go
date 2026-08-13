@@ -2,8 +2,10 @@ package config
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -30,6 +32,8 @@ type Config struct {
 	Admin2FADisabled          bool
 	OwnerAdminAuthMode        string
 	OwnerAdminHost            string
+	PublicMediaBaseURL        string
+	PublicMediaNodePaths      map[string]string
 	MediaProxyRoutes          bool
 	FailoverDNSProviderMode   string
 	FailoverDNSAllowedRecords string
@@ -74,6 +78,14 @@ func Load() (Config, error) {
 	if adminListenAddr != "" && adminListenAddr == effectiveListenAddr {
 		return Config{}, fmt.Errorf("ADMIN_LISTEN_ADDR must differ from the proxy listen address")
 	}
+	publicMediaBaseURL, err := normalizePublicMediaBaseURL(os.Getenv("PUBLIC_MEDIA_BASE_URL"))
+	if err != nil {
+		return Config{}, err
+	}
+	publicMediaNodePaths, err := parsePublicMediaNodePaths(os.Getenv("PUBLIC_MEDIA_NODE_PATHS_JSON"))
+	if err != nil {
+		return Config{}, err
+	}
 	cfg := Config{
 		CWD:                       cwd,
 		DBPath:                    envString("DB_PATH", filepath.Join(cwd, "data", "proxy.db")),
@@ -84,6 +96,8 @@ func Load() (Config, error) {
 		Admin2FADisabled:          envBool("ADMIN_2FA_DISABLED", false),
 		OwnerAdminAuthMode:        strings.ToLower(strings.TrimSpace(os.Getenv("OWNER_ADMIN_AUTH_MODE"))),
 		OwnerAdminHost:            strings.ToLower(strings.TrimSpace(os.Getenv("OWNER_ADMIN_HOST"))),
+		PublicMediaBaseURL:        publicMediaBaseURL,
+		PublicMediaNodePaths:      publicMediaNodePaths,
 		MediaProxyRoutes:          envBool("MEDIAPROXY_ROUTES_ENABLED", false),
 		FailoverDNSProviderMode:   strings.ToLower(strings.TrimSpace(os.Getenv("FAILOVER_DNS_PROVIDER_MODE"))),
 		FailoverDNSAllowedRecords: strings.TrimSpace(os.Getenv("FAILOVER_DNS_ALLOWED_RECORDS")),
@@ -106,7 +120,50 @@ func Load() (Config, error) {
 		(cfg.OwnerAdminHost == "" || strings.ContainsAny(cfg.OwnerAdminHost, " /\\:\t\r\n")) {
 		return Config{}, fmt.Errorf("OWNER_ADMIN_HOST must be an exact hostname for basic_only mode")
 	}
+	if cfg.PublicMediaBaseURL != "" {
+		publicURL, _ := url.Parse(cfg.PublicMediaBaseURL)
+		if strings.EqualFold(publicURL.Hostname(), cfg.OwnerAdminHost) {
+			return Config{}, fmt.Errorf("PUBLIC_MEDIA_BASE_URL must not use OWNER_ADMIN_HOST")
+		}
+	}
 	return cfg, nil
+}
+
+func normalizePublicMediaBaseURL(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", nil
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil ||
+		parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") {
+		return "", fmt.Errorf("PUBLIC_MEDIA_BASE_URL must be an HTTPS origin without credentials, path, query, or fragment")
+	}
+	return "https://" + parsed.Host, nil
+}
+
+func parsePublicMediaNodePaths(raw string) (map[string]string, error) {
+	paths := map[string]string{}
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return paths, nil
+	}
+	if err := json.Unmarshal([]byte(raw), &paths); err != nil {
+		return nil, fmt.Errorf("PUBLIC_MEDIA_NODE_PATHS_JSON must be a JSON object")
+	}
+	normalized := make(map[string]string, len(paths))
+	for name, publicPath := range paths {
+		name = strings.ToLower(strings.TrimSpace(name))
+		publicPath = strings.TrimSpace(publicPath)
+		parsed, err := url.ParseRequestURI(publicPath)
+		if name == "" || len(name) > 64 || strings.ContainsAny(name, "/\\?#\t\r\n") ||
+			err != nil || !strings.HasPrefix(publicPath, "/") || strings.HasPrefix(publicPath, "//") ||
+			parsed.IsAbs() || parsed.Host != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+			return nil, fmt.Errorf("PUBLIC_MEDIA_NODE_PATHS_JSON contains an unsafe node or path")
+		}
+		normalized[name] = publicPath
+	}
+	return normalized, nil
 }
 
 func (c Config) Addr() string {

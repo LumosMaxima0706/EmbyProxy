@@ -1073,7 +1073,29 @@ func (h *Handler) list(ctx context.Context, uid string) map[string]any {
 			nodes[i].LastPlayAt = lastMap[uid+":"+strings.ToLower(nodes[i].Name)]
 		}
 	}
-	return map[string]any{"ok": true, "nodes": nodes, "uid": uid, "build": buildinfo.Current()}
+	publicURLs := h.publicNodeURLs()
+	views := make([]adminNodeView, 0, len(nodes))
+	for _, node := range nodes {
+		views = append(views, adminNodeView{Node: node, PublicURL: publicURLs[strings.ToLower(node.Name)]})
+	}
+	return map[string]any{"ok": true, "nodes": views, "uid": uid, "build": buildinfo.Current()}
+}
+
+type adminNodeView struct {
+	storage.Node
+	PublicURL string `json:"publicUrl,omitempty"`
+}
+
+func (h *Handler) publicNodeURLs() map[string]string {
+	result := map[string]string{}
+	base := strings.TrimSuffix(h.cfg.PublicMediaBaseURL, "/")
+	if base == "" {
+		return result
+	}
+	for name, publicPath := range h.cfg.PublicMediaNodePaths {
+		result[strings.ToLower(name)] = base + publicPath
+	}
+	return result
 }
 
 func (h *Handler) save(ctx context.Context, uid string, body map[string]any) map[string]any {

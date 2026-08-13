@@ -79,6 +79,52 @@ func TestOwnerAdminBasicOnlyRequiresExactHost(t *testing.T) {
 	}
 }
 
+func TestLoadReadsPublicMediaURLConfiguration(t *testing.T) {
+	t.Setenv("PUBLIC_MEDIA_BASE_URL", "https://stream.example/")
+	t.Setenv("PUBLIC_MEDIA_NODE_PATHS_JSON", `{"uhd":"/https/media.example/443/"}`)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PublicMediaBaseURL != "https://stream.example" || cfg.PublicMediaNodePaths["uhd"] != "/https/media.example/443/" {
+		t.Fatalf("public media config = %q %+v", cfg.PublicMediaBaseURL, cfg.PublicMediaNodePaths)
+	}
+}
+
+func TestPublicMediaURLConfigurationFailsClosed(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		base  string
+		paths string
+	}{
+		{name: "http base", base: "http://stream.example"},
+		{name: "base path", base: "https://stream.example/media"},
+		{name: "base query", base: "https://stream.example?token=value"},
+		{name: "userinfo", base: "https://user@stream.example"},
+		{name: "invalid json", base: "https://stream.example", paths: "uhd=/uhd"},
+		{name: "relative path", base: "https://stream.example", paths: `{"uhd":"uhd"}`},
+		{name: "path query", base: "https://stream.example", paths: `{"uhd":"/uhd?token=value"}`},
+		{name: "protocol relative", base: "https://stream.example", paths: `{"uhd":"//other.example/uhd"}`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("PUBLIC_MEDIA_BASE_URL", tt.base)
+			t.Setenv("PUBLIC_MEDIA_NODE_PATHS_JSON", tt.paths)
+			if _, err := Load(); err == nil {
+				t.Fatal("Load() accepted unsafe public media configuration")
+			}
+		})
+	}
+}
+
+func TestPublicMediaBaseRejectsOwnerAdminHost(t *testing.T) {
+	t.Setenv("OWNER_ADMIN_AUTH_MODE", "basic_only")
+	t.Setenv("OWNER_ADMIN_HOST", "owner-admin.example")
+	t.Setenv("PUBLIC_MEDIA_BASE_URL", "https://owner-admin.example")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() accepted owner Admin as the public media base")
+	}
+}
+
 func TestMediaProxyRoutesUnknownValuesFailClosed(t *testing.T) {
 	for _, value := range []string{"enabled", "maybe", "2", "unexpected"} {
 		t.Run(value, func(t *testing.T) {

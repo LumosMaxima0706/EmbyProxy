@@ -682,3 +682,15 @@ the retry will repeat bundle, path, ff-only, feature-only, and cleanup checks.
   `go test ./...`, `go vet ./...`, all new shell `bash -n` checks, and
   `git diff --check`. The temporary Go toolchain was extracted under `/tmp`
   without a system package installation.
+
+## 2026-08-13 | Owner Admin public URL correction
+
+- Read-only discovery confirmed the node card derives its address from the
+  current Admin origin. UHD is a legacy node, while managed route `v1` belongs
+  to a different node and is not public on production stream.
+- Production's existing path-based upstream route passes small information
+  checks. Common upstream Web UI paths return the same upstream/Cloudflare 404
+  directly and through stream; no media request was made.
+- Implemented a backend-provided, validated, secret-free public URL contract
+  and updated display/copy/preview to use it. Runtime deployment remains gated
+  on commit, backup, static build, rollback verification, and staged checks.

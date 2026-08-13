@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -77,6 +78,54 @@ func TestListIncludesBuildInfo(t *testing.T) {
 	}
 	if got.Version != "v-test" || got.Commit != "abc1234" || got.BuiltAt != "2026-05-31T00:00:00Z" {
 		t.Fatalf("build info = %+v", got)
+	}
+}
+
+func TestListBuildsPublicNodeURLsWithoutAdminOriginOrSecrets(t *testing.T) {
+	ctx := context.Background()
+	handler, closeStore := newConfigTestHandler(t)
+	defer closeStore()
+	handler.cfg.PublicMediaBaseURL = "https://stream.example"
+	handler.cfg.PublicMediaNodePaths = map[string]string{"uhd": "/https/media.example/443/"}
+	if err := handler.store.SaveNode(ctx, "admin", storage.Node{Name: "uhd", Target: "https://upstream.example", Secret: "must-not-appear"}); err != nil {
+		t.Fatal(err)
+	}
+	res := handler.list(ctx, "admin")
+	encoded, err := json.Marshal(res)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(encoded)
+	for _, want := range []string{`"publicUrl":"https://stream.example/https/media.example/443/"`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("list response missing %q: %s", want, body)
+		}
+	}
+	if strings.Contains(body, "owner-admin") || strings.Contains(body, "must-not-appear/") {
+		t.Fatalf("public URL derived from admin origin or secret: %s", body)
+	}
+}
+
+func TestAdminIndexUsesBackendPublicURLForDisplayCopyAndPreview(t *testing.T) {
+	for _, want := range []string{
+		"const proxyUrl = String(n.publicUrl || '');",
+		`data-copy="${attr(proxyUrl)}"`,
+		`data-public-url="${attr(proxyUrl)}"`,
+		"function openPublicMediaUrl(rawURL)",
+		"window.open(target.toString(), '_blank', 'noopener,noreferrer')",
+	} {
+		if !strings.Contains(indexHTML, want) {
+			t.Fatalf("Admin UI missing public URL contract %q", want)
+		}
+	}
+	for _, forbidden := range []string{
+		"`${location.origin}/${n.name}",
+		"n.secret ? '/' + n.secret",
+		"owner-admin.149077530.xyz",
+	} {
+		if strings.Contains(indexHTML, forbidden) {
+			t.Fatalf("Admin UI still derives public URL from unsafe source %q", forbidden)
+		}
 	}
 }
 

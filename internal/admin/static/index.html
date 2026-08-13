@@ -1204,7 +1204,6 @@ let editingNode = null;
 let selectedNodes = new Set();
 let draggingNode = '';
 let nodeChecks = {};
-let visibleProxyUrls = new Set();
 let focusedNodeName = '';
 let appBuild = null;
 let currentTab = 'nodes';
@@ -1680,7 +1679,6 @@ function setAppVersion(build) {
 function syncNodeState() {
   const names = new Set(allNodes.map(n => n.name));
   selectedNodes.forEach(name => { if (!names.has(name)) selectedNodes.delete(name); });
-  visibleProxyUrls.forEach(name => { if (!names.has(name)) visibleProxyUrls.delete(name); });
   for (const name of Object.keys(nodeChecks)) if (!names.has(name)) delete nodeChecks[name];
   if (focusedNodeName && !names.has(focusedNodeName)) focusedNodeName = '';
 }
@@ -1784,12 +1782,6 @@ function renderNodes(nodes) {
   `;
 }
 
-function toggleProxyUrl(name) {
-  if (visibleProxyUrls.has(name)) visibleProxyUrls.delete(name);
-  else visibleProxyUrls.add(name);
-  renderNodes(getFilteredNodes());
-}
-
 function focusNodeCard(event, name) {
   const target = event?.target;
   if (target?.closest?.('button,input,select,textarea,a,[draggable="true"]')) return;
@@ -1815,8 +1807,7 @@ function syncImpersonateProfileState() {
 
 function nodeCard(n) {
   const targets = splitTargets(n.target);
-  const proxyUrl = `${location.origin}/${n.name}${n.secret ? '/' + n.secret : ''}`;
-  const showProxy = visibleProxyUrls.has(n.name);
+  const proxyUrl = String(n.publicUrl || '');
   const sel = selectedNodes.has(n.name);
   const focused = focusedNodeName === n.name;
   const identityLabel = impersonateProfileLabel(n.impersonateProfile);
@@ -1824,7 +1815,7 @@ function nodeCard(n) {
   const checkText = check ? compactCheckText(check.text) : '检测';
   const checkClass = check ? ' ' + check.type : '';
   const checkTitle = check ? check.text : '检测延时';
-  const eyeIcon = showProxy ? EYE_ICONS.open : EYE_ICONS.closed;
+  const eyeIcon = EYE_ICONS.open;
   return `<article class="route-row${sel?' selected':''}${focused?' focused':''}" id="row-${n.name}" onclick="focusNodeCard(event,'${n.name}')" ondragover="onNodeDragOver(event,'${n.name}')" ondragenter="onNodeDragEnter(event,'${n.name}')" ondrop="onNodeDrop(event,'${n.name}')">
     <div class="route-tools">
       <span class="drag-handle" draggable="true" ondragstart="onNodeDragStart(event,'${n.name}')" ondragend="onNodeDragEnd()" title="拖动排序">↕</span>
@@ -1836,11 +1827,11 @@ function nodeCard(n) {
     </div>
     <div class="route-address">
       <div class="proxy-line">
-        <div class="mono${showProxy ? '' : ' is-hidden'}">
-          <span class="proxy-text">${showProxy ? esc(proxyUrl) : HIDDEN_PROXY_TEXT}</span>
-          <button class="reveal-button${showProxy ? ' on' : ''}" onclick="toggleProxyUrl('${n.name}')" title="${showProxy ? '隐藏访问地址' : '显示访问地址'}" aria-label="${showProxy ? '隐藏访问地址' : '显示访问地址'}">${eyeIcon}</button>
+        <div class="mono">
+          <span class="proxy-text">${proxyUrl ? esc(proxyUrl) : '未配置公网入口'}</span>
+          <button class="reveal-button" data-public-url="${attr(proxyUrl)}" onclick="openPublicMediaUrl(this.dataset.publicUrl)" title="打开公网观看地址" aria-label="打开公网观看地址" ${proxyUrl ? '' : 'disabled'}>${eyeIcon}</button>
         </div>
-        <button class="copy-button" data-copy="${attr(proxyUrl)}" onclick="copyText(this.dataset.copy)">复制</button>
+        <button class="copy-button" data-copy="${attr(proxyUrl)}" onclick="copyText(this.dataset.copy)" ${proxyUrl ? '' : 'disabled'}>复制</button>
       </div>
     </div>
     <div class="chip-pack">
@@ -1858,6 +1849,16 @@ function nodeCard(n) {
       <button class="btn btn-sm btn-danger row-action" onclick="deleteNode('${n.name}')">删除</button>
     </div>
   </article>`;
+}
+
+function openPublicMediaUrl(rawURL) {
+  try {
+    const target = new URL(String(rawURL || ''));
+    if (target.protocol !== 'https:' || target.username || target.password || target.search || target.hash) throw new Error('invalid public URL');
+    window.open(target.toString(), '_blank', 'noopener,noreferrer');
+  } catch (_) {
+    toast('公网观看地址未配置或无效', 'err');
+  }
 }
 
 function onNodeDragStart(event, name) {

@@ -428,3 +428,14 @@ remain HTTP 200; no media object was requested.
 
 Final local regression: targeted `internal/config` and `internal/admin` tests,
 full `go test ./...`, `go vet ./...`, shell syntax, and `git diff --check` PASS.
+
+## Owner Admin public URL correction
+
+| Verification | Result | Evidence/boundary |
+| --- | --- | --- |
+| Route discovery | PASS | `/uhd` is absent on NOSLA proxy/Admin ports; `/s/v1` is not production UHD; existing path-based small information endpoint is 200 |
+| Backend URL validation | PASS LOCALLY | HTTPS origin only; no userinfo/path/query/fragment; owner-admin host rejected; mapped paths must be absolute and query-free |
+| UI address source | PASS LOCALLY | Display, copy, and preview use backend `publicUrl`; no Admin-origin or node-secret concatenation |
+| Regression | PASS LOCALLY | Targeted/full Go tests, vet, shell syntax, and diff check |
+| Runtime | PENDING | Commit/build, root-only backup, guarded apply, and public matrix remain gated |
+| Upstream Web UI | EXTERNAL LIMITATION | Direct and proxied common Web paths return the same upstream/Cloudflare 404; no result is fabricated and upstream is unchanged |
