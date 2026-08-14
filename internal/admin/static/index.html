@@ -3382,7 +3382,7 @@ function renderFailoverStatus(status, events) {
   ).join('');
   document.getElementById('failoverEvents').innerHTML = events.length ? events.map(event => `
 	<tr><td>${esc(new Date(event.created_at).toLocaleString('zh-CN'))}</td><td>${esc(event.event_type)}</td><td>${esc(event.from_node_id || '--')}</td><td>${esc(event.to_node_id || '--')}</td><td>${esc(event.reason_code)}</td><td>${event.success ? '成功' : '失败'}</td></tr>
-  `).join('') : '<tr><td colspan="6" class="table-empty">暂无事件</td></tr>';
+	`).join('') : '<tr><td colspan="6" class="table-empty">暂无切换事件</td></tr>';
 }
 
 async function setFailoverMode(mode) {

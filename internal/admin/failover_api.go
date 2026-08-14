@@ -96,6 +96,10 @@ func (h *Handler) handleFailoverAPI(w http.ResponseWriter, r *http.Request, path
 		if value, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && value > 0 && value < 200 {
 			limit = value
 		}
+		if events := externalFailoverEvents(h.readExternalFailoverState(), limit); len(events) > 0 {
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "events": events})
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "events": h.failover.Events(limit)})
 	case r.Method == http.MethodGet && path == "/api/admin/traffic/status":
 		_, nodes := h.failover.Status()
@@ -190,6 +194,41 @@ func normalizedFailoverTarget(value any) string {
 	default:
 		return ""
 	}
+}
+
+func externalFailoverEvents(state map[string]any, limit int) []map[string]any {
+	if state == nil || limit <= 0 {
+		return nil
+	}
+	history, ok := state["switch_history"].([]any)
+	if !ok || len(history) == 0 {
+		return nil
+	}
+	start := len(history) - limit
+	if start < 0 {
+		start = 0
+	}
+	events := make([]map[string]any, 0, len(history)-start)
+	for index := len(history) - 1; index >= start; index-- {
+		item, ok := history[index].(map[string]any)
+		if !ok {
+			continue
+		}
+		from := strings.ToLower(normalizedFailoverTarget(item["previous_target"]))
+		to := strings.ToLower(normalizedFailoverTarget(item["target"]))
+		if from == "" || to == "" {
+			continue
+		}
+		events = append(events, map[string]any{
+			"created_at":   item["at"],
+			"event_type":   "switch",
+			"from_node_id": from,
+			"to_node_id":   to,
+			"reason_code":  asString(item["result"]),
+			"success":      asString(item["result"]) == "verified",
+		})
+	}
+	return events
 }
 
 func writeDNSApplyError(w http.ResponseWriter, err error) {

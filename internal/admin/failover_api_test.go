@@ -74,7 +74,7 @@ func TestFailoverAPIStatusAndMode(t *testing.T) {
 
 func TestFailoverAPIOverlaysPolicyStateFile(t *testing.T) {
 	stateFile := t.TempDir() + "/failover-state.json"
-	stateJSON := `{"active_target":"nosla","mode":"auto","manual_hold":"none","decision_reason":"nosla_healthy_below_threshold"}`
+	stateJSON := `{"active_target":"nosla","mode":"auto","manual_hold":"none","decision_reason":"nosla_healthy_below_threshold","switch_history":[{"at":"2026-08-12T10:20:49Z","previous_target":"bwg","target":"nosla","result":"verified","backup":"/private/rollback-metadata"}]}`
 	if err := os.WriteFile(stateFile, []byte(stateJSON), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -98,6 +98,10 @@ func TestFailoverAPIOverlaysPolicyStateFile(t *testing.T) {
 	}
 	if response.State["active_node_id"] != "nosla" || response.State["activeTarget"] != "NOSLA" || response.State["state_source"] != "policy_state_file" {
 		t.Fatalf("state overlay = %#v", response.State)
+	}
+	events := serveAdminJSON(t, handler, http.MethodGet, "/api/admin/failover/events", nil, login.Result().Cookies()[0])
+	if events.Code != http.StatusOK || !strings.Contains(events.Body.String(), `"from_node_id":"bwg"`) || strings.Contains(events.Body.String(), "rollback-metadata") {
+		t.Fatalf("events status=%d body=%s", events.Code, events.Body.String())
 	}
 }
 
