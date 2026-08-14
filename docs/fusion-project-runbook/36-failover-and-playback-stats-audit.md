@@ -1,7 +1,7 @@
 # Failover and Playback Statistics Audit
 
 Date: 2026-08-14 Asia/Shanghai
-Status: IN PROGRESS
+Status: DONE (NOSLA statistics collector remains a separate follow-up gate)
 
 ## Safety boundary
 
@@ -87,7 +87,8 @@ root-only rollback script. No rollback is executed as part of the baseline.
 - NOSLA backup:
   `/var/backups/embyproxy-failover-stats-audit/20260814T134500Z-nosla`.
   Rollback script: the `rollback.sh` inside that directory.
-- BWG release: `/opt/embyproxy-gsy-sidecar/releases/audit-20260814`.
+- Final BWG release: `/opt/embyproxy-gsy-sidecar/releases/804b242`; its binary
+  reports source commit `804b242`.
   The initial remote command expanded a local shell variable and temporarily
   pointed `current` at the releases root. The service remained healthy; the
   link was immediately corrected to the explicit release directory and
@@ -112,6 +113,10 @@ root-only rollback script. No rollback is executed as part of the baseline.
   bounded verification window. Raw log lines were not emitted.
 - No real failover was forced. Policy unit simulations cover healthy,
   over-threshold, unhealthy, recovery, manual holds and rollback behavior.
+- The local source commit is `804b242`. A direct origin feature push timed out
+  without advancing the tracked origin ref; publishing remains pending through
+  the separately controlled BWG feature-only publish bridge. Main/master and
+  force push were not used.
 
 ## Remaining statistics gate
 
