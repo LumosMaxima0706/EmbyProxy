@@ -87,8 +87,8 @@ root-only rollback script. No rollback is executed as part of the baseline.
 - NOSLA backup:
   `/var/backups/embyproxy-failover-stats-audit/20260814T134500Z-nosla`.
   Rollback script: the `rollback.sh` inside that directory.
-- Final BWG release: `/opt/embyproxy-gsy-sidecar/releases/804b242`; its binary
-  reports source commit `804b242`.
+- Final BWG release: `/opt/embyproxy-gsy-sidecar/releases/b9e0ede`; its binary
+  reports source commit `b9e0ede`.
   The initial remote command expanded a local shell variable and temporarily
   pointed `current` at the releases root. The service remained healthy; the
   link was immediately corrected to the explicit release directory and
@@ -99,6 +99,9 @@ root-only rollback script. No rollback is executed as part of the baseline.
 - Authenticated status API: PASS. Active target `NOSLA`, mode `auto`, manual
   hold `none`, reason `nosla_healthy_below_threshold`, source
   `policy_state_file`.
+- Authenticated events API: PASS. One historical verified switch is projected
+  from policy state using only timestamp, source, target and result fields;
+  backup metadata is not exposed. Empty history is labeled `暂无切换事件`.
 - Stats API/UI contract: PASS. Source `local_sidecar_store`, available `false`
   while NOSLA serves production, reason `active_traffic_served_by_nosla`; UI
   displays `未接入` instead of fabricated zero totals.
@@ -113,7 +116,7 @@ root-only rollback script. No rollback is executed as part of the baseline.
   bounded verification window. Raw log lines were not emitted.
 - No real failover was forced. Policy unit simulations cover healthy,
   over-threshold, unhealthy, recovery, manual holds and rollback behavior.
-- The local source commit is `804b242`. A direct origin feature push timed out
+- The deployed source commit is `b9e0ede`. A direct origin feature push timed out
   without advancing the tracked origin ref; publishing remains pending through
   the separately controlled BWG feature-only publish bridge. Main/master and
   force push were not used.
