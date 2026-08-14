@@ -82,6 +82,24 @@ type Handler struct {
 	dnsStatusReader func() map[string]any
 }
 
+// readExternalFailoverState reads the policy runner's state file without
+// exposing raw accounting or credential fields through the admin API.
+func (h *Handler) readExternalFailoverState() map[string]any {
+	path := strings.TrimSpace(h.cfg.FailoverStateFile)
+	if path == "" {
+		return nil
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var state map[string]any
+	if json.Unmarshal(raw, &state) != nil {
+		return nil
+	}
+	return state
+}
+
 func (h *Handler) SetFailoverController(controller *failover.Controller) {
 	h.failover = controller
 }
@@ -664,7 +682,19 @@ func (h *Handler) dispatch(ctx context.Context, uid, action string, body map[str
 		if err != nil {
 			return fail(err.Error()), http.StatusInternalServerError
 		}
-		return map[string]any{"ok": true, "stats": stats}, http.StatusOK
+		response := map[string]any{
+			"ok":              true,
+			"stats":           stats,
+			"stats_source":    "local_sidecar_store",
+			"stats_available": true,
+		}
+		if state := h.readExternalFailoverState(); state != nil {
+			if target := normalizedFailoverTarget(state["active_target"]); target == "NOSLA" {
+				response["stats_available"] = false
+				response["stats_unavailable_reason"] = "active_traffic_served_by_nosla"
+			}
+		}
+		return response, http.StatusOK
 	case "logs.list":
 		return h.listLogs(body), http.StatusOK
 	case "logs.clear":

@@ -2608,6 +2608,13 @@ async function loadStats() {
   const r = await api('stats.get', { days });
   if (!r.ok) { toast('加载统计失败', 'err'); return; }
   statsRows = Array.isArray(r.stats) ? r.stats : [];
+  if (r.stats_available === false) {
+    const unavailable = '未接入';
+    document.getElementById('headStatus').innerHTML = statusCells([[unavailable, '统计数据']]);
+    document.getElementById('statsCards').innerHTML = `<div class="stat-block"><div class="val">${unavailable}</div><div class="lbl">当前生产流量由 NOSLA 承载，本机统计未接入</div></div>`;
+    renderStatsTable();
+    return;
+  }
 
   let totalPlays = 0, totalSessions = 0, totalPlaybackMillis = 0, totalInboundBytes = 0, totalOutboundBytes = 0;
   const nodeSet = new Set(), clientSet = new Set();
@@ -3352,7 +3359,10 @@ async function loadFailoverStatus() {
 
 function renderFailoverStatus(status, events) {
   const state = status.state || {};
-  const nodes = status.nodes || [];
+	const nodes = status.nodes || [];
+	if (state.active_target || state.activeTarget) {
+	  state.active_node_id = String(state.active_target || state.activeTarget).toUpperCase();
+	}
   const cards = [
 	['当前节点', state.active_node_id || '--'],
 	['当前模式', state.mode || '--'],
@@ -3382,7 +3392,7 @@ async function setFailoverMode(mode) {
 }
 
 async function pauseFailoverAutomation() {
-  const active = failoverSnapshot?.state?.active_node_id;
+	const active = String(failoverSnapshot?.state?.active_target || failoverSnapshot?.state?.active_node_id || '').toLowerCase();
   if (active !== 'nosla' && active !== 'bwg') {
 	toast('当前节点状态不可用', 'err');
 	return;
@@ -3391,7 +3401,7 @@ async function pauseFailoverAutomation() {
 }
 
 async function dryRunFailoverDNS() {
-	const targetNode = failoverSnapshot?.state?.active_node_id;
+	const targetNode = String(failoverSnapshot?.state?.active_target || failoverSnapshot?.state?.active_node_id || '').toLowerCase();
 	if (!targetNode) {
 		toast('当前节点状态不可用', 'err');
 		return;

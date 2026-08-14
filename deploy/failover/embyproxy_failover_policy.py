@@ -44,6 +44,8 @@ def atomic_json(path, value, mode=0o600):
             handle.flush()
             os.fsync(handle.fileno())
         os.chmod(temporary, mode)
+        if mode & 0o040:
+            os.chown(temporary, -1, path.parent.stat().st_gid)
         os.replace(temporary, path)
     finally:
         if os.path.exists(temporary):
@@ -371,7 +373,7 @@ def run_policy(config_path, output):
         except Exception:
             state["decision_reason"] = reason
             state["updated_at"] = moment.isoformat()
-            atomic_json(state_path, state)
+            atomic_json(state_path, state, mode=0o640)
             raise
     state.update({
         "decision_reason": reason, "mode": config["mode"],
@@ -401,7 +403,7 @@ def run_policy(config_path, output):
         "usage_state": samples["nosla"].get("quality"),
         "traffic_samples": samples, "updated_at": moment.isoformat(),
     })
-    atomic_json(state_path, state)
+    atomic_json(state_path, state, mode=0o640)
     result = {
         "ok": True, "mode": config["mode"], "active_target": state["active_target"],
         "desired_target": desired, "decision_reason": reason, "change": change,

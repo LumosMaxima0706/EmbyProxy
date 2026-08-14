@@ -20,6 +20,27 @@ func (h *Handler) handleFailoverAPI(w http.ResponseWriter, r *http.Request, path
 	switch {
 	case r.Method == http.MethodGet && path == "/api/admin/failover/status":
 		state, nodes, eligibility := h.failover.StatusWithEligibility()
+		stateView := map[string]any{
+			"active_node_id":       state.ActiveNodeID,
+			"desired_node_id":      state.DesiredNodeID,
+			"observed_dns_node_id": state.ObservedDNSNodeID,
+			"mode":                 state.Mode,
+		}
+		if external := h.readExternalFailoverState(); external != nil {
+			if target := normalizedFailoverTarget(external["active_target"]); target != "" {
+				stateView["active_node_id"] = strings.ToLower(target)
+				stateView["active_target"] = strings.ToLower(target)
+				stateView["activeTarget"] = target
+				stateView["effective_route"] = "stream_dns"
+				stateView["effectiveRoute"] = "stream_dns"
+				stateView["state_source"] = "policy_state_file"
+			}
+			for _, key := range []string{"mode", "manual_hold", "decision_reason", "last_switch_at", "last_healthcheck", "updated_at", "usage_state"} {
+				if value, ok := external[key]; ok {
+					stateView[key] = value
+				}
+			}
+		}
 		views := make([]map[string]any, 0, len(nodes))
 		for _, node := range nodes {
 			views = append(views, map[string]any{
@@ -36,7 +57,7 @@ func (h *Handler) handleFailoverAPI(w http.ResponseWriter, r *http.Request, path
 				"traffic":                      failoverTrafficView(node.Traffic),
 			})
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "state": state, "nodes": views})
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "state": stateView, "nodes": views})
 	case r.Method == http.MethodPost && path == "/api/admin/failover/check-now":
 		decision, err := h.failover.Evaluate()
 		if err != nil {
@@ -156,6 +177,18 @@ func (h *Handler) handleFailoverAPI(w http.ResponseWriter, r *http.Request, path
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "verified": true})
 	default:
 		http.NotFound(w, r)
+	}
+}
+
+func normalizedFailoverTarget(value any) string {
+	target := strings.ToLower(strings.TrimSpace(asString(value)))
+	switch target {
+	case "nosla":
+		return "NOSLA"
+	case "bwg":
+		return "BWG"
+	default:
+		return ""
 	}
 }
 
