@@ -80,3 +80,85 @@ Client class, exact active session count, and exact playback duration remain una
 - Confirm DNS convergence, stream health, Emby login, and a small owner-triggered playback; verify BWG source-node stats.
 - Restore NOSLA after health and fresh-cycle conditions pass; verify DNS, playback, and source-node aggregation.
 - Any failed health, 5xx, admin isolation, or redaction check means immediate rollback via the existing rollback scripts.
+
+## 2026-08-15 traffic-bytes reconciliation and publication-state gate
+
+### Plan status
+
+| Step | Status | Observation | Decision | Next action |
+| --- | --- | --- | --- | --- |
+| R1 query-free log | DONE | NOSLA log has `request_length`, `bytes_sent`, request/upstream timing, HTTP 200/206 and classified playback paths | Use request length for inbound and bytes sent for outbound; do not add query/header logging | Keep query-free format |
+| R2 parser | DONE | Backfill parsed 2,416 safe lines with zero drops and produced 11,077,932,286 outbound bytes; a later cursor dry-run also produced nonzero outbound bytes | Parser is not the zero-byte point | Keep 200, 206 and Range handling |
+| R3 central store | DONE | Direct SQLite totals and per-node rows contain nonzero inbound/outbound values and 206 rows | Central ingest is not the zero-byte point | Keep central store authoritative |
+| R4 Admin API | DONE | API snake_case totals exactly matched SQLite totals | API/store transport is correct | Preserve API compatibility |
+| R5 Admin UI | DONE | UI read camelCase only while the central API returns snake_case | Add camelCase/snake_case compatibility at the formatting boundary | Owner browser refresh only if an old tab remains open |
+| P1 publication model | DONE | UHD is fully published; feimu is only a saved upstream and has no public mapping or edge route | Expose saved/published state explicitly; do not auto-publish | Await owner approval before feimu publication |
+
+### Before-fix byte accounting
+
+- NOSLA safe log sample: 2,421 lines, 480,367 request bytes and 11,142,192,601 response bytes; 99 HTTP 206 responses, 2,089 VideoStream classifications and 14 PlaybackInfo requests.
+- Parser dry-run: 2,416 parsed, zero dropped, 14 PlaybackInfo, 1,654 VideoStream, 98 partial responses and 11,077,932,286 outbound bytes.
+- Central SQLite: 533,996 inbound bytes, 11,142,870,915 outbound bytes and 1,704 rows. NOSLA contributed 480,212 inbound and 11,142,191,582 outbound bytes.
+- Admin API returned the same nonzero snake_case fields.
+- UI rendered `0B` because it read `inboundBytes`/`outboundBytes`, not `inbound_bytes`/`outbound_bytes`.
+
+### Minimal fix and deployment
+
+- Commit `e80a26c` adds UI compatibility for snake_case/camelCase stats fields and explicit node publication-state fields.
+- Admin nodes now return `publicUrlStatus` and `publicUrlReason`:
+  - configured public mapping: `published / public_entry_configured`;
+  - saved upstream without public mapping: `saved_unpublished / no_edge_route_configured`.
+- The Admin UI says that a saved-only node has not been published to stream. It does not synthesize an owner-admin media URL and does not offer a false usable address.
+- BWG release: `/opt/embyproxy-gsy-sidecar/releases/e80a26c-admin-publish`.
+- Backup: `/var/backups/embyproxy-global-stats/20260815T144500Z-bwg`.
+- Rollback: `/var/backups/embyproxy-global-stats/20260815T144500Z-bwg/rollback.sh`; syntax check passed and rollback was not executed.
+- Deployment restarted only the loopback sidecar. No DNS, Nginx, media route, collector, failover policy, ACME, or upstream change occurred.
+
+### Post-fix reconciliation
+
+- Direct central store snapshot: 558,557 inbound bytes, 11,966,492,331 outbound bytes, 1,776 aggregate rows and 60 aggregate rows marked HTTP 206.
+- Per-node store snapshot: NOSLA 498,721 inbound / 11,965,764,058 outbound; BWG 59,836 inbound / 728,273 outbound.
+- Admin API totals and both node totals exactly matched SQLite at verification time.
+- The deployed Admin HTML contains the snake_case byte compatibility code; the API reports nonzero totals, so both top totals and per-node rows now use the same central values.
+- A later NOSLA collector dry-run parsed one new VideoStream event with nonzero outbound bytes without mutating the cursor or store.
+- This verifies live byte flow through log, parser, store, API and UI mapping. It does not attribute the observed increase to a specific owner playback session unless the owner supplies the playback time window.
+
+### Runtime and isolation verification
+
+- Deployed build reports commit `e80a26c`; sidecar is active with zero restarts and listens only on `127.0.0.1:18082`.
+- Owner Admin unauthenticated `/admin` returned 401; Basic Auth returned 200.
+- Owner Admin media paths returned 404; canary and stream Admin paths returned 404.
+- Canary and production small `System/Info/Public` checks returned 200 with a compatible non-media client user agent.
+- Failover remains mode `auto`, active target `NOSLA`, manual hold `none`; the new timer remains active/enabled and the legacy timer inactive/disabled.
+- Owner Admin access-log and sidecar journal redaction scans passed. No credential/header/query data was persisted or printed.
+
+## Current production model
+
+```text
+Yamby public media address
+  -> stream DNS
+  -> active edge selected by failover (NOSLA now, BWG fallback)
+  -> explicit edge Nginx/sidecar route and upstream allowlist
+  -> saved Emby upstream server
+  -> allowlisted playback redirect hosts and response rewriting
+  -> client
+```
+
+- NOSLA/BWG are edge/data-plane nodes. Failover changes which edge the stream hostname resolves to; it does not create or delete an Emby upstream.
+- UHD and feimu are Emby upstream servers saved in the Admin node store.
+- A managed/public route is a separate publication object that makes an allowlisted upstream reachable through the stream hostname.
+- Saving an Emby server currently does not publish it automatically.
+- UHD works because it has all publication layers: saved node, public node-path configuration, managed route, explicit NOSLA/BWG edge locations, and required redirect-host handling.
+- Feimu currently has only the saved node. It has no public node-path mapping, managed route, or NOSLA/BWG edge preparation, so its correct UI state is saved but unpublished.
+
+### Feimu dry-run publication plan (not applied)
+
+- Proposed slug: `feimu`.
+- Scheme and effective port: HTTPS/443.
+- Public path shape: `/https/<saved-feimu-host>/443`, without a trailing slash in the recommended client address.
+- Required gates: create the managed route, add the explicit public node-path mapping, prepare allowlisted routes on both NOSLA and BWG, discover and allow only required playback redirect hosts, back up both edges, and validate rollback plus small non-media health checks.
+- Do not open arbitrary dynamic upstream hosts. Do not publish on the owner-admin hostname. Do not apply any part of this plan until the owner explicitly approves production publication.
+
+## Product answer
+
+The current version is not "save an Emby server and it is automatically public through failover." The missing step is explicit publication to both edge nodes. The target product should keep save and publish as separate visible states, then provide a guarded publish workflow that prepares both edges before returning a stream address. UHD has that previously configured publication stack; feimu does not.
