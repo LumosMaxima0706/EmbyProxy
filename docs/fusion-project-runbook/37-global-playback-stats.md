@@ -39,6 +39,7 @@ Status: DEPLOYED - OWNER PLAYBACK VALIDATION PENDING
   - `/var/backups/embyproxy-global-stats/20260815T085500Z-nosla/rollback.sh`
   - schema migration backups: `/var/backups/embyproxy-global-stats/20260815T093000Z-bwg/rollback.sh` and `/var/backups/embyproxy-global-stats/20260815T093000Z-nosla/rollback.sh`.
   - all rollback scripts passed `bash -n` before installation.
+- Rollback audit found and fixed missing `current` symlink/central-DB restoration in the original generator. The latest schema rollback scripts are mode 0700, restore the pre-schema collector/sync binaries, restore the BWG DB and release target, and passed `bash -n`; they were not executed.
 - Live schema inspection confirms `timestamp`, `session_hash`, `item_hash`, `user_hash`, and `device_hash` columns; hash values remain empty because query-free logs do not provide safe identity data.
 
 ## Post-deploy verification

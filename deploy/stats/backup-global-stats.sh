@@ -22,10 +22,13 @@ if [ "$role" = bwg ]; then
   readlink -f /opt/embyproxy-gsy-sidecar/current >"$root/current-link-target"
   chmod 600 "$root/current-link-target"
   install -o root -g root -m 600 "$(readlink -f /opt/embyproxy-gsy-sidecar/current)/embyproxy" "$root/current-embyproxy"
+  if [ -f /usr/local/sbin/embyproxy-stats-collector ]; then install -o root -g root -m 600 /usr/local/sbin/embyproxy-stats-collector "$root/current-stats-collector"; fi
+  if [ -f /usr/local/sbin/embyproxy-stats-sync ]; then install -o root -g root -m 600 /usr/local/sbin/embyproxy-stats-sync "$root/current-stats-sync"; fi
   copy_if_present /etc/embyproxy-gsy-sidecar/embyproxy.env
   copy_if_present /var/lib/embyproxy-gsy-sidecar/global-stats.db
   for unit in embyproxy-stats-collector-bwg.service embyproxy-stats-collector-bwg.timer embyproxy-stats-sync.service embyproxy-stats-sync.timer; do copy_if_present "/etc/systemd/system/$unit"; done
 else
+  if [ -f /usr/local/sbin/embyproxy-stats-collector ]; then install -o root -g root -m 600 /usr/local/sbin/embyproxy-stats-collector "$root/current-stats-collector"; fi
   copy_if_present /usr/local/sbin/embyproxy-traffic-meter
   for unit in embyproxy-stats-collector-nosla.service embyproxy-stats-collector-nosla.timer; do copy_if_present "/etc/systemd/system/$unit"; done
   copy_if_present /var/lib/embyproxy-stats/nosla-snapshot.json
