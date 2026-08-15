@@ -30,6 +30,15 @@ type partialPublicationSyncer struct {
 	rollbackSucceeds bool
 }
 
+type emptyUnpublishFailureSyncer struct{ successfulPublicationSyncer }
+
+func (emptyUnpublishFailureSyncer) Unpublish(context.Context, PublicationPlan) (PublicationSyncResult, error) {
+	return PublicationSyncResult{
+		NOSLA: PublicationEdgeResult{Status: "failed"},
+		BWG:   PublicationEdgeResult{Status: "failed"},
+	}, nil
+}
+
 func (partialPublicationSyncer) Publish(context.Context, PublicationPlan) (PublicationSyncResult, error) {
 	return PublicationSyncResult{
 		NOSLA:      PublicationEdgeResult{Status: "synced"},
@@ -129,6 +138,20 @@ func TestCleanupWithoutArtifactsIsNoOp(t *testing.T) {
 	cleaned := serveAdminJSON(t, handler, http.MethodPost, "/api/admin/emby-servers/feimu/publish/cleanup", nil, cookie)
 	if cleaned.Code != http.StatusOK || !strings.Contains(cleaned.Body.String(), `"status":"saved_unpublished"`) {
 		t.Fatalf("cleanup status=%d body=%s", cleaned.Code, cleaned.Body.String())
+	}
+}
+
+func TestUnpublishEmptyHelperFailureHasActionableCode(t *testing.T) {
+	handler, cookie := publicationTestHandler(t)
+	handler.SetPublicationSyncer(emptyUnpublishFailureSyncer{})
+	published := serveAdminJSON(t, handler, http.MethodPost, "/api/admin/emby-servers/feimu/publish", nil, cookie)
+	if published.Code != http.StatusOK || !strings.Contains(published.Body.String(), `"status":"published"`) {
+		t.Fatalf("publish status=%d body=%s", published.Code, published.Body.String())
+	}
+	unpublished := serveAdminJSON(t, handler, http.MethodPost, "/api/admin/emby-servers/feimu/unpublish", nil, cookie)
+	body := unpublished.Body.String()
+	if unpublished.Code != http.StatusOK || !strings.Contains(body, `"reason":"helper_failed"`) || !strings.Contains(body, `"failed_step":"edge_unpublish"`) {
+		t.Fatalf("unpublish status=%d body=%s", unpublished.Code, body)
 	}
 }
 

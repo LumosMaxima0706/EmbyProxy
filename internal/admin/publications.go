@@ -664,9 +664,13 @@ func (h *Handler) handlePublicationAPI(w http.ResponseWriter, r *http.Request, p
 		if syncErr != nil || result.NOSLA.Status != "removed" || result.BWG.Status != "removed" {
 			reason := result.Reason
 			if reason == "" {
-				reason = "edge_unpublish_failed"
+				reason = "helper_failed"
 			}
-			failed := publicationRecord(uid, plan, storage.PublicationNeedsSync, reason, result.FailedStep, result)
+			failedStep := result.FailedStep
+			if failedStep == "" {
+				failedStep = "edge_unpublish"
+			}
+			failed := publicationRecord(uid, plan, storage.PublicationNeedsSync, reason, failedStep, result)
 			_ = h.store.SavePublication(ctx, failed)
 			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "status": failed.Status, "reason": failed.Reason, "failed_step": failed.FailedStep, "publication": failed})
 			return
