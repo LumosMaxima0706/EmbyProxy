@@ -27,7 +27,7 @@ Status: DEPLOYED - OWNER PLAYBACK VALIDATION PENDING
 
 ## Deployment record
 
-- Local implementation commit: `19039bd` on `feature/failover-phase2-local`; no force-push.
+- Initial central stats implementation: `19039bd`; schema-contract follow-up: `bbd971f`; no force-push.
 - BWG deployed release: `/opt/embyproxy-gsy-sidecar/releases/19039bd-schema`; `current` switched atomically from `19039bd-stats` (schema migration release).
 - BWG sidecar restarted once; `systemd` active, `NRestarts=0`, listener remains `127.0.0.1:18082`.
 - BWG collector and NOSLA collector are installed at `/usr/local/sbin/embyproxy-stats-collector`; BWG sync is `/usr/local/sbin/embyproxy-stats-sync`.
