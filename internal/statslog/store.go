@@ -129,10 +129,15 @@ func (s *Store) init(ctx context.Context) error {
 	_, err := s.db.ExecContext(ctx, `
 CREATE TABLE IF NOT EXISTS stats_events (
   bucket_start INTEGER NOT NULL,
+  timestamp INTEGER NOT NULL DEFAULT 0,
   source_node TEXT NOT NULL CHECK (source_node IN ('nosla','bwg')),
   path_class TEXT NOT NULL,
   status INTEGER NOT NULL,
   client_class TEXT NOT NULL DEFAULT 'unknown',
+  session_hash TEXT NOT NULL DEFAULT '',
+  item_hash TEXT NOT NULL DEFAULT '',
+  user_hash TEXT NOT NULL DEFAULT '',
+  device_hash TEXT NOT NULL DEFAULT '',
   bytes_in INTEGER NOT NULL DEFAULT 0,
   bytes_out INTEGER NOT NULL DEFAULT 0,
   duration_ms INTEGER NOT NULL DEFAULT 0,
@@ -150,6 +155,23 @@ CREATE TABLE IF NOT EXISTS stats_cursors (
   byte_offset INTEGER NOT NULL DEFAULT 0,
   updated_at INTEGER NOT NULL
 );`)
+	if err != nil {
+		return err
+	}
+	// Keep the explicit timestamp/hash contract available when upgrading a
+	// database created by the pre-central-stats schema.
+	for _, column := range []string{
+		`ALTER TABLE stats_events ADD COLUMN timestamp INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE stats_events ADD COLUMN session_hash TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE stats_events ADD COLUMN item_hash TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE stats_events ADD COLUMN user_hash TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE stats_events ADD COLUMN device_hash TEXT NOT NULL DEFAULT ''`,
+	} {
+		if _, alterErr := s.db.ExecContext(ctx, column); alterErr != nil && !strings.Contains(strings.ToLower(alterErr.Error()), "duplicate column") {
+			return alterErr
+		}
+	}
+	_, err = s.db.ExecContext(ctx, `UPDATE stats_events SET timestamp = bucket_start WHERE timestamp = 0`)
 	return err
 }
 
@@ -207,17 +229,18 @@ func (s *Store) Ingest(ctx context.Context, source string, events []Event) (Aggr
 	}
 	for itemKey, item := range aggregates {
 		if _, err := tx.ExecContext(ctx, `
-INSERT INTO stats_events (bucket_start, source_node, path_class, status, client_class,
+INSERT INTO stats_events (bucket_start, timestamp, source_node, path_class, status, client_class,
+ session_hash, item_hash, user_hash, device_hash,
  bytes_in, bytes_out, duration_ms, is_range, is_206, request_count,
  playback_start_hint, last_activity_at)
-VALUES (?, ?, ?, ?, 'unknown', ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, 'unknown', '', '', '', '', ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(bucket_start, source_node, path_class, status, client_class) DO UPDATE SET
  bytes_in=bytes_in+excluded.bytes_in, bytes_out=bytes_out+excluded.bytes_out,
  duration_ms=duration_ms+excluded.duration_ms, is_range=MAX(is_range, excluded.is_range),
  is_206=MAX(is_206, excluded.is_206), request_count=request_count+excluded.request_count,
  playback_start_hint=playback_start_hint+excluded.playback_start_hint,
  last_activity_at=MAX(last_activity_at, excluded.last_activity_at)
-`, itemKey.bucket, source, itemKey.path, itemKey.status, item.in, item.out, item.duration, item.partial, item.status206, item.requests, item.hints, item.last); err != nil {
+		`, itemKey.bucket, itemKey.bucket, source, itemKey.path, itemKey.status, item.in, item.out, item.duration, item.partial, item.status206, item.requests, item.hints, item.last); err != nil {
 			_ = tx.Rollback()
 			return AggregateResult{}, err
 		}
@@ -339,17 +362,18 @@ func (s *Store) ImportSnapshot(ctx context.Context, rows []SnapshotRow) error {
 			return errors.New("invalid stats snapshot row")
 		}
 		if _, err := tx.ExecContext(ctx, `
-INSERT INTO stats_events (bucket_start, source_node, path_class, status, client_class,
+INSERT INTO stats_events (bucket_start, timestamp, source_node, path_class, status, client_class,
+ session_hash, item_hash, user_hash, device_hash,
  bytes_in, bytes_out, duration_ms, is_range, is_206, request_count,
  playback_start_hint, last_activity_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, '', '', '', '', ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(bucket_start, source_node, path_class, status, client_class) DO UPDATE SET
  bytes_in=MAX(bytes_in, excluded.bytes_in), bytes_out=MAX(bytes_out, excluded.bytes_out),
  duration_ms=MAX(duration_ms, excluded.duration_ms), is_range=MAX(is_range, excluded.is_range),
  is_206=MAX(is_206, excluded.is_206), request_count=MAX(request_count, excluded.request_count),
  playback_start_hint=MAX(playback_start_hint, excluded.playback_start_hint),
  last_activity_at=MAX(last_activity_at, excluded.last_activity_at)
-`, row.BucketStart, source, row.PathClass, row.Status, row.ClientClass, row.BytesIn, row.BytesOut, row.DurationMS, boolInt(row.IsRange), boolInt(row.Is206), row.RequestCount, row.PlaybackStartHint, row.LastActivityAt); err != nil {
+		`, row.BucketStart, row.BucketStart, source, row.PathClass, row.Status, row.ClientClass, row.BytesIn, row.BytesOut, row.DurationMS, boolInt(row.IsRange), boolInt(row.Is206), row.RequestCount, row.PlaybackStartHint, row.LastActivityAt); err != nil {
 			_ = tx.Rollback()
 			return err
 		}

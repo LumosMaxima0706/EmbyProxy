@@ -19,7 +19,7 @@ Status: DEPLOYED - OWNER PLAYBACK VALIDATION PENDING
 | B1 current chain | DONE | NOSLA receives production playback; BWG SQLite was local-only and empty | Do not treat local zero as global zero | Design central collector |
 | B2 log/schema design | DONE | Both nodes have query-free logs with URI, status, request/response bytes and timing | Safe bounded path classes are sufficient for aggregate metrics | Implement offline parser |
 | C1 parser | DONE | Strict parser accepts the existing bare-timestamp query-free Nginx format and rejects query/control data | Parser returns safe path class, status, bytes, timing and 206 hint | Cross-node summary transport |
-| C2 central store/API | DONE | Separate `/var/lib/embyproxy-gsy-sidecar/global-stats.db` stores source/path/status aggregates and safe snapshot rows; old `proxy.db` is untouched | Central store is authoritative for owner-admin | Keep DB permissions and backups |
+| C2 central store/API | DONE | Separate `/var/lib/embyproxy-gsy-sidecar/global-stats.db` stores timestamp/source/path/status aggregates plus empty hash contract columns; old `proxy.db` is untouched | Central store is authoritative for owner-admin | Keep DB permissions and backups |
 | C3 collector/ingest | DONE | NOSLA backfill parsed 1016 lines with 0 drops, 2 PlaybackInfo, 733 VideoStream, 30 HTTP 206 and 1,637,611,584 response bytes; restricted sync imported 797 safe rows | Collector errors are isolated from proxy; both node timers are enabled | Owner playback validation |
 | C4 admin API/UI | DONE | Deployed release `19039bd-stats`; API returns `central_stats_store`, real NOSLA/BWG rows and recent activity; sessions/duration/client remain unavailable | UI no longer treats BWG local zero as global zero | Owner playback validation |
 | D owner playback validation | BLOCKED | Requires owner to play a small video; Codex must not synthesize media traffic | Await owner-triggered 20-second playback | Verify central record after owner signal |
@@ -28,7 +28,7 @@ Status: DEPLOYED - OWNER PLAYBACK VALIDATION PENDING
 ## Deployment record
 
 - Local implementation commit: `19039bd` on `feature/failover-phase2-local`; no force-push.
-- BWG deployed release: `/opt/embyproxy-gsy-sidecar/releases/19039bd-stats`; `current` switched atomically from `b9e0ede`.
+- BWG deployed release: `/opt/embyproxy-gsy-sidecar/releases/19039bd-schema`; `current` switched atomically from `19039bd-stats` (schema migration release).
 - BWG sidecar restarted once; `systemd` active, `NRestarts=0`, listener remains `127.0.0.1:18082`.
 - BWG collector and NOSLA collector are installed at `/usr/local/sbin/embyproxy-stats-collector`; BWG sync is `/usr/local/sbin/embyproxy-stats-sync`.
 - Enabled timers: `embyproxy-stats-collector-bwg.timer`, `embyproxy-stats-sync.timer`, and `embyproxy-stats-collector-nosla.timer`; first runs returned `Result=success`, `ExecMainStatus=0`.
@@ -37,7 +37,9 @@ Status: DEPLOYED - OWNER PLAYBACK VALIDATION PENDING
 - Backups and verified rollback scripts:
   - `/var/backups/embyproxy-global-stats/20260815T085500Z-bwg/rollback.sh`
   - `/var/backups/embyproxy-global-stats/20260815T085500Z-nosla/rollback.sh`
-  - both passed `bash -n` before installation.
+  - schema migration backups: `/var/backups/embyproxy-global-stats/20260815T093000Z-bwg/rollback.sh` and `/var/backups/embyproxy-global-stats/20260815T093000Z-nosla/rollback.sh`.
+  - all rollback scripts passed `bash -n` before installation.
+- Live schema inspection confirms `timestamp`, `session_hash`, `item_hash`, `user_hash`, and `device_hash` columns; hash values remain empty because query-free logs do not provide safe identity data.
 
 ## Post-deploy verification
 
