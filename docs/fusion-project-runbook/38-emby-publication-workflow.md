@@ -25,7 +25,7 @@ Date: 2026-08-15 Asia/Shanghai
 | P3 owner UI | DONE | Node cards show upstream, publication and NOSLA/BWG states, and expose publish/dry-run/unpublish/copy/verify actions according to state. | Emby server management is the normal owner workflow; managed routes remain advanced. | Deploy only after backup and production dry-run gates. |
 | P4 orphan prevention | DONE | Published or uncertain nodes cannot be renamed, retargeted, imported-over or deleted. Partial publish invokes edge cleanup and removes the staged route; failed cleanup is `needs_sync`. | Require unpublish/reconciliation before delete. | Verify against an isolated production DB copy. |
 | P5 local verification | DONE | Targeted tests, `go test ./...`, `go vet ./...` and `git diff --check` pass on the isolated BWG test tree. | Code gate passes. | Build a commit-tagged candidate. |
-| P6 feimu dry-run | TODO | No production state has been touched by the new workflow. | Run authenticated dry-run only after candidate deployment; compare DB/config hashes before and after. | Do not call publish. |
+| P6 feimu dry-run | DONE | Authenticated production dry-run returned the redacted HTTPS/443 plan. Publication rows and feimu route rows remained zero; DB logical state, sidecar env and BWG Nginx hashes were identical before/after. | Dry-run is non-mutating. | Do not call publish. |
 | P7 real feimu publication | BLOCKED | The production sidecar has no configured privileged `PublicationSyncer`; a no-op adapter would create false success. | Keep publication fail-closed. A restricted root-owned BWG/NOSLA edge adapter must be backed up, dry-run and verified before owner approval can be applied. | Await a separate production-publication gate after the adapter is ready. |
 
 ## Implemented contract
@@ -79,3 +79,44 @@ After deployment, run the feimu dry-run and prove zero changes to the production
 database, managed routes, sidecar environment, Nginx hashes and DNS. UHD must
 remain published and its address unchanged. Failover must remain auto/NOSLA
 with manual hold none. No cleanup is part of this phase.
+
+## 2026-08-15 production UI/API deployment
+
+- Deployed commit: `0c52667`.
+- Release: `/opt/embyproxy-gsy-sidecar/releases/0c52667-publication`.
+- Backup root: `/var/backups/embyproxy-publication/20260815T091800Z-bwg`.
+- Rollback script:
+  `/var/backups/embyproxy-publication/20260815T091800Z-bwg/rollback.sh`.
+- The backup checksum verification and rollback `bash -n` passed. The default
+  rollback preserves the live database; `--restore-db` is an explicit disaster
+  recovery option.
+- Sidecar is active/enabled with zero restarts after deployment and still has
+  exactly one `127.0.0.1:18082` listener and no non-loopback listener.
+- `emby_publications` exists and has zero rows. The existing managed route count
+  remains one; feimu has zero managed-route rows.
+- The live UI contains the publication/status/dry-run/unpublish workflow. UHD
+  is `published` with its prior public address. Feimu is
+  `saved_unpublished`, has no public address, and both edges are
+  `not_configured`.
+- The feimu dry-run shape is HTTPS on the stream hostname with a redacted saved
+  host and effective port 443. It declares managed route/line, public mapping,
+  BWG edge, NOSLA edge and redirect-host allowlist steps. It did not disclose
+  the saved host or upstream URL.
+- Pre/post dry-run fingerprints matched: managed/publication DB logical state,
+  sidecar environment and BWG stream Nginx configuration. No sidecar restart,
+  Nginx reload, DNS update or edge route mutation occurred for the dry-run.
+- Isolation checks: unauthenticated owner-admin `/admin` returned 401;
+  authenticated `/admin` returned 200; owner-admin `/uhd` and `/s/`, stream
+  `/admin`, and canary `/admin` returned 404. Stream health and the retained
+  canary public-info small endpoint returned 200.
+- Failover remains `auto`, active target `nosla`, manual hold `none`; the new
+  timer remains active/enabled and the legacy timer inactive/disabled.
+- Central playback statistics remain available with non-empty rows.
+- Bounded Admin access-log scans found no query marker, credential/header
+  marker or complete UUID. Sidecar journal scans found no panic/fatal or
+  502/503/504 marker.
+- Both edges still have no `proxy_cache_path`, enabled `proxy_cache`, background
+  update, slice, prefetch, preload or warmup directive. Streaming locations
+  retain buffering-off, request-buffering-off, Range and If-Range behavior.
+- No ACME request, cleanup, force push, DNS switch, failover change, UHD target
+  change or feimu publication was performed.
