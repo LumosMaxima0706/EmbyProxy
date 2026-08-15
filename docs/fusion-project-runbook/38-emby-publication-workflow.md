@@ -120,3 +120,9 @@ with manual hold none. No cleanup is part of this phase.
   retain buffering-off, request-buffering-off, Range and If-Range behavior.
 - No ACME request, cleanup, force push, DNS switch, failover change, UHD target
   change or feimu publication was performed.
+- Git delivery note: the local feature history is a fast-forward of the origin
+  feature branch. A normal push first failed during the GnuTLS handshake; a
+  normal retry and a one-command HTTP/1.1 retry then received no remote response
+  and were terminated. No force push, remote/auth edit or alternate publisher
+  was used. The deployed commit remains present locally and on BWG; origin is
+  not claimed as updated.
