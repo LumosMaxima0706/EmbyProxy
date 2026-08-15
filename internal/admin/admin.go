@@ -18,6 +18,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"embyproxy/internal/auth"
@@ -72,16 +73,18 @@ const telegramServerRemarkMaxRunes = 80
 const ownerAdminAuthenticatedHeader = "X-Owner-Admin-Authenticated"
 
 type Handler struct {
-	cfg             config.Config
-	store           *storage.Store
-	checker         *auth.Checker
-	telegram        *telegram.Service
-	log             *logging.Logger
-	resetRoute      ResetFunc
-	imageCache      ImageCacheManager
-	globalStats     *statslog.Store
-	failover        *failover.Controller
-	dnsStatusReader func() map[string]any
+	cfg               config.Config
+	store             *storage.Store
+	checker           *auth.Checker
+	telegram          *telegram.Service
+	log               *logging.Logger
+	resetRoute        ResetFunc
+	imageCache        ImageCacheManager
+	globalStats       *statslog.Store
+	failover          *failover.Controller
+	dnsStatusReader   func() map[string]any
+	publicationSyncer PublicationSyncer
+	publicationMu     sync.Mutex
 }
 
 // readExternalFailoverState reads the policy runner's state file without
@@ -165,6 +168,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if path == "/api/admin/managed-routes" || strings.HasPrefix(path, "/api/admin/managed-routes/") {
 		h.handleManagedRoutesAPI(w, r, path)
+		return
+	}
+	if strings.HasPrefix(path, "/api/admin/emby-servers/") {
+		h.handlePublicationAPI(w, r, path)
 		return
 	}
 	if strings.HasPrefix(path, "/api/admin/failover/") || strings.HasPrefix(path, "/api/admin/traffic/") || strings.HasPrefix(path, "/api/admin/dns/") {
@@ -579,12 +586,18 @@ func (h *Handler) dispatch(ctx context.Context, uid, action string, body map[str
 		return h.exportNodes(ctx, uid, body), http.StatusOK
 	case "delete":
 		name := validators.NormalizeName(body["name"])
+		if publication, err := h.publicationStatus(ctx, uid, name); err != nil {
+			return fail("PUBLICATION_STATUS_FAILED"), http.StatusInternalServerError
+		} else if publication.Status != storage.PublicationSavedUnpublished {
+			return map[string]any{"ok": false, "error": "PUBLISHED_REQUIRES_UNPUBLISH", "status": publication.Status}, http.StatusOK
+		}
 		if name == "" {
 			return fail("name 不能为空"), http.StatusOK
 		}
 		if err := h.store.DeleteNode(ctx, uid, name); err != nil {
 			return fail(err.Error()), http.StatusInternalServerError
 		}
+		_ = h.store.DeletePublication(ctx, uid, name)
 		h.reset(uid, name)
 		return ok(), http.StatusOK
 	case "batchDelete":
@@ -593,7 +606,13 @@ func (h *Handler) dispatch(ctx context.Context, uid, action string, body map[str
 			if nm == "" {
 				continue
 			}
+			if publication, err := h.publicationStatus(ctx, uid, nm); err != nil {
+				return fail("PUBLICATION_STATUS_FAILED"), http.StatusInternalServerError
+			} else if publication.Status != storage.PublicationSavedUnpublished {
+				return map[string]any{"ok": false, "error": "PUBLISHED_REQUIRES_UNPUBLISH", "name": nm, "status": publication.Status}, http.StatusOK
+			}
 			_ = h.store.DeleteNode(ctx, uid, nm)
+			_ = h.store.DeletePublication(ctx, uid, nm)
 			h.reset(uid, nm)
 		}
 		return ok(), http.StatusOK
@@ -1134,21 +1153,29 @@ func (h *Handler) list(ctx context.Context, uid string) map[string]any {
 	publicURLs := h.publicNodeURLs()
 	views := make([]adminNodeView, 0, len(nodes))
 	for _, node := range nodes {
-		publicURL := publicURLs[strings.ToLower(node.Name)]
-		status, reason := "saved_unpublished", "no_edge_route_configured"
-		if publicURL != "" {
-			status, reason = "published", "public_entry_configured"
+		publication, err := h.publicationStatus(ctx, uid, node.Name)
+		if err != nil {
+			publication = publicationStatusView{Status: "publish_failed", Reason: "publication_status_unavailable", NOSLAStatus: "unknown", BWGStatus: "unknown"}
 		}
-		views = append(views, adminNodeView{Node: node, PublicURL: publicURL, PublicURLStatus: status, PublicURLReason: reason})
+		publicURL := publication.PublicURL
+		if publicURL == "" {
+			publicURL = publicURLs[strings.ToLower(node.Name)]
+		}
+		views = append(views, adminNodeView{
+			Node: node, PublicURL: publicURL,
+			PublicURLStatus: publication.Status, PublicURLReason: publication.Reason,
+			Publication: publication,
+		})
 	}
 	return map[string]any{"ok": true, "nodes": views, "uid": uid, "build": buildinfo.Current()}
 }
 
 type adminNodeView struct {
 	storage.Node
-	PublicURL       string `json:"publicUrl,omitempty"`
-	PublicURLStatus string `json:"publicUrlStatus"`
-	PublicURLReason string `json:"publicUrlReason"`
+	PublicURL       string                `json:"publicUrl,omitempty"`
+	PublicURLStatus string                `json:"publicUrlStatus"`
+	PublicURLReason string                `json:"publicUrlReason"`
+	Publication     publicationStatusView `json:"publication"`
 }
 
 func (h *Handler) publicNodeURLs() map[string]string {
@@ -1204,6 +1231,14 @@ func (h *Handler) save(ctx context.Context, uid string, body map[string]any) map
 	}
 	if prevOK {
 		if prevNode, ok := storage.UnpackNode(prevName, prevPacked); ok {
+			publication, statusErr := h.publicationStatus(ctx, uid, prevName)
+			if statusErr != nil {
+				return fail("PUBLICATION_STATUS_FAILED")
+			}
+			if publication.Status != storage.PublicationSavedUnpublished &&
+				(prevName != node.Name || strings.TrimSpace(prevNode.Target) != strings.TrimSpace(node.Target)) {
+				return fail("PUBLISHED_REQUIRES_UNPUBLISH")
+			}
 			if _, hasFav := raw["fav"]; !hasFav {
 				node.Fav = prevNode.Fav
 			}
@@ -1238,6 +1273,18 @@ func (h *Handler) importNodes(ctx context.Context, uid string, body map[string]a
 		if validated.Error != "" {
 			results = append(results, map[string]any{"ok": false, "name": item["name"], "error": validated.Error})
 			continue
+		}
+		existing, existingErr := h.store.GetNode(ctx, uid, validated.Node.Name)
+		if existingErr != nil {
+			results = append(results, map[string]any{"ok": false, "name": validated.Node.Name, "error": "NODE_LOOKUP_FAILED"})
+			continue
+		}
+		if existing != nil {
+			publication, statusErr := h.publicationStatus(ctx, uid, validated.Node.Name)
+			if statusErr != nil || publication.Status != storage.PublicationSavedUnpublished {
+				results = append(results, map[string]any{"ok": false, "name": validated.Node.Name, "error": "PUBLISHED_REQUIRES_UNPUBLISH"})
+				continue
+			}
 		}
 		if err := h.store.SaveNode(ctx, uid, validated.Node); err != nil {
 			results = append(results, map[string]any{"ok": false, "name": validated.Node.Name, "error": err.Error()})

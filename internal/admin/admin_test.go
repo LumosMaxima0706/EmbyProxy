@@ -158,13 +158,13 @@ func TestListBuildsPublicNodeURLsWithoutAdminOriginOrSecrets(t *testing.T) {
 
 func TestAdminIndexUsesBackendPublicURLForDisplayCopyAndPreview(t *testing.T) {
 	for _, want := range []string{
-		"const proxyUrl = String(n.publicUrl || '');",
+		"const proxyUrl = String(publication.public_url || n.publicUrl || '');",
 		`data-copy="${attr(proxyUrl)}"`,
 		`data-public-url="${attr(proxyUrl)}"`,
 		"function openPublicMediaUrl(rawURL)",
 		"window.open(target.toString(), '_blank', 'noopener,noreferrer')",
-		"已发布公网入口",
-		"已保存上游，尚未发布到 stream",
+		"已发布公网反代入口",
+		"已保存上游，尚未发布公网反代入口",
 	} {
 		if !strings.Contains(indexHTML, want) {
 			t.Fatalf("Admin UI missing public URL contract %q", want)

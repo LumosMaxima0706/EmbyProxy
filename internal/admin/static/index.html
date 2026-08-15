@@ -156,6 +156,8 @@ main{min-width:0;min-height:0}
 .chip.ok{background:var(--green-wash);border-color:rgba(35,117,71,.16);color:var(--green)}
 .chip.warn{background:var(--amber-wash);border-color:rgba(189,106,52,.18);color:var(--amber)}
 .chip.blue{background:var(--blue-wash);border-color:rgba(49,95,143,.16);color:var(--blue)}
+.chip.err{background:#fff0ef;border-color:rgba(157,47,42,.18);color:var(--red)}
+.publication-plan{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;border:1px solid var(--line);border-radius:16px;background:var(--paper-2);padding:16px;color:var(--ink-2);font:12px/1.7 "Cascadia Code","SFMono-Regular",Consolas,monospace}
 .row-actions{display:flex;gap:7px;align-items:center;justify-content:center;justify-self:stretch;flex-wrap:wrap;width:auto;max-width:100%}
 .row-action{width:78px;padding:0 8px;overflow:hidden;text-overflow:ellipsis}
 .check-action.info{background:var(--blue-wash);border-color:rgba(49,95,143,.16);color:var(--blue)}
@@ -479,7 +481,7 @@ body[data-owner-admin-auth="basic_only"] #twoFactorCard { display:none!important
       </div>
       <nav class="rail-nav">
         <button class="rail-button active" onclick="switchTab('nodes',this)">节点</button>
-        <button class="rail-button" onclick="switchTab('managedRoutes',this)">路由</button>
+        <button class="rail-button" onclick="switchTab('managedRoutes',this)">高级路由</button>
         <button class="rail-button" onclick="switchTab('stats',this)">统计</button>
 		<button class="rail-button" onclick="switchTab('failover',this)">切换</button>
         <button class="rail-button" onclick="switchTab('logs',this)">日志</button>
@@ -680,6 +682,19 @@ body[data-owner-admin-auth="basic_only"] #twoFactorCard { display:none!important
         </section>
       </main>
     </section>
+  </div>
+</div>
+
+<div class="sheet-layer" id="publicationPlanModal" style="display:none" onclick="if(event.target===this)hideModal('publicationPlanModal')">
+  <div class="sheet">
+    <div class="sheet-head">
+      <div><h2>反代发布 Dry-run</h2><p>仅展示安全的发布计划，不修改数据库、边缘配置或运行服务。</p></div>
+      <button class="sheet-close" onclick="hideModal('publicationPlanModal')">x</button>
+    </div>
+    <div class="form-grid">
+      <div class="form-group form-full"><pre class="publication-plan" id="publicationPlanOutput"></pre></div>
+    </div>
+    <div class="form-actions"><button class="btn" onclick="hideModal('publicationPlanModal')">关闭</button></div>
   </div>
 </div>
 
@@ -1443,6 +1458,16 @@ function initApp() {
 }
 
 const MANAGED_ROUTES_ENDPOINT = '/api/admin/managed-routes';
+const EMBY_SERVERS_ENDPOINT = '/api/admin/emby-servers';
+
+async function publicationFetch(name, action, options = {}) {
+  const generation = authGeneration;
+  const safeName = encodeURIComponent(String(name || ''));
+  const r = await authFetch(`${EMBY_SERVERS_ENDPOINT}/${safeName}/${action}`, options);
+  if (generation !== authGeneration) return { ok: false, error: '', _status: 401, _stale: true };
+  if (handleSessionAuthFailure(r, generation)) return { ok: false, error: '', _status: 401, _stale: true };
+  return r;
+}
 
 async function managedRouteFetch(path = '', options = {}) {
   const generation = authGeneration;
@@ -1807,11 +1832,60 @@ function syncImpersonateProfileState() {
   document.getElementById('f-impersonateProfile').disabled = !enabled;
 }
 
+function publicationLabel(status) {
+  return ({
+    saved_unpublished: '已保存上游，尚未发布公网反代入口',
+    publishing: '正在发布公网反代入口',
+    published: '已发布公网反代入口',
+    unpublishing: '正在取消公网反代入口',
+    publish_failed: '反代发布失败',
+    needs_sync: '反代入口需要同步',
+  })[status] || '反代状态未知';
+}
+
+function publicationChipClass(status) {
+  if (status === 'published') return 'ok';
+  if (status === 'publish_failed') return 'err';
+  if (status === 'publishing' || status === 'unpublishing') return 'blue';
+  return 'warn';
+}
+
+function edgeSyncLabel(value) {
+  return ({ synced: '已同步', removed: '未同步', pending: '同步中', failed: '失败', not_configured: '未同步', unknown: '未知' })[value] || '未知';
+}
+
+function edgeSyncClass(value) {
+  if (value === 'synced') return 'ok';
+  if (value === 'failed') return 'err';
+  if (value === 'pending') return 'blue';
+  return 'warn';
+}
+
+function publicationActions(n, status, proxyUrl) {
+  const name = attr(n.name);
+  if (status === 'published') return `
+    <button class="btn btn-sm" data-copy="${attr(proxyUrl)}" onclick="copyText(this.dataset.copy)">复制 Yamby 地址</button>
+    <button class="btn btn-sm" onclick="checkPublishedProxy('${name}')">检测反代</button>
+    <button class="btn btn-sm btn-danger" onclick="unpublishNode('${name}')">取消发布</button>`;
+  if (status === 'publishing' || status === 'unpublishing') return '<button class="btn btn-sm" disabled>处理中</button>';
+  const publishText = status === 'publish_failed' ? '重试发布' : '发布反代';
+  const cleanup = (status === 'publish_failed' || status === 'needs_sync')
+    ? `<button class="btn btn-sm btn-danger" onclick="unpublishNode('${name}')">清理发布残留</button>` : '';
+  return `
+    <button class="btn btn-sm btn-primary" onclick="publishNode('${name}')">${publishText}</button>
+    <button class="btn btn-sm" onclick="showPublicationDryRun('${name}')">查看 dry-run</button>
+    ${cleanup}`;
+}
+
 function nodeCard(n) {
   const targets = splitTargets(n.target);
-  const proxyUrl = String(n.publicUrl || '');
-  const publicStatus = String(n.publicUrlStatus || (proxyUrl ? 'published' : 'saved_unpublished'));
-  const publicReason = String(n.publicUrlReason || (proxyUrl ? 'public_entry_configured' : 'no_edge_route_configured'));
+  const publication = n.publication || {};
+  const proxyUrl = String(publication.public_url || n.publicUrl || '');
+  const publicStatus = String(publication.status || n.publicUrlStatus || (proxyUrl ? 'published' : 'saved_unpublished'));
+  const publicReason = String(publication.reason || n.publicUrlReason || (proxyUrl ? 'public_entry_configured' : 'no_edge_route_configured'));
+  const failedStep = String(publication.failed_step || '');
+  const noslaStatus = String(publication.nosla_status || 'unknown');
+  const bwgStatus = String(publication.bwg_status || 'unknown');
   const sel = selectedNodes.has(n.name);
   const focused = focusedNodeName === n.name;
   const identityLabel = impersonateProfileLabel(n.impersonateProfile);
@@ -1832,16 +1906,17 @@ function nodeCard(n) {
     <div class="route-address">
       <div class="proxy-line">
         <div class="mono">
-          <span class="proxy-text">${proxyUrl ? esc(proxyUrl) : '已保存上游，尚未发布到 stream'}</span>
+          <span class="proxy-text">${publicStatus === 'published' && proxyUrl ? esc(proxyUrl) : '未发布，暂无公网地址'}</span>
           <button class="reveal-button" data-public-url="${attr(proxyUrl)}" onclick="openPublicMediaUrl(this.dataset.publicUrl)" title="打开公网观看地址" aria-label="打开公网观看地址" ${proxyUrl ? '' : 'disabled'}>${eyeIcon}</button>
         </div>
         <button class="copy-button" data-copy="${attr(proxyUrl)}" onclick="copyText(this.dataset.copy)" ${proxyUrl ? '' : 'disabled'}>复制</button>
       </div>
     </div>
     <div class="chip-pack">
-      ${publicStatus === 'published'
-        ? '<span class="chip ok">已发布公网入口</span>'
-        : `<span class="chip warn" title="${attr(publicReason)}">已保存上游，尚未发布到 stream</span>`}
+      <span class="chip ${publicationChipClass(publicStatus)}" title="${attr([failedStep, publicReason].filter(Boolean).join(': '))}">${esc(publicationLabel(publicStatus))}</span>
+      <span class="chip ${edgeSyncClass(noslaStatus)}">NOSLA: ${esc(edgeSyncLabel(noslaStatus))}</span>
+      <span class="chip ${edgeSyncClass(bwgStatus)}">BWG: ${esc(edgeSyncLabel(bwgStatus))}</span>
+      <span class="chip ${check?.type === 'ok' ? 'ok' : check?.type === 'err' ? 'err' : ''}">上游: ${check ? esc(compactCheckText(check.text)) : '未检测'}</span>
       ${n.tag?`<span class="node-tag">${esc(n.tag)}</span>`:''}
       <span class="chip blue">${targets.length} 上游</span>
       ${n.secret?'<span class="chip warn">密钥</span>':'<span class="chip">公开</span>'}
@@ -1851,7 +1926,8 @@ function nodeCard(n) {
     </div>
     <div class="row-actions">
       <button class="btn btn-sm btn-primary row-action" onclick="openEditModal('${n.name}')">编辑</button>
-      <button class="btn btn-sm row-action check-action${checkClass}" title="${attr(checkTitle)}" onclick="checkNodeStatus('${n.name}')">${esc(checkText)}</button>
+      <button class="btn btn-sm row-action check-action${checkClass}" title="${attr(checkTitle)}" onclick="checkNodeStatus('${n.name}')">检测上游</button>
+      ${publicationActions(n, publicStatus, proxyUrl)}
       ${n.renewDays ? `<button class="btn btn-sm" data-name="${attr(n.name)}" data-display="${attr(n.displayName||n.name)}" data-renew="${Number(n.renewDays||0)}" data-remind="${Number(n.remindBeforeDays||0)}" data-at="${attr(n.keepaliveAt||'00:00')}" onclick="testKeepaliveFromButton(this)">保号测试</button>` : ''}
       <button class="btn btn-sm btn-danger row-action" onclick="deleteNode('${n.name}')">删除</button>
     </div>
@@ -1866,6 +1942,62 @@ function openPublicMediaUrl(rawURL) {
   } catch (_) {
     toast('公网观看地址未配置或无效', 'err');
   }
+}
+
+async function showPublicationDryRun(name) {
+  const r = await publicationFetch(name, 'publish/dry-run', { method: 'POST' });
+  if (!r.ok) {
+    if (!r._stale) toast(`Dry-run 失败: ${r.failed_step || 'plan'} / ${r.reason || r.error}`, 'err');
+    return;
+  }
+  const plan = r.plan || {};
+  const lines = [
+    `Emby server: ${plan.node_name || name}`,
+    `Route slug: ${plan.route_slug || name}`,
+    `Public entry: ${plan.public_url || '--'}`,
+    `Upstream: ${plan.upstream_scheme || 'https'}://${plan.upstream_host || '<saved-host>'}:${plan.upstream_port || 443}`,
+    `Base path: ${plan.has_base_path ? 'configured' : 'none'}`,
+    `BWG edge: planned`,
+    `NOSLA edge: planned`,
+    `Changes: ${(plan.changes || []).join(', ') || '--'}`,
+    `Nginx reload: required on both edges`,
+    `Sidecar restart: required on BWG`,
+  ];
+  document.getElementById('publicationPlanOutput').textContent = lines.join('\n');
+  showModal('publicationPlanModal');
+}
+
+async function publishNode(name) {
+  if (!window.confirm(`确认发布 "${name}" 的公网反代入口？系统只会使用已保存的上游，并同步 NOSLA/BWG。`)) return false;
+  const r = await publicationFetch(name, 'publish', { method: 'POST' });
+  await loadNodes();
+  if (!r.ok) {
+    if (!r._stale) toast(`发布失败: ${r.failed_step || 'unknown'} / ${r.reason || r.error}`, 'err');
+    return false;
+  }
+  toast('公网反代入口已发布', 'ok');
+  return true;
+}
+
+async function unpublishNode(name, options = {}) {
+  if (!options.confirmed && !window.confirm(`确认取消 "${name}" 的公网反代入口？上游配置会保留。`)) return false;
+  const r = await publicationFetch(name, 'unpublish', { method: 'POST' });
+  await loadNodes();
+  if (!r.ok) {
+    if (!r._stale) toast(`取消发布失败: ${r.failed_step || 'unknown'} / ${r.reason || r.error}`, 'err');
+    return false;
+  }
+  if (!options.silent) toast('公网反代入口已取消，上游配置已保留', 'ok');
+  return true;
+}
+
+async function checkPublishedProxy(name) {
+  const r = await publicationFetch(name, 'verify-proxy', { method: 'POST' });
+  if (!r.ok) {
+    toast(`反代检测失败${r.status_code ? `: HTTP ${r.status_code}` : ''}`, 'err');
+    return;
+  }
+  toast(`反代可达: HTTP ${r.status_code} / ${r.latency_ms}ms`, 'ok');
 }
 
 function onNodeDragStart(event, name) {
@@ -2056,7 +2188,12 @@ async function saveNode() {
 }
 
 async function deleteNode(name) {
-  if (!confirm(`确认删除节点 "${name}"？`)) return;
+  const node = allNodes.find(item => item.name === name);
+  const status = String(node?.publication?.status || node?.publicUrlStatus || 'saved_unpublished');
+  if (status === 'published' || status === 'publishing' || status === 'unpublishing' || status === 'needs_sync' || status === 'publish_failed') {
+    if (!confirm('该服务器已发布公网反代入口。删除会同时取消反代发布，确认继续？')) return;
+    if (!await unpublishNode(name, { confirmed: true, silent: true })) return;
+  } else if (!confirm(`确认删除节点 "${name}"？`)) return;
   const r = await api('delete', { name });
   if (r.ok) { toast('已删除', 'ok'); await loadNodes(); }
   else toast('删除失败: ' + r.error, 'err');
@@ -2064,7 +2201,13 @@ async function deleteNode(name) {
 
 async function deleteSelected() {
   if (!selectedNodes.size) return;
-  if (!confirm(`确认删除选中的 ${selectedNodes.size} 个节点？`)) return;
+  const published = allNodes.filter(node => selectedNodes.has(node.name) && ['published','publishing','unpublishing','needs_sync','publish_failed'].includes(String(node?.publication?.status || node?.publicUrlStatus || '')));
+  if (published.length) {
+    if (!confirm(`选中项中有 ${published.length} 个已发布公网反代入口。删除会先取消发布，确认继续？`)) return;
+    for (const node of published) {
+      if (!await unpublishNode(node.name, { confirmed: true, silent: true })) return;
+    }
+  } else if (!confirm(`确认删除选中的 ${selectedNodes.size} 个节点？`)) return;
   const r = await api('batchDelete', { names: [...selectedNodes] });
   if (r.ok) { selectedNodes.clear(); updateSelBar(); toast('已删除', 'ok'); await loadNodes(); }
   else toast('删除失败: ' + r.error, 'err');
