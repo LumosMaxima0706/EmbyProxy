@@ -162,3 +162,61 @@ Yamby public media address
 ## Product answer
 
 The current version is not "save an Emby server and it is automatically public through failover." The missing step is explicit publication to both edge nodes. The target product should keep save and publish as separate visible states, then provide a guarded publish workflow that prepares both edges before returning a stream address. UHD has that previously configured publication stack; feimu does not.
+
+## 2026-08-15 owner-triggered playback delta
+
+Status: DONE, with one raw-log privacy exception recorded below.
+
+The baseline was captured before the owner-triggered playback and the watcher only read the central SQLite store. It did not request a media resource. The monitor waited for the normal NOSLA collector and BWG sync timers.
+
+| Metric | Before | After | Delta |
+| --- | ---: | ---: | ---: |
+| Playback start hints | 16 | 16 | 0 |
+| VideoStream requests | 2,215 | 2,226 | 11 |
+| HTTP 206 requests | 113 | 114 | 1 |
+| Bytes in | 579,843 | 587,509 | 7,666 |
+| Bytes out | 12,162,745,755 | 12,431,840,544 | 269,094,789 |
+| Aggregate activity rows | 1,855 | 1,872 | 17 |
+| Request count | 3,099 | 3,131 | 32 |
+
+- NOSLA outbound reached 12,431,043,566 bytes after the playback window.
+- Admin API totals exactly matched central SQLite totals, including the NOSLA row.
+- The deployed Admin bundle contains the snake_case byte mapping and receives nonzero values, so the UI no longer resolves these totals to `0B`.
+- The API returned 20 bounded recent-activity rows; 17 aggregate rows were new or updated after the baseline.
+- The playback hint did not increment in this window. The client appears to have reused an earlier PlaybackInfo result; VideoStream, 206 and byte deltas prove playback transport, but the collector deliberately did not invent a new play count.
+
+### Redaction audit
+
+- Central store schema and Admin stats API contain no query, token, cookie, Authorization, URL or UUID fields. Hash fields remain empty.
+- BWG stream and owner-admin access logs had zero query-bearing URI rows and zero UUID-bearing URI rows in the bounded audit.
+- NOSLA had zero query-bearing URI rows and no credential-shaped values, but one of 2,619 historical query-free URI rows contained a complete UUID. It was not copied to central SQLite/API/UI because the collector persists only path classes and aggregates.
+- Therefore the central statistics path passes redaction, but the raw NOSLA access-log claim "no complete UUID" does not fully pass. The safe follow-up is a separate backed-up log-contract migration that logs a bounded path class instead of raw `$uri`; this gate did not rotate or delete the historical log because cleanup was explicitly prohibited.
+
+## Feimu publication execution plan (not executed)
+
+Current readiness evidence:
+
+- BWG public media environment has only the existing UHD node-path mapping; feimu is absent.
+- The central managed-route store has the existing UHD route only; feimu has no route row or line row.
+- BWG `/etc/nginx/conf.d/stream-b-proxy.conf` and NOSLA `/etc/nginx/conf.d/stream-proxy.conf` contain UHD-specific routes. Neither edge has a feimu host match.
+- No DNS or certificate change is required because publication reuses the existing stream hostname.
+
+Planned gated execution:
+
+1. Capture BWG and NOSLA backups: Nginx configs, central database, sidecar environment, current release link and relevant systemd state. Create per-node rollback scripts and pass `bash -n`.
+2. Parse the saved upstream into scheme HTTPS, the saved feimu host, effective port 443 and any base path. Reject credentials, query strings, fragments and non-allowlisted schemes.
+3. Prepare the managed route in disabled/non-public state: slug `feimu`, node `feimu`, default line `main`, one explicit enabled line targeting the saved upstream. Use the localhost Admin API with root-only credentials, not the public Admin endpoint and not a direct unbacked SQL edit.
+4. Add the feimu public node-path mapping to `PUBLIC_MEDIA_NODE_PATHS_JSON` while preserving the UHD mapping. The recommended path shape is `/https/<feimu-host>/443`, without a trailing slash.
+5. Add an explicit host/path route to both edge configs. Do not add a general dynamic-host proxy. Preserve Range/If-Range, 200/206 streaming, buffering-off and cache-off behavior.
+6. Discover any playback redirect hosts through a staged, owner-triggered validation and add only observed hosts to the redirect allowlist. Do not log or persist redirect query strings.
+7. Run `nginx -t` on both nodes and test the small public-info endpoint locally with Host/SNI routing before any public enablement. Validate owner-admin and stream Admin isolation.
+8. Gracefully reload Nginx on both nodes. Restart only the BWG sidecar if the public mapping environment changed. Existing UHD locations remain byte-for-byte unchanged.
+9. Enable/publicize the managed route only after both edges pass. Return the client format `https://stream.149077530.xyz/https/<feimu-host>/443` with no trailing slash.
+10. Owner validates login/library and manually triggers a small playback. Confirm 200/206, Range, redirect allowlist, query-free stats and source-node attribution. Any 4xx/5xx, stalled playback, isolation regression or redaction failure triggers rollback.
+
+Planned backup roots:
+
+- `/var/backups/embyproxy-feimu-publish/<timestamp>-bwg/rollback.sh`
+- `/var/backups/embyproxy-feimu-publish/<timestamp>-nosla/rollback.sh`
+
+Expected impact: no DNS change and no ACME request. Both edges require a graceful Nginx reload; BWG management sidecar requires one restart for its public mapping. Production UHD routes and the active NOSLA target are not changed. This plan remains unexecuted pending explicit owner approval.
