@@ -371,3 +371,33 @@ To protect existing servers, fingerprint the sidecar environment and total
 managed-route counts before the operation, run the existing published server's
 small `/System/Info/Public` check before and after, and confirm its public URL
 mapping was unchanged. Do not perform a media smoke test automatically.
+
+### Fragment synced but HTTPS returns 403
+
+The stream configuration has separate port 80 and TLS serving blocks. The
+publication include must appear in both blocks. A historical hook installer
+stopped after finding the directive once and inserted it only in the port 80
+redirect/challenge block. In that state the edge helper, fragment write,
+`nginx -t`, reload and UI sync state all succeed, but TLS requests never see the
+slug fragment and fall through to the stream server's intentional 403 default.
+
+Diagnose this without logging a full public URL:
+
+1. Confirm the slug fragment exists and its fixed upstream path returns 200
+   when requested directly from the loopback media proxy.
+2. Count the publication include directive in the edge stream config. One is
+   incomplete; the expected count is at least two, covering HTTP and HTTPS.
+3. Inspect `nginx -T` around each include and verify one is inside the port 80
+   stream server and one is inside the port 443 stream server.
+4. Test the public small interface with GET. HEAD alone is insufficient because
+   upstream and fallback method handling can produce a misleading status.
+5. Back up the stream config, add only the missing TLS hook, run `nginx -t`,
+   graceful reload, and verify the public GET returns 200. Roll back the stream
+   config immediately if syntax or reload fails.
+
+The restricted helper readiness check rejects a stream config containing fewer
+than two include directives with `edge_include_hook_missing`. The hook installer
+is idempotent: it adds the directive only to matching stream HTTP/HTTPS blocks,
+does not edit fragments for another slug, and creates a node-local rollback
+script before replacement. Afterward, verify the existing UHD small interface,
+Admin isolation, active failover target and no-cache directives unchanged.

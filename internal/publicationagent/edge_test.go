@@ -63,6 +63,24 @@ func TestCandidateFragmentPassesNginxSyntax(t *testing.T) {
 	}
 }
 
+func TestVerifyIncludeHookRequiresHTTPAndHTTPSBlocks(t *testing.T) {
+	config := filepath.Join(t.TempDir(), "stream.conf")
+	cfg := EdgeConfig{StreamConfig: config, IncludeDirective: "/etc/nginx/conf.d/embyproxy-publications/*.conf"}
+	directive := "include /etc/nginx/conf.d/embyproxy-publications/*.conf;\n"
+	if err := os.WriteFile(config, []byte(directive), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyIncludeHook(cfg); err == nil || err.Error() != "edge_include_hook_missing" {
+		t.Fatalf("single HTTP hook was accepted: %v", err)
+	}
+	if err := os.WriteFile(config, []byte(directive+directive), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyIncludeHook(cfg); err != nil {
+		t.Fatalf("HTTP and HTTPS hooks were rejected: %v", err)
+	}
+}
+
 func TestCombineEdgesReportsBWGWhenNOSLAWasNotAttempted(t *testing.T) {
 	response := combineEdges(publicationprotocol.ActionPublish,
 		publicationprotocol.EdgeResult{Status: "not_attempted"},

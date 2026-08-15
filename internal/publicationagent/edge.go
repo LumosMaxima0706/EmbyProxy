@@ -164,7 +164,10 @@ func verifyIncludeHook(cfg EdgeConfig) error {
 		return errors.New("edge_stream_config_unavailable")
 	}
 	expected := "include " + cfg.IncludeDirective + ";"
-	if !strings.Contains(string(raw), expected) {
+	// Production stream configs have separate HTTP redirect/challenge and HTTPS
+	// serving blocks. A hook in only the HTTP block makes readiness look healthy
+	// while every real media request falls through the HTTPS deny location.
+	if strings.Count(string(raw), expected) < 2 {
 		return errors.New("edge_include_hook_missing")
 	}
 	return nil
