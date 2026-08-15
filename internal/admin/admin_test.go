@@ -18,7 +18,9 @@ import (
 	"embyproxy/internal/logging"
 	"embyproxy/internal/proxy"
 	"embyproxy/internal/requestlog"
+	"embyproxy/internal/statslog"
 	"embyproxy/internal/storage"
+	"time"
 )
 
 func TestServeAdminValidatesTokenConfig(t *testing.T) {
@@ -51,6 +53,30 @@ func TestServeAdminValidatesTokenConfig(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestStatsAPIUsesCentralStatsStore(t *testing.T) {
+	cfg := config.Config{AdminToken: "strong-admin-token"}
+	handler := newAuthTestHandler(t, cfg)
+	central, err := statslog.Open(filepath.Join(t.TempDir(), "global-stats.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer central.Close()
+	handler.SetGlobalStatsStore(central)
+	if _, err := central.Ingest(context.Background(), "nosla", []statslog.Event{{
+		OccurredAt: time.Now(), PathClass: statslog.PlaybackInfo, Status: http.StatusOK, ResponseBytes: 12,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	login := serveAdminJSON(t, handler, http.MethodPost, "/admin/auth/login", map[string]any{"token": cfg.AdminToken}, nil)
+	if login.Code != http.StatusOK {
+		t.Fatalf("login status=%d", login.Code)
+	}
+	response := serveAdminJSON(t, handler, http.MethodPost, "/admin/api", map[string]any{"action": "stats.get", "days": 1}, login.Result().Cookies()[0])
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"stats_source":"central_stats_store"`) || !strings.Contains(response.Body.String(), `"stats_available":true`) {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 

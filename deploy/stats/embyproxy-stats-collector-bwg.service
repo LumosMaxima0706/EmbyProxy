@@ -1,0 +1,12 @@
+[Unit]
+Description=EmbyProxy BWG query-free playback stats collector
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/local/sbin/embyproxy-stats-collector --source-node bwg --log /var/log/nginx/stream-b-proxy-access.log --db /var/lib/embyproxy-gsy-sidecar/global-stats.db --cursor /var/lib/embyproxy-gsy-sidecar/stats-cursors/bwg.json
+NoNewPrivileges=true
+PrivateTmp=true
+

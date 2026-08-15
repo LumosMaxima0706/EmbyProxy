@@ -1,0 +1,11 @@
+[Unit]
+Description=Run BWG query-free playback stats collector
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+Unit=embyproxy-stats-collector-bwg.service
+
+[Install]
+WantedBy=timers.target
+

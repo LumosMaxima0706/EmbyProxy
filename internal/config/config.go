@@ -25,6 +25,7 @@ type Defaults struct {
 type Config struct {
 	CWD                       string
 	DBPath                    string
+	GlobalStatsDBPath         string
 	Port                      int
 	ListenAddr                string
 	AdminListenAddr           string
@@ -90,6 +91,7 @@ func Load() (Config, error) {
 	cfg := Config{
 		CWD:                       cwd,
 		DBPath:                    envString("DB_PATH", filepath.Join(cwd, "data", "proxy.db")),
+		GlobalStatsDBPath:         envString("GLOBAL_STATS_DB_PATH", "/var/lib/embyproxy-gsy-sidecar/global-stats.db"),
 		Port:                      port,
 		ListenAddr:                listenAddr,
 		AdminListenAddr:           adminListenAddr,

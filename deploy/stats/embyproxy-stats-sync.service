@@ -1,0 +1,12 @@
+[Unit]
+Description=Import NOSLA safe playback stats snapshot into central store
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/local/sbin/embyproxy-stats-sync --config /etc/embyproxy-failover-policy/config.json --db /var/lib/embyproxy-gsy-sidecar/global-stats.db
+NoNewPrivileges=true
+PrivateTmp=true
+

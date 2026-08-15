@@ -13,4 +13,26 @@ tx=$(sed -n '1p' "$base/tx_bytes")
 case "$rx:$tx" in
   *[!0-9:]*|:*) exit 1 ;;
 esac
-printf '{"interface":"%s","rx_bytes":%s,"tx_bytes":%s}\n' "$interface" "$rx" "$tx"
+snapshot=/var/lib/embyproxy-stats/nosla-snapshot.json
+python3 - "$interface" "$rx" "$tx" "$snapshot" <<'PY'
+import json
+import pathlib
+import sys
+
+payload = {"interface": sys.argv[1], "rx_bytes": int(sys.argv[2]), "tx_bytes": int(sys.argv[3])}
+path = pathlib.Path(sys.argv[4])
+allowed_top = {"source_node", "generated_at", "rows"}
+allowed_row = {
+    "bucket_start", "source_node", "path_class", "status", "client_class",
+    "bytes_in", "bytes_out", "duration_ms", "is_range", "is_206",
+    "request_count", "playback_start_hint", "last_activity_at",
+}
+try:
+    snapshot = json.loads(path.read_text(encoding="utf-8"))
+    if set(snapshot) <= allowed_top and snapshot.get("source_node") == "nosla" and isinstance(snapshot.get("rows"), list):
+        if all(isinstance(row, dict) and set(row) <= allowed_row for row in snapshot["rows"]):
+            payload["stats_snapshot"] = snapshot
+except (OSError, ValueError, TypeError):
+    pass
+print(json.dumps(payload, separators=(",", ":"), sort_keys=True))
+PY

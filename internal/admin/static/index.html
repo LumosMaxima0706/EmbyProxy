@@ -612,6 +612,7 @@ body[data-owner-admin-auth="basic_only"] #twoFactorCard { display:none!important
               <tbody id="statsBody"></tbody>
             </table>
           </div>
+          <div class="context-card" id="statsRecentActivity"></div>
         </section>
 
 		<section id="tabFailover" class="stats-deck" style="display:none">
@@ -1227,6 +1228,7 @@ let logViewEpoch = 0;
 let logGapRefreshPending = false;
 let pendingLogCount = 0;
 let statsRows = [];
+let statsCapabilities = {};
 let statsSortKey = 'lastActivityAt';
 let statsSortDirection = 'desc';
 const LOG_PAGE_LIMIT = 2000;
@@ -2608,10 +2610,12 @@ async function loadStats() {
   const r = await api('stats.get', { days });
   if (!r.ok) { toast('加载统计失败', 'err'); return; }
   statsRows = Array.isArray(r.stats) ? r.stats : [];
+  statsCapabilities = r.capabilities || {};
   if (r.stats_available === false) {
     const unavailable = '未接入';
     document.getElementById('headStatus').innerHTML = statusCells([[unavailable, '统计数据']]);
     document.getElementById('statsCards').innerHTML = `<div class="stat-block"><div class="val">${unavailable}</div><div class="lbl">当前生产流量由 NOSLA 承载，本机统计未接入</div></div>`;
+    document.getElementById('statsRecentActivity').textContent = '最近活动：未接入';
     renderStatsTable();
     return;
   }
@@ -2630,17 +2634,21 @@ async function loadStats() {
 
   document.getElementById('headStatus').innerHTML = statusCells([
     [totalPlays, '播放'],
-    [totalSessions, '会话'],
+    [statsCapabilities.sessions ? totalSessions : '未接入', '会话'],
   ]);
   document.getElementById('statsCards').innerHTML = `
     <div class="stat-block"><div class="val">${totalPlays}</div><div class="lbl">总播放次数</div></div>
-    <div class="stat-block"><div class="val">${totalSessions}</div><div class="lbl">总会话数</div></div>
-    <div class="stat-block"><div class="val">${formatPlaybackDuration(totalPlaybackMillis)}</div><div class="lbl">总播放时长</div></div>
+    <div class="stat-block"><div class="val">${statsCapabilities.sessions ? totalSessions : '未接入'}</div><div class="lbl">总会话数</div></div>
+    <div class="stat-block"><div class="val">${statsCapabilities.duration ? formatPlaybackDuration(totalPlaybackMillis) : '未接入'}</div><div class="lbl">总播放时长</div></div>
     <div class="stat-block"><div class="val">${formatBytes(totalInboundBytes)}</div><div class="lbl">入站流量</div></div>
     <div class="stat-block"><div class="val">${formatBytes(totalOutboundBytes)}</div><div class="lbl">出站流量</div></div>
     <div class="stat-block"><div class="val">${nodeSet.size}</div><div class="lbl">活跃节点</div></div>
-    <div class="stat-block"><div class="val">${clientSet.size}</div><div class="lbl">客户端种类</div></div>
+    <div class="stat-block"><div class="val">${statsCapabilities.client_class ? clientSet.size : '未接入'}</div><div class="lbl">客户端种类</div></div>
   `;
+  const recent = Array.isArray(r.recent_activity) ? r.recent_activity : [];
+  document.getElementById('statsRecentActivity').textContent = recent.length
+    ? `最近活动：${recent.length} 条脱敏聚合记录`
+    : '最近活动：暂无数据';
   renderStatsTable();
 }
 
@@ -2660,7 +2668,7 @@ function renderStatsTable() {
   const stats = sortedStatsRows();
   const tbody = document.getElementById('statsBody');
   tbody.innerHTML = stats.length ? stats.map(s => `
-    <tr><td>${esc(s.day)}</td><td>${esc(formatStatsActivity(s))}</td><td>${esc(s.node)}</td><td>${esc(s.client)}</td><td>${s.plays}</td><td>${s.sessions}</td><td>${formatPlaybackDuration(statsPlaybackMillis(s))}</td><td>${formatBytes(trafficInboundBytes(s))}</td><td>${formatBytes(trafficOutboundBytes(s))}</td></tr>
+    <tr><td>${esc(s.day)}</td><td>${esc(formatStatsActivity(s))}</td><td>${esc(s.node)}</td><td>${statsCapabilities.client_class ? esc(s.client) : '未接入'}</td><td>${s.plays}</td><td>${statsCapabilities.sessions ? s.sessions : '未接入'}</td><td>${statsCapabilities.duration ? formatPlaybackDuration(statsPlaybackMillis(s)) : '未接入'}</td><td>${formatBytes(trafficInboundBytes(s))}</td><td>${formatBytes(trafficOutboundBytes(s))}</td></tr>
   `).join('') : '<tr><td class="table-empty" colspan="9">暂无数据</td></tr>';
   updateStatsSortHeaders();
 }

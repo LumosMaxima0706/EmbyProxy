@@ -123,7 +123,7 @@ func classifyPath(uri string) PathClass {
 	case strings.Contains(path, "subtitle") || strings.HasSuffix(path, ".vtt") || strings.HasSuffix(path, ".srt"):
 		return Subtitle
 	case strings.Contains(path, "/videos/") || strings.Contains(path, "/audio/") ||
-		strings.HasSuffix(path, ".mp4") || strings.Contains(path, "/stream"):
+		strings.HasSuffix(path, ".mp4") || strings.Contains(path, "/stream") || strings.Contains(path, "/https/"):
 		return VideoStream
 	case strings.Contains(path, "/images/") || strings.Contains(path, "/image"):
 		return Image

@@ -29,6 +29,7 @@ import (
 	"embyproxy/internal/logging"
 	"embyproxy/internal/proxy"
 	"embyproxy/internal/requestlog"
+	"embyproxy/internal/statslog"
 	"embyproxy/internal/storage"
 	"embyproxy/internal/telegram"
 	"embyproxy/internal/validators"
@@ -78,6 +79,7 @@ type Handler struct {
 	log             *logging.Logger
 	resetRoute      ResetFunc
 	imageCache      ImageCacheManager
+	globalStats     *statslog.Store
 	failover        *failover.Controller
 	dnsStatusReader func() map[string]any
 }
@@ -102,6 +104,10 @@ func (h *Handler) readExternalFailoverState() map[string]any {
 
 func (h *Handler) SetFailoverController(controller *failover.Controller) {
 	h.failover = controller
+}
+
+func (h *Handler) SetGlobalStatsStore(store *statslog.Store) {
+	h.globalStats = store
 }
 
 func (h *Handler) SetDNSStatusReader(reader func() map[string]any) {
@@ -678,6 +684,28 @@ func (h *Handler) dispatch(ctx context.Context, uid, action string, body map[str
 		return h.keepaliveTest(ctx, body)
 	case "stats.get":
 		days := clamp(intValue(body["days"], 7), 1, 30)
+		if h.globalStats != nil {
+			stats, err := h.globalStats.QueryStats(ctx, days)
+			if err != nil {
+				return fail(err.Error()), http.StatusInternalServerError
+			}
+			response := map[string]any{
+				"ok":              true,
+				"stats":           stats,
+				"stats_source":    "central_stats_store",
+				"stats_available": len(stats) > 0,
+				"capabilities": map[string]bool{
+					"sessions": false, "duration": false, "client_class": false,
+				},
+			}
+			if len(stats) == 0 {
+				response["stats_unavailable_reason"] = "no_central_data"
+			}
+			if recent, err := h.globalStats.Recent(ctx, 20); err == nil {
+				response["recent_activity"] = recent
+			}
+			return response, http.StatusOK
+		}
 		stats, err := h.store.GetPlayStats(ctx, days)
 		if err != nil {
 			return fail(err.Error()), http.StatusInternalServerError

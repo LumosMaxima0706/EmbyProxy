@@ -22,8 +22,9 @@ Status: IN PROGRESS
 | B1 current chain | DONE | NOSLA receives production playback; BWG SQLite is local-only and empty | Do not treat local zero as global zero | Design central collector |
 | B2 log/schema design | DONE | Both nodes have query-free logs with URI, status, request/response bytes and timing | These fields are safe and sufficient for aggregate traffic/path metrics | Implement offline parser first |
 | C1 parser | DONE | Strict parser accepts the existing bare-timestamp query-free Nginx format and rejects query/control data and invalid counters | Parser returns only safe path class, status, bytes, timing and 206 hint | Design the cross-node summary transport |
-| C2 central store/API | TODO | Admin reads BWG local store | Add source-node aggregate store only after parser tests | Stage schema and API |
-| C3 UI | TODO | UI currently shows `未接入` when active node is NOSLA | Keep unavailable state until central data is trustworthy | Bind central response |
+| C2 central store/API | DONE (local) | Separate SQLite schema stores minute/source/path/status aggregates and safe snapshot rows | `proxy.db` remains untouched; central data is authoritative when available | Deploy with backup |
+| C3 collector/ingest | DONE (local) | Cursor collector is idempotent; dry-run parsed 971 NOSLA lines with 0 drops and 1.64 GB response bytes | Collector errors are isolated from proxy; NOSLA snapshot transport uses restricted meter only | Remote backup, deploy and dry-run sync |
+| C4 admin API/UI | DONE (local) | API returns `central_stats_store` and capability metadata; unsupported fields are not rendered as zero | Keep sessions/duration/client class as `未接入` | Deploy BWG sidecar and verify |
 | D owner playback validation | BLOCKED | Requires owner to play a small video; Codex must not synthesize media traffic | Await owner-triggered 20-second playback | Verify central record after owner signal |
 | E failover rehearsal | BLOCKED | Real DNS mutation requires explicit owner confirmation | Prepare plan only | No production switch this phase |
 
