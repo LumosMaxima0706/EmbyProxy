@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/url"
 	"os"
@@ -84,6 +85,10 @@ func (a *Agent) serveConnection(ctx context.Context, connection *net.UnixConn) {
 	a.mu.Lock()
 	response := a.Handle(ctx, request)
 	a.mu.Unlock()
+	log.Printf("publication operation action=%s slug=%s operation_id=%s ok=%t nosla_status=%s nosla_error=%s nosla_step=%s bwg_status=%s bwg_error=%s bwg_step=%s",
+		request.Action, request.RouteSlug, request.OperationID, response.OK,
+		response.NOSLA.Status, response.NOSLA.ErrorCode, response.NOSLA.FailedStep,
+		response.BWG.Status, response.BWG.ErrorCode, response.BWG.FailedStep)
 	_ = json.NewEncoder(connection).Encode(response)
 }
 

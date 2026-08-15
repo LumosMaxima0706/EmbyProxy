@@ -51,3 +51,26 @@ func TestCandidateFragmentPassesNginxSyntax(t *testing.T) {
 		t.Fatalf("candidate nginx syntax failed: %v", err)
 	}
 }
+
+func TestOperationBackupDirectoryIsUniqueForRollback(t *testing.T) {
+	cfg := EdgeConfig{NodeName: "bwg", BackupRoot: t.TempDir()}
+	manifest := testManifest()
+	first, err := createOperationBackupDir(cfg, manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest.Action = publicationprotocol.ActionUnpublish
+	second, err := createOperationBackupDir(cfg, manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatalf("publish and rollback reused backup directory %q", first)
+	}
+	for _, directory := range []string{first, second} {
+		info, err := os.Stat(directory)
+		if err != nil || !info.IsDir() || info.Mode().Perm() != 0700 {
+			t.Fatalf("backup directory %q info=%v err=%v", directory, info, err)
+		}
+	}
+}

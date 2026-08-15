@@ -313,3 +313,53 @@ publish_failed or needs_sync
 + public_url empty
 => reconcile to saved_unpublished
 ```
+
+## `nosla_edge_sync_failed` troubleshooting
+
+A readiness dry-run proves that the sidecar can reach the restricted agent,
+both helpers can validate their include hooks, and the current host Nginx
+configuration passes syntax validation. It does not write a fragment, perform
+an atomic replace, reload Nginx, or prove that the publish rollback path works.
+Only an authenticated production publish exercises those stages.
+
+Start with the request ID from the sidecar access/publication log. Correlate it
+with the publication-agent journal, which records only action, slug, operation
+ID, edge status, error code and failed step. It must never log a host, URL,
+query, cookie or authorization header. On NOSLA, locate the request-ID-specific
+directory below `/var/backups/embyproxy-publication-agent`; the presence of
+`candidate.conf` and `nginx-candidate.conf` shows that the helper reached the
+candidate-test stage. An empty directory means the operation stopped before
+candidate creation or was an idempotent unpublish.
+
+Check the following in order:
+
+1. The BWG agent socket and service are active, and the sidecar peer UID matches
+   the root-only agent configuration.
+2. The dedicated SSH key is 0600, its known-host entry is pinned, and the NOSLA
+   authorized key still has the exact forced command. Do not grant a shell.
+3. BWG and NOSLA helper binary hashes match. Edge config is root-only 0600, the
+   include directory exists, and the stream config contains the expected fixed
+   include hook.
+4. Inspect the safe agent fields `nosla_error` and `nosla_step`. Run the saved
+   candidate with `nginx -t -c` only after redacting host/path details from any
+   operator output. Then run the normal host `nginx -t`.
+5. Confirm whether the target fragment exists and whether Nginx reload completed
+   in systemd. A successful helper uses candidate test, atomic replace, host
+   test, and graceful reload in that order.
+
+Publish, automatic rollback, explicit cleanup and retry may share one request
+ID. Their backup directories must nevertheless be unique by action and random
+suffix. Reusing a seconds-resolution directory causes `backup_failed`, can
+prevent rollback, and can overwrite the first edge error with a misleading
+partial-sync status.
+
+Partial publication exists if any one of the slug's managed route, route lines,
+public URL, BWG fragment or NOSLA fragment remains. Use only
+`POST /api/admin/emby-servers/{slug}/publish/cleanup`; never remove the global
+publication directory. After cleanup, verify both fragments are absent, the
+slug has zero route rows, and both host Nginx tests pass.
+
+To protect existing servers, fingerprint the sidecar environment and total
+managed-route counts before the operation, run the existing published server's
+small `/System/Info/Public` check before and after, and confirm its public URL
+mapping was unchanged. Do not perform a media smoke test automatically.

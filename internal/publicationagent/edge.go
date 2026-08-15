@@ -49,14 +49,20 @@ func applyEdge(ctx context.Context, cfg EdgeConfig, manifest publicationprotocol
 		return edgeFailure("backup_failed", "backup_directory", "")
 	}
 	target := filepath.Join(cfg.IncludeDir, manifest.Slug+".conf")
-	backupDir := filepath.Join(cfg.BackupRoot, time.Now().UTC().Format("20060102T150405Z")+"-"+manifest.OperationID+"-"+cfg.NodeName)
-	if err := os.Mkdir(backupDir, 0700); err != nil {
+	backupDir, err := createOperationBackupDir(cfg, manifest)
+	if err != nil {
 		return edgeFailure("backup_failed", "backup_directory", "")
 	}
 	if manifest.Action == publicationprotocol.ActionPublish {
 		return publishEdge(ctx, cfg, manifest, target, backupDir)
 	}
 	return unpublishEdge(ctx, cfg, manifest, target, backupDir)
+}
+
+func createOperationBackupDir(cfg EdgeConfig, manifest publicationprotocol.EdgeManifest) (string, error) {
+	prefix := time.Now().UTC().Format("20060102T150405.000000000Z") + "-" +
+		manifest.OperationID + "-" + cfg.NodeName + "-" + manifest.Action + "-"
+	return os.MkdirTemp(cfg.BackupRoot, prefix)
 }
 
 func publishEdge(ctx context.Context, cfg EdgeConfig, manifest publicationprotocol.EdgeManifest, target, backupDir string) publicationprotocol.EdgeResult {
