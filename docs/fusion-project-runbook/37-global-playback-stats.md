@@ -21,7 +21,7 @@ Status: IN PROGRESS
 | A2/A3 failover UI | DONE | `activeTarget=NOSLA`, mode `auto`, hold `none`, one projected event; UI no longer shows `--` | State and events use policy state source | Recheck after stats changes |
 | B1 current chain | DONE | NOSLA receives production playback; BWG SQLite is local-only and empty | Do not treat local zero as global zero | Design central collector |
 | B2 log/schema design | DONE | Both nodes have query-free logs with URI, status, request/response bytes and timing | These fields are safe and sufficient for aggregate traffic/path metrics | Implement offline parser first |
-| C1 parser | TODO | No central parser exists | Build parser with strict redaction and path classes | Add fixture tests |
+| C1 parser | DONE | Strict parser accepts the existing bare-timestamp query-free Nginx format and rejects query/control data and invalid counters | Parser returns only safe path class, status, bytes, timing and 206 hint | Design the cross-node summary transport |
 | C2 central store/API | TODO | Admin reads BWG local store | Add source-node aggregate store only after parser tests | Stage schema and API |
 | C3 UI | TODO | UI currently shows `未接入` when active node is NOSLA | Keep unavailable state until central data is trustworthy | Bind central response |
 | D owner playback validation | BLOCKED | Requires owner to play a small video; Codex must not synthesize media traffic | Await owner-triggered 20-second playback | Verify central record after owner signal |
