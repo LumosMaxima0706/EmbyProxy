@@ -66,7 +66,7 @@ func createOperationBackupDir(cfg EdgeConfig, manifest publicationprotocol.EdgeM
 }
 
 func publishEdge(ctx context.Context, cfg EdgeConfig, manifest publicationprotocol.EdgeManifest, target, backupDir string) publicationprotocol.EdgeResult {
-	fragment := renderNginxFragment(manifest)
+	fragment := renderNginxFragment(cfg, manifest)
 	if current, err := os.ReadFile(target); err == nil {
 		if bytes.Equal(current, fragment) {
 			if err := nginxTest(ctx, "/etc/nginx/nginx.conf"); err != nil {
@@ -114,7 +114,7 @@ func unpublishEdge(ctx context.Context, cfg EdgeConfig, manifest publicationprot
 	if err != nil {
 		return edgeFailure("edge_config_read_failed", "edge_route", backupDir)
 	}
-	if !bytes.Equal(current, renderNginxFragment(manifest)) {
+	if !bytes.Equal(current, renderNginxFragment(cfg, manifest)) {
 		return edgeFailure("route_conflict", "edge_route", backupDir)
 	}
 	backup := filepath.Join(backupDir, manifest.Slug+".conf")
@@ -170,10 +170,14 @@ func verifyIncludeHook(cfg EdgeConfig) error {
 	return nil
 }
 
-func renderNginxFragment(manifest publicationprotocol.EdgeManifest) []byte {
+func renderNginxFragment(cfg EdgeConfig, manifest publicationprotocol.EdgeManifest) []byte {
 	publicPath := "/https/" + manifest.UpstreamHost + "/" + strconv.Itoa(manifest.UpstreamPort)
 	if manifest.BasePath != "" {
 		publicPath += "/" + manifest.BasePath
+	}
+	connectionUpgrade := "$stream_connection_upgrade"
+	if cfg.NodeName == "bwg" {
+		connectionUpgrade = "$stream_bwg_connection_upgrade"
 	}
 	block := func(location string) string {
 		return fmt.Sprintf(`    location %s {
@@ -185,7 +189,7 @@ func renderNginxFragment(manifest publicationprotocol.EdgeManifest) []byte {
         proxy_set_header X-Forwarded-Port $server_port;
         proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection $stream_connection_upgrade;
+        proxy_set_header Connection %s;
         proxy_set_header Range $http_range;
         proxy_set_header If-Range $http_if_range;
         proxy_set_header Authorization $http_authorization;
@@ -210,7 +214,7 @@ func renderNginxFragment(manifest publicationprotocol.EdgeManifest) []byte {
         proxy_send_timeout 3600s;
         proxy_read_timeout 3600s;
     }
-`, location)
+`, location, connectionUpgrade)
 	}
 	return []byte("# embyproxy-publication slug=" + manifest.Slug + "\n" +
 		block("= "+publicPath) + block("^~ "+publicPath+"/"))
@@ -219,7 +223,7 @@ func renderNginxFragment(manifest publicationprotocol.EdgeManifest) []byte {
 func testCandidate(ctx context.Context, fragment, directory string) error {
 	config := filepath.Join(directory, "nginx-candidate.conf")
 	content := "worker_processes 1;\nerror_log stderr;\npid " + filepath.Join(directory, "nginx.pid") + ";\n" +
-		"events {}\nhttp { map $http_upgrade $stream_connection_upgrade { default upgrade; '' close; } server { listen 127.0.0.1:18089; include " + fragment + "; } }\n"
+		"events {}\nhttp { map $http_upgrade $stream_connection_upgrade { default upgrade; '' close; } map $http_upgrade $stream_bwg_connection_upgrade { default upgrade; '' close; } server { listen 127.0.0.1:18089; include " + fragment + "; } }\n"
 	if err := os.WriteFile(config, []byte(content), 0600); err != nil {
 		return err
 	}

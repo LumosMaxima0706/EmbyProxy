@@ -353,6 +353,14 @@ suffix. Reusing a seconds-resolution directory causes `backup_failed`, can
 prevent rollback, and can overwrite the first edge error with a misleading
 partial-sync status.
 
+The BWG and NOSLA stream configurations use different pre-existing WebSocket
+connection variables: BWG uses `$stream_bwg_connection_upgrade`, while NOSLA
+uses `$stream_connection_upgrade`. The generated fragment must select the
+variable for its edge. A standalone candidate test must define both variables;
+otherwise it can pass while the production host test fails with an unknown
+variable. If BWG fails before NOSLA is attempted, the response must report the
+BWG error and stage, not `nosla_edge_sync_failed`.
+
 Partial publication exists if any one of the slug's managed route, route lines,
 public URL, BWG fragment or NOSLA fragment remains. Use only
 `POST /api/admin/emby-servers/{slug}/publish/cleanup`; never remove the global

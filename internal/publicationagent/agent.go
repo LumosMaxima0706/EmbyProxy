@@ -286,7 +286,10 @@ func combineEdges(action string, nosla, bwg publicationprotocol.EdgeResult) publ
 	}
 	failed := bwg
 	node := "bwg"
-	if nosla.Status != expected {
+	if nosla.Status != expected && nosla.Status != "not_attempted" {
+		failed = nosla
+		node = "nosla"
+	} else if bwg.Status == expected && nosla.Status != expected {
 		failed = nosla
 		node = "nosla"
 	}

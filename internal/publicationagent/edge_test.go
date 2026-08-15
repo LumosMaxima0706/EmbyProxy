@@ -19,7 +19,7 @@ func testManifest() publicationprotocol.EdgeManifest {
 }
 
 func TestRenderNginxFragmentIsExplicitAndUncached(t *testing.T) {
-	fragment := string(renderNginxFragment(testManifest()))
+	fragment := string(renderNginxFragment(EdgeConfig{NodeName: "nosla"}, testManifest()))
 	for _, marker := range []string{
 		"location = /https/saved.example/443",
 		"location ^~ /https/saved.example/443/",
@@ -38,17 +38,37 @@ func TestRenderNginxFragmentIsExplicitAndUncached(t *testing.T) {
 	}
 }
 
+func TestRenderNginxFragmentUsesEdgeConnectionVariable(t *testing.T) {
+	bwg := string(renderNginxFragment(EdgeConfig{NodeName: "bwg"}, testManifest()))
+	nosla := string(renderNginxFragment(EdgeConfig{NodeName: "nosla"}, testManifest()))
+	if !strings.Contains(bwg, "proxy_set_header Connection $stream_bwg_connection_upgrade;") || strings.Contains(bwg, "proxy_set_header Connection $stream_connection_upgrade;") {
+		t.Fatalf("BWG fragment uses the wrong connection variable")
+	}
+	if !strings.Contains(nosla, "proxy_set_header Connection $stream_connection_upgrade;") {
+		t.Fatalf("NOSLA fragment uses the wrong connection variable")
+	}
+}
+
 func TestCandidateFragmentPassesNginxSyntax(t *testing.T) {
 	if _, err := os.Stat("/usr/sbin/nginx"); err != nil {
 		t.Skip("nginx is not installed in the test environment")
 	}
 	directory := t.TempDir()
 	fragment := filepath.Join(directory, "candidate.conf")
-	if err := os.WriteFile(fragment, renderNginxFragment(testManifest()), 0600); err != nil {
+	if err := os.WriteFile(fragment, renderNginxFragment(EdgeConfig{NodeName: "bwg"}, testManifest()), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if err := testCandidate(context.Background(), fragment, directory); err != nil {
 		t.Fatalf("candidate nginx syntax failed: %v", err)
+	}
+}
+
+func TestCombineEdgesReportsBWGWhenNOSLAWasNotAttempted(t *testing.T) {
+	response := combineEdges(publicationprotocol.ActionPublish,
+		publicationprotocol.EdgeResult{Status: "not_attempted"},
+		publicationprotocol.EdgeResult{Status: "failed", ErrorCode: "nginx_test_failed", FailedStep: "nginx_test"})
+	if response.ErrorCode != "nginx_test_failed" || response.FailedStep != "nginx_test" {
+		t.Fatalf("response=%+v", response)
 	}
 }
 
