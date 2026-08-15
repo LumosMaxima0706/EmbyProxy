@@ -187,6 +187,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) serveIndex(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
 	html := indexHTML
 	if h.trustedOwnerAdminRequest(r) {
 		html = strings.Replace(html, "<body>", `<body data-owner-admin-auth="basic_only">`, 1)
