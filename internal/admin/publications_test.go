@@ -76,11 +76,59 @@ func TestPublicationAPIsRequireAuthentication(t *testing.T) {
 		{http.MethodPost, "/api/admin/emby-servers/feimu/publish/dry-run"},
 		{http.MethodPost, "/api/admin/emby-servers/feimu/publish"},
 		{http.MethodPost, "/api/admin/emby-servers/feimu/unpublish"},
+		{http.MethodPost, "/api/admin/emby-servers/feimu/publish/reconcile"},
+		{http.MethodPost, "/api/admin/emby-servers/feimu/publish/cleanup"},
 	} {
 		response := serveAdminJSON(t, handler, endpoint.method, endpoint.path, nil, nil)
 		if response.Code != http.StatusUnauthorized {
 			t.Fatalf("%s %s status=%d", endpoint.method, endpoint.path, response.Code)
 		}
+	}
+}
+
+func TestStaleFailedPublicationReconcilesAndUnpublishIsIdempotent(t *testing.T) {
+	handler, cookie := publicationTestHandler(t)
+	ctx := context.Background()
+	plan, err := handler.buildPublicationPlan(ctx, "admin", "feimu")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := handler.store.SavePublication(ctx, storage.Publication{
+		UID: "admin", NodeName: "feimu", RouteSlug: "feimu", Status: storage.PublicationNeedsSync,
+		Reason: "edge_unpublish_failed", NOSLAStatus: "not_configured", BWGStatus: "not_configured",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	reconciled := serveAdminJSON(t, handler, http.MethodPost, "/api/admin/emby-servers/feimu/publish/reconcile", nil, cookie)
+	if reconciled.Code != http.StatusOK || !strings.Contains(reconciled.Body.String(), `"reason":"stale_failed_state_only"`) {
+		t.Fatalf("reconcile status=%d body=%s", reconciled.Code, reconciled.Body.String())
+	}
+	publication, err := handler.store.GetPublication(ctx, "admin", "feimu")
+	if err != nil || publication == nil || publication.Status != storage.PublicationSavedUnpublished {
+		t.Fatalf("publication after reconcile=%+v err=%v", publication, err)
+	}
+	unpublished := serveAdminJSON(t, handler, http.MethodPost, "/api/admin/emby-servers/feimu/unpublish", nil, cookie)
+	if unpublished.Code != http.StatusOK || !strings.Contains(unpublished.Body.String(), `"reason":"no_publication_to_unpublish"`) {
+		t.Fatalf("unpublish status=%d body=%s", unpublished.Code, unpublished.Body.String())
+	}
+	route, err := handler.store.GetManagedRoute(ctx, plan.RouteSlug)
+	if err != nil || route != nil {
+		t.Fatalf("unexpected route=%+v err=%v", route, err)
+	}
+}
+
+func TestCleanupWithoutArtifactsIsNoOp(t *testing.T) {
+	handler, cookie := publicationTestHandler(t)
+	ctx := context.Background()
+	if err := handler.store.SavePublication(ctx, storage.Publication{
+		UID: "admin", NodeName: "feimu", RouteSlug: "feimu", Status: storage.PublicationFailed,
+		Reason: "edge_sync_failed", NOSLAStatus: "not_configured", BWGStatus: "not_configured",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cleaned := serveAdminJSON(t, handler, http.MethodPost, "/api/admin/emby-servers/feimu/publish/cleanup", nil, cookie)
+	if cleaned.Code != http.StatusOK || !strings.Contains(cleaned.Body.String(), `"status":"saved_unpublished"`) {
+		t.Fatalf("cleanup status=%d body=%s", cleaned.Code, cleaned.Body.String())
 	}
 }
 
@@ -274,6 +322,8 @@ func TestPublicationUIIsPrimaryOwnerWorkflow(t *testing.T) {
 		"/api/admin/emby-servers",
 		"function publishNode(",
 		"function unpublishNode(",
+		"function reconcilePublication(",
+		"function cleanupPublication(",
 		"function showPublicationDryRun(",
 		"function checkPublishedProxy(",
 		"发布反代",

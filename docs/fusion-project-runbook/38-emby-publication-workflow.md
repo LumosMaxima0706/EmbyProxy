@@ -242,3 +242,74 @@ unsafe deletion until reconciliation.
   and were terminated. No force push, remote/auth edit or alternate publisher
   was used. The deployed commit remains present locally and on BWG; origin is
   not claimed as updated.
+
+## Recovering failed publication state
+
+`PUBLICATION_REQUIRES_RECONCILIATION` means the saved workflow state and the
+slug-scoped production artifacts must be compared before another publish. It
+does not by itself mean an edge route exists.
+
+The API classifies the result as one of two conditions:
+
+- `stale_failed_state_only`: publication state is `publish_failed` or
+  `needs_sync`, while the slug has no managed route, no managed route lines, no
+  public URL, and both edge states are `not_configured` or `removed`. This is a
+  state-only residue and may be normalized safely to `saved_unpublished`.
+- `partial_artifacts_exist`: at least one slug-scoped DB route/line, public URL,
+  or edge artifact state remains. Publishing is blocked until the residue is
+  removed and verified.
+
+Owner-facing recovery endpoints are authenticated Admin APIs and accept no
+upstream host in the request:
+
+```text
+POST /api/admin/emby-servers/{slug}/publish/reconcile
+POST /api/admin/emby-servers/{slug}/publish/cleanup
+POST /api/admin/emby-servers/{slug}/unpublish
+```
+
+`publish/reconcile` is read/normalize-only. It clears a stale failed row when
+there are no artifacts; if partial artifacts exist it returns the inventory and
+does not mutate an edge. `publish/cleanup` is scoped to exactly one saved slug.
+It removes only that slug's edge fragments and managed route, running the
+restricted helper's Nginx test, atomic apply/revert and graceful reload flow.
+There is no global cleanup endpoint.
+
+Unpublish is idempotent. Calling it for an unpublished server with no artifacts
+returns success with `no_publication_to_unpublish`; it must not call the edge
+helper and must not return `edge_unpublish_failed`. An empty helper reason or
+step is mapped to `helper_failed` and `edge_cleanup` rather than `unknown`.
+
+### Owner UI recovery
+
+For state-only residue, use **Clear failed state**. For an artifact inventory,
+use **Clean publication residue**. After success the row returns to
+`saved_unpublished`, both edges show not configured, the public URL remains
+empty, and **Publish proxy** becomes available. The upstream server itself is
+retained.
+
+The owner may self-service stale-state reconcile, single-slug cleanup,
+idempotent unpublish and dry-run. Stop for operator review when artifacts from
+another slug would be changed, the restricted helper reports rollback failure,
+Nginx cannot be restored, or the inventory cannot determine whether an edge
+fragment exists.
+
+### `edge_unpublish_failed` with an empty step
+
+This legacy symptom means unpublish called the edge adapter without first
+checking whether a publication existed, then lost the helper's empty reason and
+step during response mapping. Check the publication row, managed route count,
+route-line count, public URL presence, and both slug-specific edge fragment
+directories. If all are absent, reconcile the row; do not execute edge cleanup.
+If any are present, use the cleanup endpoint and retain its exact failed step.
+
+The canonical state-only recovery case is:
+
+```text
+publish_failed or needs_sync
++ managed_routes=0
++ managed_route_lines=0
++ edge fragments=none
++ public_url empty
+=> reconcile to saved_unpublished
+```

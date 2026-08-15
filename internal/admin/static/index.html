@@ -1856,6 +1856,12 @@ function edgeSyncLabel(value) {
 
 function publicationErrorText(step, reason) {
   const labels = {
+    PUBLICATION_REQUIRES_RECONCILIATION: '需要清理上次失败状态',
+    stale_failed_state_only: '上次失败仅留下状态记录，未发现公网入口产物',
+    partial_artifacts_exist: '发现部分发布残留，需要清理',
+    no_publication_to_unpublish: '当前未发布，无需取消发布',
+    cleanup_required: '需要先清理发布残留',
+    helper_failed: '边缘清理 helper 执行失败',
     edge_adapter_unreachable: 'edge adapter 无法连接',
     edge_adapter_connect: 'edge adapter socket 连接失败',
     edge_sync_unavailable: 'edge adapter 未注册或未启用',
@@ -1891,11 +1897,13 @@ function publicationActions(n, status, proxyUrl) {
   if (status === 'publishing' || status === 'unpublishing') return '<button class="btn btn-sm" disabled>处理中</button>';
   const publishText = status === 'publish_failed' ? '重试发布' : '发布反代';
   const cleanup = (status === 'publish_failed' || status === 'needs_sync')
-    ? `<button class="btn btn-sm btn-danger" onclick="unpublishNode('${name}')">清理发布残留</button>` : '';
+    ? `<button class="btn btn-sm btn-danger" onclick="cleanupPublication('${name}')">清理发布残留</button>` : '';
+  const reconcile = (status === 'publish_failed' || status === 'needs_sync')
+    ? `<button class="btn btn-sm" onclick="reconcilePublication('${name}')">清理失败状态</button>` : '';
   return `
     <button class="btn btn-sm btn-primary" onclick="publishNode('${name}')">${publishText}</button>
     <button class="btn btn-sm" onclick="showPublicationDryRun('${name}')">查看 dry-run</button>
-    ${cleanup}`;
+    ${reconcile}${cleanup}`;
 }
 
 function nodeCard(n) {
@@ -2008,7 +2016,30 @@ async function unpublishNode(name, options = {}) {
     if (!r._stale) toast(`取消发布失败: ${publicationErrorText(r.failed_step || 'unknown', r.reason || r.error)}`, 'err');
     return false;
   }
-  if (!options.silent) toast('公网反代入口已取消，上游配置已保留', 'ok');
+  if (!options.silent) toast(r.reason === 'no_publication_to_unpublish' ? '当前未发布，无需取消发布' : '公网反代入口已取消，上游配置已保留', 'ok');
+  return true;
+}
+
+async function reconcilePublication(name) {
+  const r = await publicationFetch(name, 'publish/reconcile', { method: 'POST' });
+  await loadNodes();
+  if (!r.ok) {
+    if (!r._stale) toast(`状态对账失败: ${publicationErrorText(r.failed_step || 'reconciliation', r.reason || r.error)}`, 'err');
+    return false;
+  }
+  toast(r.reason === 'stale_failed_state_only' ? '失败状态已清理，可以重新发布' : '发布状态已完成对账', 'ok');
+  return true;
+}
+
+async function cleanupPublication(name) {
+  if (!window.confirm(`确认只清理 "${name}" 的发布残留？`)) return false;
+  const r = await publicationFetch(name, 'publish/cleanup', { method: 'POST' });
+  await loadNodes();
+  if (!r.ok) {
+    if (!r._stale) toast(`清理发布残留失败: ${publicationErrorText(r.failed_step || 'cleanup', r.reason || r.error)}`, 'err');
+    return false;
+  }
+  toast('发布残留已清理，上游配置已保留', 'ok');
   return true;
 }
 

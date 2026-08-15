@@ -76,6 +76,15 @@ type publicationStatusView struct {
 	Plan              *PublicationPlan `json:"plan,omitempty"`
 }
 
+type publicationArtifacts struct {
+	ManagedRoute      bool     `json:"managed_route"`
+	ManagedRouteLines int      `json:"managed_route_lines"`
+	PublicURL         bool     `json:"public_url"`
+	NOSLA             string   `json:"nosla"`
+	BWG               string   `json:"bwg"`
+	Items             []string `json:"items,omitempty"`
+}
+
 func (h *Handler) SetPublicationSyncer(syncer PublicationSyncer) {
 	h.publicationSyncer = syncer
 }
@@ -223,6 +232,71 @@ func publicationEdgesRemoved(sync PublicationSyncResult) bool {
 	return clean(sync.NOSLA.Status) && clean(sync.BWG.Status)
 }
 
+func edgeHasArtifact(status string) bool {
+	return status != "" && status != "removed" && status != "not_configured"
+}
+
+func (h *Handler) publicationArtifacts(ctx context.Context, plan PublicationPlan, p *storage.Publication) (publicationArtifacts, error) {
+	route, err := h.store.GetManagedRoute(ctx, plan.RouteSlug)
+	if err != nil {
+		return publicationArtifacts{}, err
+	}
+	lines, err := h.store.ListManagedRouteLines(ctx, plan.RouteSlug)
+	if err != nil {
+		return publicationArtifacts{}, err
+	}
+	artifacts := publicationArtifacts{ManagedRoute: route != nil, ManagedRouteLines: len(lines)}
+	if p != nil {
+		artifacts.PublicURL = strings.TrimSpace(p.PublicURL) != ""
+		artifacts.NOSLA, artifacts.BWG = p.NOSLAStatus, p.BWGStatus
+		if edgeHasArtifact(p.NOSLAStatus) {
+			artifacts.Items = append(artifacts.Items, "nosla_edge")
+		}
+		if edgeHasArtifact(p.BWGStatus) {
+			artifacts.Items = append(artifacts.Items, "bwg_edge")
+		}
+	}
+	if artifacts.ManagedRoute {
+		artifacts.Items = append(artifacts.Items, "managed_route")
+	}
+	if artifacts.ManagedRouteLines > 0 {
+		artifacts.Items = append(artifacts.Items, "managed_route_lines")
+	}
+	if artifacts.PublicURL {
+		artifacts.Items = append(artifacts.Items, "public_url")
+	}
+	return artifacts, nil
+}
+
+func (a publicationArtifacts) any() bool {
+	return a.ManagedRoute || a.ManagedRouteLines > 0 || a.PublicURL || len(a.Items) > 0
+}
+
+func publicationNoArtifactState(status string) bool {
+	return status == storage.PublicationFailed || status == storage.PublicationNeedsSync || status == storage.PublicationSavedUnpublished
+}
+
+func (h *Handler) normalizeStalePublication(ctx context.Context, uid string, plan PublicationPlan, p *storage.Publication, artifacts publicationArtifacts) (storage.Publication, error) {
+	state := publicationRecord(uid, plan, storage.PublicationSavedUnpublished, "stale_failed_state_only", "", PublicationSyncResult{
+		NOSLA: PublicationEdgeResult{Status: normalizedEdgeStatus(artifacts.NOSLA)},
+		BWG:   PublicationEdgeResult{Status: normalizedEdgeStatus(artifacts.BWG)},
+	})
+	if p != nil && p.Status == storage.PublicationSavedUnpublished && p.Reason == "" {
+		state.Reason = "no_publication_to_unpublish"
+	}
+	if err := h.store.SavePublication(ctx, state); err != nil {
+		return storage.Publication{}, err
+	}
+	return state, nil
+}
+
+func normalizedEdgeStatus(status string) string {
+	if status == "removed" || status == "not_configured" {
+		return "not_configured"
+	}
+	return "not_configured"
+}
+
 func (h *Handler) managedRouteAvailable(ctx context.Context, plan PublicationPlan) (bool, error) {
 	routes, err := h.store.ListManagedRoutes(ctx)
 	if err != nil {
@@ -272,8 +346,8 @@ func (h *Handler) handlePublicationAPI(w http.ResponseWriter, r *http.Request, p
 		return
 	}
 	name, action := parts[0], parts[1]
-	if len(parts) == 3 && action == "publish" && parts[2] == "dry-run" {
-		action = "publish/dry-run"
+	if len(parts) == 3 && action == "publish" && (parts[2] == "dry-run" || parts[2] == "reconcile" || parts[2] == "cleanup") {
+		action = "publish/" + parts[2]
 	} else if len(parts) != 2 {
 		http.NotFound(w, r)
 		return
@@ -294,14 +368,84 @@ func (h *Handler) handlePublicationAPI(w http.ResponseWriter, r *http.Request, p
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "publication": status})
 		return
 	}
-	if r.Method != http.MethodPost || (action != "publish" && action != "unpublish" && action != "publish/dry-run" && action != "verify-proxy") {
+	if r.Method != http.MethodPost || (action != "publish" && action != "unpublish" && action != "publish/dry-run" && action != "publish/reconcile" && action != "publish/cleanup" && action != "verify-proxy") {
 		w.Header().Set("Allow", "GET, POST")
 		http.NotFound(w, r)
 		return
 	}
-	if action == "publish" || action == "unpublish" {
+	if action == "publish" || action == "unpublish" || action == "publish/reconcile" || action == "publish/cleanup" {
 		h.publicationMu.Lock()
 		defer h.publicationMu.Unlock()
+	}
+	if action == "publish/reconcile" || action == "publish/cleanup" {
+		if planErr != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "reason": planErr.Error(), "failed_step": "plan"})
+			return
+		}
+		current, err := h.store.GetPublication(ctx, uid, name)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "reason": "PUBLICATION_STATUS_FAILED", "failed_step": "state_read"})
+			return
+		}
+		artifacts, err := h.publicationArtifacts(ctx, plan, current)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "reason": "PUBLICATION_ARTIFACT_LOOKUP_FAILED", "failed_step": "db_read"})
+			return
+		}
+		if !artifacts.any() {
+			if current == nil {
+				writeJSON(w, http.StatusOK, map[string]any{"ok": true, "status": storage.PublicationSavedUnpublished, "reason": "no_publication_to_reconcile", "operation_id": plan.OperationID, "artifacts": artifacts})
+				return
+			}
+			state, saveErr := h.normalizeStalePublication(ctx, uid, plan, current, artifacts)
+			if saveErr != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "reason": "PUBLICATION_STATE_WRITE_FAILED", "failed_step": "db_write"})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "status": state.Status, "reason": "stale_failed_state_only", "operation_id": plan.OperationID, "publication": state, "artifacts": artifacts})
+			return
+		}
+		if action == "publish/reconcile" {
+			writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "status": storage.PublicationNeedsSync, "reason": "partial_artifacts_exist", "failed_step": "reconciliation", "operation_id": plan.OperationID, "artifacts": artifacts})
+			return
+		}
+		// Cleanup is deliberately scoped to this route slug. Edge unpublish is
+		// only attempted when an edge artifact is actually recorded.
+		result := PublicationSyncResult{
+			NOSLA: PublicationEdgeResult{Status: normalizedEdgeStatus(artifacts.NOSLA)},
+			BWG:   PublicationEdgeResult{Status: normalizedEdgeStatus(artifacts.BWG)},
+		}
+		if edgeHasArtifact(artifacts.NOSLA) || edgeHasArtifact(artifacts.BWG) {
+			if h.publicationSyncer == nil {
+				writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "status": storage.PublicationNeedsSync, "reason": "edge_sync_unavailable", "failed_step": "edge_cleanup", "artifacts": artifacts})
+				return
+			}
+			var syncErr error
+			result, syncErr = h.publicationSyncer.Unpublish(ctx, plan)
+			if syncErr != nil || !publicationEdgesRemoved(result) {
+				reason := result.Reason
+				if reason == "" {
+					reason = "helper_failed"
+				}
+				step := result.FailedStep
+				if step == "" {
+					step = "edge_cleanup"
+				}
+				writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "status": storage.PublicationNeedsSync, "reason": reason, "failed_step": step, "artifacts": artifacts})
+				return
+			}
+		}
+		if err := h.store.DeleteManagedRoute(ctx, plan.RouteSlug); err != nil {
+			writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "status": storage.PublicationNeedsSync, "reason": "db_route_delete_failed", "failed_step": "db_cleanup", "artifacts": artifacts})
+			return
+		}
+		state := publicationRecord(uid, plan, storage.PublicationSavedUnpublished, "publication_cleanup_complete", "", result)
+		if err := h.store.SavePublication(ctx, state); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "reason": "PUBLICATION_STATE_WRITE_FAILED", "failed_step": "db_write"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "status": state.Status, "reason": "publication_cleanup_complete", "operation_id": plan.OperationID, "publication": state, "artifacts": publicationArtifacts{NOSLA: state.NOSLAStatus, BWG: state.BWGStatus}})
+		return
 	}
 	if action == "publish" && r.Method == http.MethodPost {
 		h.logPublication("publicationRequested", plan, "publishing", "")
@@ -318,8 +462,29 @@ func (h *Handler) handlePublicationAPI(w http.ResponseWriter, r *http.Request, p
 			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "status": current.Status, "publication": current})
 			return
 		}
+		rawPublication, rawErr := h.store.GetPublication(ctx, uid, name)
+		if rawErr != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "status": storage.PublicationFailed, "reason": "PUBLICATION_STATUS_FAILED", "failed_step": "state_read"})
+			return
+		}
+		artifacts, artifactErr := h.publicationArtifacts(ctx, plan, rawPublication)
+		if artifactErr != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "status": storage.PublicationFailed, "reason": "PUBLICATION_ARTIFACT_LOOKUP_FAILED", "failed_step": "db_read"})
+			return
+		}
+		if rawPublication != nil && publicationNoArtifactState(rawPublication.Status) && !artifacts.any() {
+			if _, normalizeErr := h.normalizeStalePublication(ctx, uid, plan, rawPublication, artifacts); normalizeErr != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "status": storage.PublicationFailed, "reason": "PUBLICATION_STATE_WRITE_FAILED", "failed_step": "db_write"})
+				return
+			}
+			current.Status = storage.PublicationSavedUnpublished
+		}
 		if current.Status == storage.PublicationPublishing || current.Status == storage.PublicationUnpublishing || current.Status == storage.PublicationNeedsSync {
-			writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "status": current.Status, "reason": "PUBLICATION_REQUIRES_RECONCILIATION", "failed_step": "state_guard"})
+			reason := "PUBLICATION_REQUIRES_RECONCILIATION"
+			if artifacts.any() {
+				reason = "partial_artifacts_exist"
+			}
+			writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "status": current.Status, "reason": reason, "failed_step": "state_guard", "operation_id": plan.OperationID, "artifacts": artifacts})
 			return
 		}
 		available, err := h.managedRouteAvailable(ctx, plan)
@@ -438,12 +603,31 @@ func (h *Handler) handlePublicationAPI(w http.ResponseWriter, r *http.Request, p
 			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "status": storage.PublicationSavedUnpublished, "reason": "unpublished"})
 			return
 		}
-		if p.Status == storage.PublicationSavedUnpublished {
-			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "status": storage.PublicationSavedUnpublished, "publication": p})
-			return
-		}
 		if planErr != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "status": storage.PublicationFailed, "reason": planErr.Error(), "failed_step": "plan"})
+			return
+		}
+		artifacts, artifactErr := h.publicationArtifacts(ctx, plan, p)
+		if artifactErr != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "status": storage.PublicationFailed, "reason": "PUBLICATION_ARTIFACT_LOOKUP_FAILED", "failed_step": "db_read"})
+			return
+		}
+		if !artifacts.any() {
+			unpublished, saveErr := h.normalizeStalePublication(ctx, uid, plan, p, artifacts)
+			if saveErr != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "status": storage.PublicationFailed, "reason": "PUBLICATION_STATE_WRITE_FAILED", "failed_step": "db_write"})
+				return
+			}
+			unpublished.Reason = "no_publication_to_unpublish"
+			if saveErr = h.store.SavePublication(ctx, unpublished); saveErr != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "status": storage.PublicationFailed, "reason": "PUBLICATION_STATE_WRITE_FAILED", "failed_step": "db_write"})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "status": unpublished.Status, "reason": "no_publication_to_unpublish", "operation_id": plan.OperationID, "publication": unpublished, "artifacts": artifacts})
+			return
+		}
+		if p.Status != storage.PublicationPublished {
+			writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "status": storage.PublicationNeedsSync, "reason": "partial_artifacts_exist", "failed_step": "reconciliation", "operation_id": plan.OperationID, "artifacts": artifacts})
 			return
 		}
 		route, routeErr := h.store.GetManagedRoute(ctx, plan.RouteSlug)
