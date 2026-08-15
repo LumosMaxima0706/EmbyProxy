@@ -1134,14 +1134,21 @@ func (h *Handler) list(ctx context.Context, uid string) map[string]any {
 	publicURLs := h.publicNodeURLs()
 	views := make([]adminNodeView, 0, len(nodes))
 	for _, node := range nodes {
-		views = append(views, adminNodeView{Node: node, PublicURL: publicURLs[strings.ToLower(node.Name)]})
+		publicURL := publicURLs[strings.ToLower(node.Name)]
+		status, reason := "saved_unpublished", "no_edge_route_configured"
+		if publicURL != "" {
+			status, reason = "published", "public_entry_configured"
+		}
+		views = append(views, adminNodeView{Node: node, PublicURL: publicURL, PublicURLStatus: status, PublicURLReason: reason})
 	}
 	return map[string]any{"ok": true, "nodes": views, "uid": uid, "build": buildinfo.Current()}
 }
 
 type adminNodeView struct {
 	storage.Node
-	PublicURL string `json:"publicUrl,omitempty"`
+	PublicURL       string `json:"publicUrl,omitempty"`
+	PublicURLStatus string `json:"publicUrlStatus"`
+	PublicURLReason string `json:"publicUrlReason"`
 }
 
 func (h *Handler) publicNodeURLs() map[string]string {

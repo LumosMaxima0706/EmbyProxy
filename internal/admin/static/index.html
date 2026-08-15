@@ -1810,6 +1810,8 @@ function syncImpersonateProfileState() {
 function nodeCard(n) {
   const targets = splitTargets(n.target);
   const proxyUrl = String(n.publicUrl || '');
+  const publicStatus = String(n.publicUrlStatus || (proxyUrl ? 'published' : 'saved_unpublished'));
+  const publicReason = String(n.publicUrlReason || (proxyUrl ? 'public_entry_configured' : 'no_edge_route_configured'));
   const sel = selectedNodes.has(n.name);
   const focused = focusedNodeName === n.name;
   const identityLabel = impersonateProfileLabel(n.impersonateProfile);
@@ -1830,13 +1832,16 @@ function nodeCard(n) {
     <div class="route-address">
       <div class="proxy-line">
         <div class="mono">
-          <span class="proxy-text">${proxyUrl ? esc(proxyUrl) : '未配置公网入口'}</span>
+          <span class="proxy-text">${proxyUrl ? esc(proxyUrl) : '已保存上游，尚未发布到 stream'}</span>
           <button class="reveal-button" data-public-url="${attr(proxyUrl)}" onclick="openPublicMediaUrl(this.dataset.publicUrl)" title="打开公网观看地址" aria-label="打开公网观看地址" ${proxyUrl ? '' : 'disabled'}>${eyeIcon}</button>
         </div>
         <button class="copy-button" data-copy="${attr(proxyUrl)}" onclick="copyText(this.dataset.copy)" ${proxyUrl ? '' : 'disabled'}>复制</button>
       </div>
     </div>
     <div class="chip-pack">
+      ${publicStatus === 'published'
+        ? '<span class="chip ok">已发布公网入口</span>'
+        : `<span class="chip warn" title="${attr(publicReason)}">已保存上游，尚未发布到 stream</span>`}
       ${n.tag?`<span class="node-tag">${esc(n.tag)}</span>`:''}
       <span class="chip blue">${targets.length} 上游</span>
       ${n.secret?'<span class="chip warn">密钥</span>':'<span class="chip">公开</span>'}
@@ -2715,23 +2720,23 @@ function updateStatsSortHeaders() {
 }
 
 function formatStatsActivity(stat) {
-  const formatted = String(stat?.lastActivity || '').trim();
+  const formatted = String(stat?.lastActivity ?? stat?.last_activity ?? '').trim();
   if (formatted) return formatted;
-  const timestamp = Number(stat?.lastActivityAt || 0);
+  const timestamp = Number(stat?.lastActivityAt ?? stat?.last_activity_at ?? 0);
   if (!Number.isFinite(timestamp) || timestamp <= 0) return '--';
   return new Date(timestamp).toLocaleString('zh-CN', { hour12: false });
 }
 
 function trafficInboundBytes(stat) {
-  return Number(stat?.inboundBytes || 0);
+  return Number(stat?.inboundBytes ?? stat?.inbound_bytes ?? 0);
 }
 
 function trafficOutboundBytes(stat) {
-  return Number(stat?.outboundBytes || 0);
+  return Number(stat?.outboundBytes ?? stat?.outbound_bytes ?? 0);
 }
 
 function statsPlaybackMillis(stat) {
-  const value = Number(stat?.playbackMillis || 0);
+  const value = Number(stat?.playbackMillis ?? stat?.playback_ms ?? 0);
   return Number.isFinite(value) ? Math.max(0, value) : 0;
 }
 

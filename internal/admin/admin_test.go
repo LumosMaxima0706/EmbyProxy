@@ -116,13 +116,37 @@ func TestListBuildsPublicNodeURLsWithoutAdminOriginOrSecrets(t *testing.T) {
 	if err := handler.store.SaveNode(ctx, "admin", storage.Node{Name: "uhd", Target: "https://upstream.example", Secret: "must-not-appear"}); err != nil {
 		t.Fatal(err)
 	}
+	if err := handler.store.SaveNode(ctx, "admin", storage.Node{Name: "feimu", Target: "https://saved-only.example"}); err != nil {
+		t.Fatal(err)
+	}
 	res := handler.list(ctx, "admin")
+	views, ok := res["nodes"].([]adminNodeView)
+	if !ok {
+		t.Fatalf("nodes type = %T, want []adminNodeView", res["nodes"])
+	}
+	byName := make(map[string]adminNodeView, len(views))
+	for _, view := range views {
+		byName[view.Name] = view
+	}
+	if got := byName["uhd"]; got.PublicURLStatus != "published" || got.PublicURLReason != "public_entry_configured" {
+		t.Fatalf("published node status = %+v", got)
+	}
+	if got := byName["feimu"]; got.PublicURL != "" || got.PublicURLStatus != "saved_unpublished" || got.PublicURLReason != "no_edge_route_configured" {
+		t.Fatalf("saved-only node status = %+v", got)
+	}
 	encoded, err := json.Marshal(res)
 	if err != nil {
 		t.Fatal(err)
 	}
 	body := string(encoded)
-	for _, want := range []string{`"publicUrl":"https://stream.example/https/media.example/443/"`} {
+	for _, want := range []string{
+		`"publicUrl":"https://stream.example/https/media.example/443/"`,
+		`"publicUrlStatus":"published"`,
+		`"publicUrlReason":"public_entry_configured"`,
+		`"name":"feimu"`,
+		`"publicUrlStatus":"saved_unpublished"`,
+		`"publicUrlReason":"no_edge_route_configured"`,
+	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("list response missing %q: %s", want, body)
 		}
@@ -139,6 +163,8 @@ func TestAdminIndexUsesBackendPublicURLForDisplayCopyAndPreview(t *testing.T) {
 		`data-public-url="${attr(proxyUrl)}"`,
 		"function openPublicMediaUrl(rawURL)",
 		"window.open(target.toString(), '_blank', 'noopener,noreferrer')",
+		"已发布公网入口",
+		"已保存上游，尚未发布到 stream",
 	} {
 		if !strings.Contains(indexHTML, want) {
 			t.Fatalf("Admin UI missing public URL contract %q", want)
@@ -170,6 +196,15 @@ func TestAdminIndexIncludesSortableStats(t *testing.T) {
 	for _, want := range wants {
 		if !strings.Contains(indexHTML, want) {
 			t.Fatalf("indexHTML missing %q", want)
+		}
+	}
+	for _, want := range []string{
+		"stat?.inboundBytes ?? stat?.inbound_bytes",
+		"stat?.outboundBytes ?? stat?.outbound_bytes",
+		"stat?.lastActivityAt ?? stat?.last_activity_at",
+	} {
+		if !strings.Contains(indexHTML, want) {
+			t.Fatalf("indexHTML missing API field compatibility %q", want)
 		}
 	}
 }
