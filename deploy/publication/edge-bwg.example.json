@@ -1,0 +1,7 @@
+{
+  "node_name": "bwg",
+  "include_dir": "/etc/nginx/conf.d/embyproxy-publications",
+  "stream_config": "/etc/nginx/conf.d/stream-b-proxy.conf",
+  "include_directive": "/etc/nginx/conf.d/embyproxy-publications/*.conf",
+  "backup_root": "/var/backups/embyproxy-publication-agent"
+}

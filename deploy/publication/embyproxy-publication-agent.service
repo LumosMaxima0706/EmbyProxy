@@ -1,0 +1,33 @@
+[Unit]
+Description=EmbyProxy restricted publication edge adapter
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=embyproxy-gsy-sidecar
+RuntimeDirectory=embyproxy-publication-agent
+RuntimeDirectoryMode=0750
+ExecStart=/usr/local/sbin/embyproxy-publication-agent --mode=agent --config /etc/embyproxy-publication-agent/config.json
+Restart=on-failure
+RestartSec=3s
+TimeoutStopSec=15s
+UMask=0007
+NoNewPrivileges=false
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictSUIDSGID=true
+ReadWritePaths=/run/embyproxy-publication-agent /var/backups/embyproxy-publication-agent /etc/nginx/conf.d/embyproxy-publications
+ReadOnlyPaths=/var/lib/embyproxy-gsy-sidecar/proxy.db /etc/nginx /usr/local/sbin/embyproxy-publication-edge
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

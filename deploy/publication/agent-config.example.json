@@ -1,0 +1,16 @@
+{
+  "socket_path": "/run/embyproxy-publication-agent/agent.sock",
+  "database_path": "/var/lib/embyproxy-gsy-sidecar/proxy.db",
+  "allowed_peer_uid": 0,
+  "local_helper_path": "/usr/local/sbin/embyproxy-publication-edge",
+  "bwg_config_path": "/etc/embyproxy-publication-agent/edge-bwg.json",
+  "public_media_host": "stream.149077530.xyz",
+  "owner_admin_host": "owner-admin.149077530.xyz",
+  "nosla": {
+    "user": "publication-agent",
+    "host": "nosla.example.invalid",
+    "identity_file": "/etc/embyproxy-publication-agent/nosla_ed25519",
+    "known_hosts_file": "/etc/embyproxy-publication-agent/known_hosts",
+    "timeout_seconds": 10
+  }
+}

@@ -35,6 +35,7 @@ type Config struct {
 	OwnerAdminHost            string
 	PublicMediaBaseURL        string
 	PublicMediaNodePaths      map[string]string
+	PublicationAgentSocket    string
 	MediaProxyRoutes          bool
 	FailoverDNSProviderMode   string
 	FailoverDNSAllowedRecords string
@@ -101,6 +102,7 @@ func Load() (Config, error) {
 		OwnerAdminHost:            strings.ToLower(strings.TrimSpace(os.Getenv("OWNER_ADMIN_HOST"))),
 		PublicMediaBaseURL:        publicMediaBaseURL,
 		PublicMediaNodePaths:      publicMediaNodePaths,
+		PublicationAgentSocket:    strings.TrimSpace(os.Getenv("PUBLICATION_AGENT_SOCKET")),
 		MediaProxyRoutes:          envBool("MEDIAPROXY_ROUTES_ENABLED", false),
 		FailoverDNSProviderMode:   strings.ToLower(strings.TrimSpace(os.Getenv("FAILOVER_DNS_PROVIDER_MODE"))),
 		FailoverDNSAllowedRecords: strings.TrimSpace(os.Getenv("FAILOVER_DNS_ALLOWED_RECORDS")),
@@ -129,6 +131,10 @@ func Load() (Config, error) {
 		if strings.EqualFold(publicURL.Hostname(), cfg.OwnerAdminHost) {
 			return Config{}, fmt.Errorf("PUBLIC_MEDIA_BASE_URL must not use OWNER_ADMIN_HOST")
 		}
+	}
+	if cfg.PublicationAgentSocket != "" &&
+		(!strings.HasPrefix(cfg.PublicationAgentSocket, "/run/") || strings.ContainsAny(cfg.PublicationAgentSocket, "\x00\r\n")) {
+		return Config{}, fmt.Errorf("PUBLICATION_AGENT_SOCKET must be an absolute path below /run")
 	}
 	return cfg, nil
 }

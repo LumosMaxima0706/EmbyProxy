@@ -26,7 +26,7 @@ Date: 2026-08-15 Asia/Shanghai
 | P4 orphan prevention | DONE | Published or uncertain nodes cannot be renamed, retargeted, imported-over or deleted. Partial publish invokes edge cleanup and removes the staged route; failed cleanup is `needs_sync`. | Require unpublish/reconciliation before delete. | Verify against an isolated production DB copy. |
 | P5 local verification | DONE | Targeted tests, `go test ./...`, `go vet ./...` and `git diff --check` pass on the isolated BWG test tree. | Code gate passes. | Build a commit-tagged candidate. |
 | P6 feimu dry-run | DONE | Authenticated production dry-run returned the redacted HTTPS/443 plan. Publication rows and feimu route rows remained zero; DB logical state, sidecar env and BWG Nginx hashes were identical before/after. | Dry-run is non-mutating. | Do not call publish. |
-| P7 real feimu publication | BLOCKED | The production sidecar has no configured privileged `PublicationSyncer`; a no-op adapter would create false success. | Keep publication fail-closed. A restricted root-owned BWG/NOSLA edge adapter must be backed up, dry-run and verified before owner approval can be applied. | Await a separate production-publication gate after the adapter is ready. |
+| P7 restricted edge adapter | DONE | The original `edge_sync_unavailable` was caused by a nil runtime `PublicationSyncer`: the socket/config/agent were absent. A root-owned agent, BWG helper and NOSLA forced-command helper are now installed and readiness passes. | Keep the public API fail-closed and require a separate owner confirmation before calling `publish` for feimu. | Run only the owner-approved feimu publication gate. |
 
 ## Implemented contract
 
@@ -53,6 +53,66 @@ https://stream.149077530.xyz/https/<saved-host>/443
 
 If the saved upstream has a base path, it is retained but redacted in dry-run
 as `<saved-base-path>`.
+
+## Owner workflow
+
+1. Save one HTTPS upstream in Emby server management and run `检测上游`.
+2. Run `查看 dry-run`; confirm the redacted path shape and both edge plans.
+3. Click `发布反代`. The API stages the DB route, asks the restricted adapter
+   to sync both edges, then enables the route only after both report success.
+4. Copy the generated stream address to Yamby and use `检测反代` for a small
+   `/System/Info/Public` check.
+5. Click `取消发布` to remove only the public mapping/edge fragment while
+   retaining the saved upstream. A node with `needs_sync` must be reconciled
+   before deletion.
+
+The managed-route page remains an advanced/debug view. Owners do not need to
+manually edit managed routes, node-path JSON, Nginx locations or allowlists.
+
+## Adapter troubleshooting
+
+Reproduce with the authenticated `publish/dry-run` endpoint first. Inspect the
+publication status row (`status`, `reason`, `failed_step`, and per-edge states),
+the sidecar journal, the `embyproxy-publication-agent.service` journal, and the
+two edge helper results. A dry-run can pass its route plan while readiness is
+false; that means apply is still correctly fail-closed.
+
+Common codes and the owning step:
+
+| Code | Meaning |
+| --- | --- |
+| `edge_sync_unavailable` | No registered socket syncer in the sidecar release |
+| `edge_adapter_unreachable` | Socket path or agent service unavailable |
+| `edge_sync_denied` | Unix peer UID or forced-command trust check failed |
+| `edge_sync_partial` | One edge applied and the other failed; rollback/cleanup state is reported |
+| `edge_adapter_response_invalid` | Helper returned malformed/unsupported JSON |
+| `route_conflict` | Existing slug fragment does not match the saved node |
+| `nginx_test_failed` | Candidate or host Nginx syntax check failed |
+| `reload_failed` | Graceful reload failed; helper attempts rollback |
+| `rollback_failed` | Manual reconciliation is required; state is never reported published |
+| `upstream_not_saved` / `upstream_invalid` | The agent re-read the DB and rejected the saved node |
+
+Readiness checks are read-only: adapter registration, socket permissions,
+saved-node validation, both edge reachability, include-hook presence and
+current Nginx syntax. They never write a route or request a media resource.
+
+## Security and rollback boundary
+
+- Only an existing saved node can be published; the API never accepts a host
+  override. Private, owner-admin and public-entry targets are rejected.
+- The root agent has no public HTTP listener. The sidecar socket is loopback
+  filesystem-only and restricted to the sidecar UID. NOSLA accepts only the
+  pinned forced-command key.
+- Each edge writes only its slug fragment below the publication include
+  directory. Query strings, tokens, cookies, Authorization headers, complete
+  UUIDs and complete playback URLs are not logged or returned.
+- `stream /admin` and owner-admin media paths remain blocked; UHD's legacy
+  fragment is never rewritten by a feimu operation.
+- Roll back in this order: stop the publication agent, run the edge hook
+  rollback scripts if the include hook itself must be removed, restore the
+  root-only agent/service/env backup, run `nginx -t`, reload Nginx, then
+  restart the sidecar. Restore the DB only with the explicit existing
+  `--restore-db` disaster-recovery option.
 
 ## Verification evidence
 
@@ -120,6 +180,62 @@ with manual hold none. No cleanup is part of this phase.
   retain buffering-off, request-buffering-off, Range and If-Range behavior.
 - No ACME request, cleanup, force push, DNS switch, failover change, UHD target
   change or feimu publication was performed.
+
+## 2026-08-15 restricted adapter remediation
+
+The owner-triggered publish was reproduced through the authenticated API. The
+request reached the sidecar, entered `publishing`, and failed before any route
+row or edge mutation with `edge_sync_unavailable`. The cause was confirmed in
+source and runtime: `PublicationSyncer` existed as an interface, but
+`cmd/embyproxy` had no runtime registration and the publication-agent socket
+was not configured in the service environment. This was not a browser error.
+
+The adapter now has two privilege domains:
+
+1. The sidecar sends only action, slug and operation id over a loopback Unix
+   socket. The root agent re-reads the saved node and staged DB route and
+   rejects all caller-supplied hosts.
+2. The root agent invokes a fixed BWG helper and a fixed NOSLA SSH
+   forced-command helper. Each helper accepts only a JSON manifest on stdin,
+   writes one slug-specific Nginx fragment, runs a candidate syntax test,
+   atomically applies it, runs the host `nginx -t`, reloads gracefully, and
+   rolls back on failure. No generic shell is exposed.
+
+The one-time empty include hooks were installed after backups and syntax
+checks. They do not contain a feimu fragment. Current backup/rollback paths:
+
+- BWG infrastructure: `/var/backups/embyproxy-publication/20260815T115500Z-bwg-agent`
+- NOSLA infrastructure: `/var/backups/embyproxy-publication/20260815T115500Z-nosla-agent`
+- BWG hook rollback: `/var/backups/embyproxy-publication-agent/20260815T114625Z-bwg-hook/rollback.sh`
+- NOSLA hook rollback: `/var/backups/embyproxy-publication-agent/20260815T114627Z-nosla-hook/rollback.sh`
+- BWG agent config: `/etc/embyproxy-publication-agent/config.json` (0600)
+- BWG socket: `/run/embyproxy-publication-agent/agent.sock` (0660,
+  root:embyproxy-gsy-sidecar)
+
+The dedicated NOSLA key is root-only on BWG and is authorized on NOSLA only
+with the fixed edge-helper command. Its known-host entry is pinned. No key
+material is recorded here.
+
+Readiness was verified through the real dry-run API without changing the
+database: `status=dry_run_ok`, `adapter_ready=true`, and both edge results were
+`ready`. The dry-run returned only the redacted path shape. `emby_publications`
+still has no feimu row, the managed-route count is unchanged, and both
+publication include directories contain no `.conf` route. The actual publish
+endpoint was not called; owner confirmation is still required for that gate.
+
+During readiness debugging two implementation issues were fixed and recorded:
+
+- the hook installer initially counted the `server_name` line as a closed
+  block; the script was corrected and both Nginx files were re-tested;
+- the helper initially passed `-p /` to Nginx, hiding the configured module
+  prefix and causing a false GeoIP module failure. The helper now preserves
+  the host prefix, and the real service `nginx -t` passes on both edges.
+
+Failure codes are surfaced in the owner UI with the failed step, including
+adapter unreachable/denied, NOSLA or BWG edge failure, route conflict,
+`nginx_test_failed`, `reload_failed`, `rollback_failed`, DB-stage errors and
+partial sync. A `needs_sync` record is never shown as published and blocks
+unsafe deletion until reconciliation.
 - Git delivery note: the local feature history is a fast-forward of the origin
   feature branch. A normal push first failed during the GnuTLS handshake; a
   normal retry and a one-command HTTP/1.1 retry then received no remote response

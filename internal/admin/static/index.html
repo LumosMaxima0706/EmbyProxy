@@ -1851,7 +1851,28 @@ function publicationChipClass(status) {
 }
 
 function edgeSyncLabel(value) {
-  return ({ synced: '已同步', removed: '未同步', pending: '同步中', failed: '失败', not_configured: '未同步', unknown: '未知' })[value] || '未知';
+  return ({ synced: '已同步', removed: '未同步', pending: '同步中', failed: '失败', not_configured: '未同步', unavailable: '不可用', not_attempted: '未尝试', unknown: '未知' })[value] || '未知';
+}
+
+function publicationErrorText(step, reason) {
+  const labels = {
+    edge_adapter_unreachable: 'edge adapter 无法连接',
+    edge_adapter_connect: 'edge adapter socket 连接失败',
+    edge_sync_unavailable: 'edge adapter 未注册或未启用',
+    edge_sync: 'edge sync 步骤失败',
+    edge_sync_denied: 'edge adapter 权限或信任校验失败',
+    edge_sync_partial: '一端同步成功，另一端需要清理',
+    edge_command_failed: 'edge helper 执行失败',
+    edge_include_hook_missing: 'Nginx include hook 缺失',
+    nginx_test_failed: 'nginx -t 失败',
+    reload_failed: 'Nginx reload 失败',
+    rollback_failed: 'rollback 失败，需要清理',
+    route_conflict: 'route 已存在且不匹配',
+    upstream_not_saved: '上游尚未保存',
+    upstream_invalid: '已保存的上游不合法',
+  };
+  const detail = labels[String(reason || '')] || String(reason || '未知错误');
+  return `${detail}${step ? ` (${step})` : ''}`;
 }
 
 function edgeSyncClass(value) {
@@ -1972,7 +1993,7 @@ async function publishNode(name) {
   const r = await publicationFetch(name, 'publish', { method: 'POST' });
   await loadNodes();
   if (!r.ok) {
-    if (!r._stale) toast(`发布失败: ${r.failed_step || 'unknown'} / ${r.reason || r.error}`, 'err');
+    if (!r._stale) toast(`发布失败: ${publicationErrorText(r.failed_step || 'unknown', r.reason || r.error)}`, 'err');
     return false;
   }
   toast('公网反代入口已发布', 'ok');
@@ -1984,7 +2005,7 @@ async function unpublishNode(name, options = {}) {
   const r = await publicationFetch(name, 'unpublish', { method: 'POST' });
   await loadNodes();
   if (!r.ok) {
-    if (!r._stale) toast(`取消发布失败: ${r.failed_step || 'unknown'} / ${r.reason || r.error}`, 'err');
+    if (!r._stale) toast(`取消发布失败: ${publicationErrorText(r.failed_step || 'unknown', r.reason || r.error)}`, 'err');
     return false;
   }
   if (!options.silent) toast('公网反代入口已取消，上游配置已保留', 'ok');

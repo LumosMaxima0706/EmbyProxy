@@ -82,6 +82,14 @@ func main() {
 	checker := auth.NewChecker(cfg, store)
 	proxyHandler := proxy.New(cfg, store, ids, log)
 	adminHandler := admin.New(cfg, store, checker, tg, log, proxyHandler.ResetNodeRoutingState, proxyHandler)
+	if cfg.PublicationAgentSocket != "" {
+		publicationSyncer, syncerErr := admin.NewSocketPublicationSyncer(cfg.PublicationAgentSocket, 45*time.Second)
+		if syncerErr != nil {
+			log.Error("startup", "publication adapter config invalid", map[string]any{"event": "publicationAdapterConfigInvalid"})
+			os.Exit(1)
+		}
+		adminHandler.SetPublicationSyncer(publicationSyncer)
+	}
 	adminHandler.SetGlobalStatsStore(globalStats)
 	failoverNodes, err := isolatedFailoverFixtureNodes(cfg)
 	if err != nil {

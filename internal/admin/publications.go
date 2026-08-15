@@ -19,6 +19,7 @@ import (
 // PublicationPlan contains only safe, operator-facing metadata. TargetURL is
 // deliberately excluded from JSON because it is used internally by a syncer.
 type PublicationPlan struct {
+	OperationID       string   `json:"operation_id"`
 	NodeName          string   `json:"node_name"`
 	RouteSlug         string   `json:"route_slug"`
 	PublicPathShape   string   `json:"public_path"`
@@ -36,15 +37,17 @@ type PublicationPlan struct {
 }
 
 type PublicationEdgeResult struct {
-	Status string `json:"status"`
-	Reason string `json:"reason,omitempty"`
+	Status     string `json:"status"`
+	Reason     string `json:"reason,omitempty"`
+	FailedStep string `json:"failed_step,omitempty"`
+	BackupPath string `json:"backup_path,omitempty"`
 }
 
 type PublicationSyncResult struct {
-	NOSLA      PublicationEdgeResult
-	BWG        PublicationEdgeResult
-	FailedStep string
-	Reason     string
+	NOSLA      PublicationEdgeResult `json:"nosla"`
+	BWG        PublicationEdgeResult `json:"bwg"`
+	FailedStep string                `json:"failed_step,omitempty"`
+	Reason     string                `json:"reason,omitempty"`
 }
 
 // PublicationSyncer is the boundary to the privileged BWG/NOSLA publish
@@ -55,16 +58,22 @@ type PublicationSyncer interface {
 	Unpublish(context.Context, PublicationPlan) (PublicationSyncResult, error)
 }
 
+type publicationReadinessChecker interface {
+	Readiness(context.Context, PublicationPlan) (PublicationSyncResult, error)
+}
+
 type publicationStatusView struct {
-	Status      string           `json:"status"`
-	Reason      string           `json:"reason,omitempty"`
-	FailedStep  string           `json:"failed_step,omitempty"`
-	PublicURL   string           `json:"public_url,omitempty"`
-	RouteSlug   string           `json:"route_slug,omitempty"`
-	NOSLAStatus string           `json:"nosla_status"`
-	BWGStatus   string           `json:"bwg_status"`
-	Managed     bool             `json:"managed"`
-	Plan        *PublicationPlan `json:"plan,omitempty"`
+	Status            string           `json:"status"`
+	WorkflowState     string           `json:"workflow_state"`
+	Reason            string           `json:"reason,omitempty"`
+	FailedStep        string           `json:"failed_step,omitempty"`
+	PublicURL         string           `json:"public_url,omitempty"`
+	RouteSlug         string           `json:"route_slug,omitempty"`
+	NOSLAStatus       string           `json:"nosla_status"`
+	BWGStatus         string           `json:"bwg_status"`
+	Managed           bool             `json:"managed"`
+	AdapterRegistered bool             `json:"adapter_registered"`
+	Plan              *PublicationPlan `json:"plan,omitempty"`
 }
 
 func (h *Handler) SetPublicationSyncer(syncer PublicationSyncer) {
@@ -156,22 +165,41 @@ func (h *Handler) publicationStatus(ctx context.Context, uid, name string) (publ
 	}
 	if p != nil {
 		return publicationStatusView{
-			Status: p.Status, Reason: p.Reason, FailedStep: p.FailedStep,
+			Status: p.Status, WorkflowState: publicationWorkflowState(p.Status, p.Reason), Reason: p.Reason, FailedStep: p.FailedStep,
 			PublicURL: p.PublicURL, RouteSlug: p.RouteSlug,
 			NOSLAStatus: p.NOSLAStatus, BWGStatus: p.BWGStatus, Managed: true,
+			AdapterRegistered: h.publicationSyncer != nil,
 		}, nil
 	}
 	legacy := h.publicNodeURLs()[name]
 	if legacy != "" {
 		return publicationStatusView{
-			Status: storage.PublicationPublished, Reason: "public_entry_configured",
+			Status: storage.PublicationPublished, WorkflowState: storage.PublicationPublished, Reason: "public_entry_configured",
 			PublicURL: legacy, NOSLAStatus: "synced", BWGStatus: "synced",
+			AdapterRegistered: h.publicationSyncer != nil,
 		}, nil
 	}
 	return publicationStatusView{
-		Status: storage.PublicationSavedUnpublished, Reason: "no_edge_route_configured",
+		Status: storage.PublicationSavedUnpublished, WorkflowState: storage.PublicationSavedUnpublished, Reason: "no_edge_route_configured",
 		NOSLAStatus: "not_configured", BWGStatus: "not_configured",
+		AdapterRegistered: h.publicationSyncer != nil,
 	}, nil
+}
+
+func publicationWorkflowState(status, reason string) string {
+	switch status {
+	case storage.PublicationPublishing:
+		return "edge_sync_pending"
+	case storage.PublicationFailed:
+		if strings.Contains(reason, "unpublish") {
+			return "unpublish_failed"
+		}
+		return "edge_sync_failed"
+	case storage.PublicationNeedsSync:
+		return "cleanup_required"
+	default:
+		return status
+	}
 }
 
 func publicationRecord(uid string, plan PublicationPlan, status, reason, step string, sync PublicationSyncResult) storage.Publication {
@@ -253,6 +281,7 @@ func (h *Handler) handlePublicationAPI(w http.ResponseWriter, r *http.Request, p
 	uid := "admin"
 	ctx := r.Context()
 	plan, planErr := h.buildPublicationPlan(ctx, uid, name)
+	plan.OperationID = publicationOperationID(r)
 	if action == "publish-status" {
 		status, err := h.publicationStatus(ctx, uid, name)
 		if err != nil {
@@ -275,6 +304,7 @@ func (h *Handler) handlePublicationAPI(w http.ResponseWriter, r *http.Request, p
 		defer h.publicationMu.Unlock()
 	}
 	if action == "publish" && r.Method == http.MethodPost {
+		h.logPublication("publicationRequested", plan, "publishing", "")
 		if planErr != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "status": storage.PublicationFailed, "reason": planErr.Error(), "failed_step": "plan"})
 			return
@@ -307,6 +337,7 @@ func (h *Handler) handlePublicationAPI(w http.ResponseWriter, r *http.Request, p
 			return
 		}
 		if h.publicationSyncer == nil {
+			h.logPublication("publicationFailed", plan, storage.PublicationFailed, "edge_sync_unavailable")
 			failed := publicationRecord(uid, plan, storage.PublicationFailed, "edge_sync_unavailable", "edge_sync", PublicationSyncResult{NOSLA: PublicationEdgeResult{Status: "not_configured"}, BWG: PublicationEdgeResult{Status: "not_configured"}})
 			_ = h.store.SavePublication(ctx, failed)
 			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "status": failed.Status, "reason": failed.Reason, "failed_step": failed.FailedStep, "publication": failed})
@@ -322,6 +353,7 @@ func (h *Handler) handlePublicationAPI(w http.ResponseWriter, r *http.Request, p
 		}
 		result, err := h.publicationSyncer.Publish(ctx, plan)
 		if err != nil || result.NOSLA.Status != "synced" || result.BWG.Status != "synced" {
+			h.logPublication("publicationEdgeSyncFailed", plan, storage.PublicationFailed, result.Reason)
 			failed := h.rollbackFailedPublish(ctx, uid, plan, result)
 			_ = h.store.SavePublication(ctx, failed)
 			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "status": failed.Status, "reason": failed.Reason, "failed_step": failed.FailedStep, "publication": failed})
@@ -347,6 +379,7 @@ func (h *Handler) handlePublicationAPI(w http.ResponseWriter, r *http.Request, p
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "status": published.Status, "publication": published})
+		h.logPublication("publicationCompleted", plan, published.Status, "")
 		return
 	}
 	if action == "publish/dry-run" {
@@ -354,7 +387,15 @@ func (h *Handler) handlePublicationAPI(w http.ResponseWriter, r *http.Request, p
 			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "status": storage.PublicationFailed, "reason": planErr.Error(), "failed_step": "plan"})
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "dry_run": true, "plan": plan})
+		readiness := unavailableSyncResult("edge_sync_unavailable", "edge_adapter_registration")
+		ready := false
+		if checker, ok := h.publicationSyncer.(publicationReadinessChecker); ok {
+			var readinessErr error
+			readiness, readinessErr = checker.Readiness(ctx, plan)
+			ready = readinessErr == nil && readiness.NOSLA.Status == "ready" && readiness.BWG.Status == "ready"
+		}
+		h.logPublication("publicationDryRun", plan, "dry_run_ok", readiness.Reason)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "status": "dry_run_ok", "dry_run": true, "plan": plan, "adapter_ready": ready, "readiness": readiness})
 		return
 	}
 	if action == "verify-proxy" {
@@ -459,4 +500,31 @@ func (h *Handler) handlePublicationAPI(w http.ResponseWriter, r *http.Request, p
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "status": unpublished.Status, "publication": unpublished})
 	}
+}
+
+func publicationOperationID(r *http.Request) string {
+	if r == nil {
+		return "publication"
+	}
+	if value, ok := r.Context().Value("requestID").(string); ok {
+		value = strings.TrimSpace(value)
+		if value != "" && len(value) <= 64 && !strings.ContainsAny(value, " \t\r\n/?#") {
+			return value
+		}
+	}
+	return "publication"
+}
+
+func (h *Handler) logPublication(event string, plan PublicationPlan, status, reason string) {
+	if h == nil || h.log == nil {
+		return
+	}
+	fields := map[string]any{
+		"event": event, "operationId": plan.OperationID,
+		"node": plan.NodeName, "routeSlug": plan.RouteSlug, "status": status,
+	}
+	if reason != "" {
+		fields["reason"] = reason
+	}
+	h.log.Info("publication", "publication state changed", fields)
 }
