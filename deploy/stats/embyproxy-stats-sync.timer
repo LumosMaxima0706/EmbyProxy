@@ -1,0 +1,10 @@
+[Unit]
+Description=Run NOSLA central stats snapshot sync
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+Unit=embyproxy-stats-sync.service
+
+[Install]
+WantedBy=timers.target

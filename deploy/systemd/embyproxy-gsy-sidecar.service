@@ -1,0 +1,33 @@
+[Unit]
+Description=EmbyProxy managed-route sidecar
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=embyproxy-gsy-sidecar
+Group=embyproxy-gsy-sidecar
+WorkingDirectory=/var/lib/embyproxy-gsy-sidecar
+EnvironmentFile=/etc/embyproxy-gsy-sidecar/embyproxy.env
+ExecStart=/opt/embyproxy-gsy-sidecar/current/embyproxy
+Restart=on-failure
+RestartSec=3s
+TimeoutStopSec=15s
+UMask=0077
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictSUIDSGID=true
+ReadWritePaths=/var/lib/embyproxy-gsy-sidecar /var/log/embyproxy-gsy-sidecar
+
+StandardOutput=append:/var/log/embyproxy-gsy-sidecar/service.log
+StandardError=append:/var/log/embyproxy-gsy-sidecar/service-error.log
+
+[Install]
+WantedBy=multi-user.target

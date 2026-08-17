@@ -1,0 +1,53 @@
+{
+  "mode": "dry-run",
+  "manual_hold": "none",
+  "timezone": "Asia/Shanghai",
+  "stream_host": "stream.149077530.xyz",
+  "node_ips": {
+    "nosla": "45.143.130.11",
+    "bwg": "144.34.226.187"
+  },
+  "health_paths": [
+    "/health",
+    "/https/v1.uhdnow.com/443/System/Info/Public"
+  ],
+  "health_timeout_seconds": 12,
+  "health_failures_to_switch": 3,
+  "health_successes_to_return": 3,
+  "health_min_sample_interval_seconds": 240,
+  "cooldown_seconds": 3600,
+  "nosla_switch_threshold_percent": 85,
+  "nosla_return_threshold_percent": 80,
+  "nosla_reset_return_threshold_percent": 15,
+  "reset_grace_hours": 6,
+  "usage_seed_max_age_hours": 24,
+  "dns_verify_timeout_seconds": 180,
+  "usage_seed_observed_at": "2026-08-12T16:21:00+08:00",
+  "usage_seed_source": "owner_provider_panel",
+  "traffic": {
+    "nosla": {
+      "quota_gb": 1100,
+      "opening_balance_gb": 484,
+      "reset_day": 21,
+      "seed_cycle_start": "2026-07-21",
+      "interface": "enp3s0"
+    },
+    "bwg": {
+      "quota_gb": 2000,
+      "opening_balance_gb": 217,
+      "reset_day": 7,
+      "seed_cycle_start": "2026-08-07",
+      "interface": "eth0"
+    }
+  },
+  "nosla_meter": {
+    "host": "45.143.130.11",
+    "user": "embyproxy-meter",
+    "identity_file": "/etc/embyproxy-failover-policy/nosla-meter",
+    "known_hosts_file": "/etc/embyproxy-failover-policy/known_hosts",
+    "timeout_seconds": 8
+  },
+  "dns_adapter": "/opt/stream-failover/spaceship_dns.py",
+  "state_file": "/var/lib/embyproxy-gsy-sidecar/failover-state.json",
+  "switch_backup_dir": "/var/backups/embyproxy-failover-policy/switches"
+}

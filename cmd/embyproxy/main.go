@@ -18,11 +18,15 @@ import (
 	"embyproxy/internal/buildinfo"
 	"embyproxy/internal/capture"
 	"embyproxy/internal/config"
+	"embyproxy/internal/failover"
 	"embyproxy/internal/identity"
 	"embyproxy/internal/logging"
+	"embyproxy/internal/mediaproxy"
 	"embyproxy/internal/proxy"
+	"embyproxy/internal/proxyadapter"
 	"embyproxy/internal/requestlog"
 	"embyproxy/internal/scheduler"
+	"embyproxy/internal/statslog"
 	"embyproxy/internal/storage"
 	"embyproxy/internal/telegram"
 )
@@ -57,6 +61,12 @@ func main() {
 		os.Exit(1)
 	}
 	defer store.Close()
+	globalStats, err := statslog.Open(cfg.GlobalStatsDBPath)
+	if err != nil {
+		log.Error("startup", "global stats database init failed", map[string]any{"event": "globalStatsDatabaseInitFailed"})
+		os.Exit(1)
+	}
+	defer globalStats.Close()
 	applyRuntimeConfig(context.Background(), store, log)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -72,47 +82,262 @@ func main() {
 	checker := auth.NewChecker(cfg, store)
 	proxyHandler := proxy.New(cfg, store, ids, log)
 	adminHandler := admin.New(cfg, store, checker, tg, log, proxyHandler.ResetNodeRoutingState, proxyHandler)
+	if cfg.PublicationAgentSocket != "" {
+		publicationSyncer, syncerErr := admin.NewSocketPublicationSyncer(cfg.PublicationAgentSocket, 45*time.Second)
+		if syncerErr != nil {
+			log.Error("startup", "publication adapter config invalid", map[string]any{"event": "publicationAdapterConfigInvalid"})
+			os.Exit(1)
+		}
+		adminHandler.SetPublicationSyncer(publicationSyncer)
+	}
+	adminHandler.SetGlobalStatsStore(globalStats)
+	failoverNodes, err := isolatedFailoverFixtureNodes(cfg)
+	if err != nil {
+		log.Error("startup", "isolated failover fixture config invalid", map[string]any{"event": "failoverMockFixtureConfigInvalid"})
+		os.Exit(1)
+	}
+	dnsAllowlist, err := failover.ParseDNSRecordAllowlist(cfg.FailoverDNSAllowedRecords)
+	if err != nil {
+		log.Error("startup", "failover DNS guard config invalid", map[string]any{"event": "failoverDNSGuardConfigInvalid"})
+		os.Exit(1)
+	}
+	failoverController := failover.NewController(failoverNodes, failover.DefaultPolicyConfig(), failover.NewMockDNSProvider())
+	failoverController.ConfigureDNSGuard(failover.DNSGuardConfig{
+		ProviderMode:          failover.DNSProviderMode(cfg.FailoverDNSProviderMode),
+		AllowRealProvider:     cfg.FailoverDNSRealApply,
+		RollbackMetadataReady: false,
+		Allowlist:             dnsAllowlist,
+		DryRunTTL:             5 * time.Minute,
+	})
+	failoverController.SetEventWriter(func(event failover.Event) error {
+		return store.AppendRedactedFailoverEvent(context.Background(), event.CreatedAt.Unix(), event.EventType, event.FromNodeID, event.ToNodeID, string(event.Mode), event.ReasonCode, event.Success)
+	})
+	failoverController.SetDNSRunWriter(func(change failover.DNSChange, success bool) error {
+		propagation := "verified"
+		if change.DryRun {
+			propagation = "dry_run"
+		} else if !success {
+			propagation = "failed"
+		}
+		now := time.Now().Unix()
+		return store.RecordDNSUpdateRunRecord(context.Background(), storage.DNSUpdateRunRecord{
+			StartedAt: now, CompletedAt: now, ProviderKind: string(change.ProviderMode),
+			RecordName: change.Name, RecordType: change.Type,
+			PreviousValue: change.PreviousValue, DesiredValue: change.Value,
+			RollbackReady: change.PreviousValueKnown, DryRun: change.DryRun,
+			ProviderResult: "mock", PropagationResult: propagation, Success: success,
+		})
+	})
+	failoverController.SetDNSPendingWriter(func(change failover.DNSChange) error {
+		now := time.Now().Unix()
+		return store.RecordDNSUpdateRunRecord(context.Background(), storage.DNSUpdateRunRecord{
+			StartedAt: now, CompletedAt: now, ProviderKind: string(change.ProviderMode),
+			RecordName: change.Name, RecordType: change.Type,
+			PreviousValue: change.PreviousValue, DesiredValue: change.Value,
+			RollbackReady:  change.PreviousValueKnown,
+			ProviderResult: "pending", PropagationResult: "pending",
+		})
+	})
+	failoverController.SetStateWriter(func(state failover.State) error {
+		return store.SaveFailoverState(context.Background(), state.ActiveNodeID, state.DesiredNodeID, state.ObservedDNSNodeID, string(state.Mode), state.CurrentCycleKey, unixOrZero(state.CooldownUntil), unixOrZero(state.LastTransitionAt), unixOrZero(state.LastEvaluationAt), state.ReconciliationRequired)
+	})
+	failoverController.SetTransitionWriter(func(state failover.State, event failover.Event) error {
+		return store.CommitFailoverTransition(context.Background(), failoverStateRecord(state), failoverEventRecord(event))
+	})
+	failoverController.SetDNSCommitWriter(func(change failover.DNSChange, state failover.State, event failover.Event, success bool) error {
+		propagation := "failed"
+		if success {
+			propagation = "verified"
+		}
+		return store.CommitDNSUpdate(context.Background(), storage.DNSUpdateRunRecord{
+			StartedAt: time.Now().Unix(), CompletedAt: time.Now().Unix(), ProviderKind: string(change.ProviderMode),
+			RecordName: change.Name, RecordType: change.Type, DryRun: change.DryRun,
+			PreviousValue: change.PreviousValue, DesiredValue: change.Value, RollbackReady: change.PreviousValueKnown,
+			ProviderResult: "mock", PropagationResult: propagation, Success: success,
+		}, failoverStateRecord(state), failoverEventRecord(event))
+	})
+	failoverController.SetHealthWriter(func(result failover.HealthResult, node failover.Node) error {
+		return store.RecordFailoverHealthCheck(context.Background(), result.NodeID, time.Now().Unix(), result.Kind, result.Success, result.StatusCode, result.Latency.Milliseconds(), node.ConsecutiveFailures, node.ConsecutiveSuccesses, result.ErrorCode)
+	})
+	failoverController.SetTrafficWriter(func(sample failover.TrafficSample) error {
+		var inbound, outbound, total, quota *int64
+		var usage *float64
+		if sample.Quality == failover.TrafficKnown {
+			inbound, outbound, total, quota = &sample.InboundBytes, &sample.OutboundBytes, &sample.TotalBytes, &sample.QuotaBytes
+			if value, ok := sample.UsagePercent(); ok {
+				usage = &value
+			}
+		}
+		return store.RecordFailoverTrafficSample(context.Background(), storage.TrafficSampleRecord{
+			NodeID: sample.NodeID, SampledAt: sample.SampledAt.Unix(), CycleKey: sample.CycleKey,
+			SourceType: "controller", InboundBytes: inbound, OutboundBytes: outbound,
+			TotalBytes: total, QuotaBytes: quota, UsagePercent: usage, Quality: string(sample.Quality),
+		})
+	})
+	if saved, ok, loadErr := store.LoadFailoverState(context.Background()); loadErr != nil {
+		log.Warn("failover", "state restore failed", map[string]any{"event": "failoverStateRestoreFailed"})
+	} else if ok {
+		failoverController.RestoreState(failover.State{
+			ActiveNodeID: saved.ActiveNodeID, DesiredNodeID: saved.DesiredNodeID,
+			ObservedDNSNodeID: saved.ObservedDNSNodeID, Mode: failover.Mode(saved.Mode),
+			CooldownUntil: unixTimeOrZero(saved.CooldownUntil), LastTransitionAt: unixTimeOrZero(saved.LastTransitionAt),
+			LastEvaluationAt: unixTimeOrZero(saved.LastEvaluationAt), CurrentCycleKey: saved.CurrentCycleKey,
+			ReconciliationRequired: saved.ReconciliationRequired,
+		})
+	}
+	if savedEvents, loadErr := store.LoadFailoverEvents(context.Background(), 200); loadErr == nil {
+		restored := make([]failover.Event, 0, len(savedEvents))
+		for index, event := range savedEvents {
+			restored = append(restored, failover.Event{ID: int64(index + 1), CreatedAt: time.Unix(event.CreatedAt, 0), EventType: event.EventType, FromNodeID: event.FromNodeID, ToNodeID: event.ToNodeID, Mode: failover.Mode(event.Mode), ReasonCode: event.ReasonCode, Success: event.Success})
+		}
+		failoverController.RestoreEvents(restored)
+	}
+	if runtimes, loadErr := store.LoadFailoverNodeRuntime(context.Background()); loadErr == nil {
+		for nodeID, runtime := range runtimes {
+			traffic := trafficSampleFromRecord(runtime.Traffic)
+			failoverController.RestoreNodeRuntime(nodeID, runtime.ConsecutiveFailures, runtime.ConsecutiveSuccesses, traffic)
+		}
+	}
+	adminHandler.SetFailoverController(failoverController)
+	adminHandler.SetDNSStatusReader(func() map[string]any {
+		run, ok, err := store.LoadLatestDNSUpdateRun(context.Background())
+		if err != nil || !ok {
+			return map[string]any{"available": false}
+		}
+		return map[string]any{"available": true, "dry_run": run.DryRun, "success": run.Success, "provider": run.ProviderKind, "propagation": run.PropagationResult, "rollback_ready": run.RollbackReady, "completed_at": run.CompletedAt}
+	})
 
 	scheduler.New(log, tg, proxyHandler.CleanupTTLMaps).Start(ctx)
 
-	mux := http.NewServeMux()
-	registerRoutes(mux, adminHandler, proxyHandler)
-
-	var handler http.Handler = mux
-	handler = capture.New(cfg, store, log).Middleware(handler)
-	handler = requestMiddleware(log, store, handler)
-
-	server := &http.Server{Addr: cfg.Addr(), Handler: handler}
-	go func() {
-		listener, err := net.Listen("tcp", cfg.Addr())
-		if err != nil {
-			log.Error("startup", "server failed", map[string]any{"event": "serverFailed", "error": err.Error()})
-			stop()
-			return
-		}
-		log.Info("startup", "server listening", map[string]any{"event": "serverListening", "addr": cfg.Addr(), "db": cfg.DBPath})
-		logIdentityProfiles(log, ids)
-		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Error("startup", "server failed", map[string]any{"event": "serverFailed", "error": err.Error()})
-			stop()
-		}
-	}()
+	proxyRoute := proxyRouteHandler(cfg, store, proxyHandler)
+	type serverSpec struct {
+		server      *http.Server
+		logProfiles bool
+	}
+	var serverSpecs []serverSpec
+	if cfg.AdminAddr() == "" {
+		mux := http.NewServeMux()
+		registerRoutes(mux, adminHandler, proxyRoute)
+		serverSpecs = append(serverSpecs, serverSpec{
+			server:      &http.Server{Addr: cfg.Addr(), Handler: wrapHTTPHandler(cfg, store, log, mux)},
+			logProfiles: true,
+		})
+	} else {
+		proxyMux := http.NewServeMux()
+		registerProxyRoutes(proxyMux, proxyRoute)
+		adminMux := http.NewServeMux()
+		registerAdminRoutes(adminMux, adminHandler)
+		serverSpecs = append(serverSpecs,
+			serverSpec{server: &http.Server{Addr: cfg.Addr(), Handler: wrapHTTPHandler(cfg, store, log, proxyMux)}, logProfiles: true},
+			serverSpec{server: &http.Server{Addr: cfg.AdminAddr(), Handler: wrapHTTPHandler(cfg, store, log, adminMux)}},
+		)
+	}
+	for _, spec := range serverSpecs {
+		spec := spec
+		go func() {
+			listener, err := net.Listen("tcp", spec.server.Addr)
+			if err != nil {
+				log.Error("startup", "server failed", map[string]any{"event": "serverFailed", "error": err.Error()})
+				stop()
+				return
+			}
+			log.Info("startup", "server listening", map[string]any{"event": "serverListening", "addr": spec.server.Addr, "db": cfg.DBPath})
+			if spec.logProfiles {
+				logIdentityProfiles(log, ids)
+			}
+			if err := spec.server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Error("startup", "server failed", map[string]any{"event": "serverFailed", "error": err.Error()})
+				stop()
+			}
+		}()
+	}
 
 	<-ctx.Done()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := server.Shutdown(shutdownCtx); err != nil {
-		log.Error("shutdown", "server shutdown failed", map[string]any{"event": "serverShutdownFailed", "error": err.Error()})
+	for _, spec := range serverSpecs {
+		if err := spec.server.Shutdown(shutdownCtx); err != nil {
+			log.Error("shutdown", "server shutdown failed", map[string]any{"event": "serverShutdownFailed", "error": err.Error()})
+		}
 	}
 }
 
+func isolatedFailoverFixtureNodes(cfg config.Config) ([]failover.Node, error) {
+	if !cfg.FailoverMockFixture {
+		return nil, nil
+	}
+	mode := failover.DNSProviderMode(cfg.FailoverDNSProviderMode)
+	switch mode {
+	case failover.DNSProviderModeMock, failover.DNSProviderModeNoop, failover.DNSProviderModeLocalOnly:
+	default:
+		return nil, errors.New("isolated failover fixture requires an explicit local provider mode")
+	}
+	if !loopbackListenAddress(cfg.Addr()) || !loopbackListenAddress(cfg.AdminAddr()) {
+		return nil, errors.New("isolated failover fixture requires loopback proxy and admin listeners")
+	}
+	return []failover.Node{
+		{ID: "mock-primary", Name: "Mock Primary", Role: failover.RolePrimary, Enabled: true, Priority: 1, HealthStatus: failover.HealthHealthy},
+		{ID: "mock-fallback", Name: "Mock Fallback", Role: failover.RoleFallback, Enabled: true, Priority: 2, HealthStatus: failover.HealthHealthy},
+	}, nil
+}
+
+func loopbackListenAddress(address string) bool {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+func unixOrZero(value time.Time) int64 {
+	if value.IsZero() {
+		return 0
+	}
+	return value.Unix()
+}
+
+func unixTimeOrZero(value int64) time.Time {
+	if value == 0 {
+		return time.Time{}
+	}
+	return time.Unix(value, 0)
+}
+
+func failoverStateRecord(state failover.State) storage.FailoverStateRecord {
+	return storage.FailoverStateRecord{
+		ActiveNodeID: state.ActiveNodeID, DesiredNodeID: state.DesiredNodeID, ObservedDNSNodeID: state.ObservedDNSNodeID,
+		Mode: string(state.Mode), CooldownUntil: unixOrZero(state.CooldownUntil), LastTransitionAt: unixOrZero(state.LastTransitionAt),
+		LastEvaluationAt: unixOrZero(state.LastEvaluationAt), CurrentCycleKey: state.CurrentCycleKey, ReconciliationRequired: state.ReconciliationRequired,
+	}
+}
+
+func failoverEventRecord(event failover.Event) storage.FailoverEventRecord {
+	return storage.FailoverEventRecord{CreatedAt: event.CreatedAt.Unix(), EventType: event.EventType, FromNodeID: event.FromNodeID, ToNodeID: event.ToNodeID, Mode: string(event.Mode), ReasonCode: event.ReasonCode, Success: event.Success}
+}
+
+func trafficSampleFromRecord(record storage.TrafficSampleRecord) failover.TrafficSample {
+	sample := failover.TrafficSample{NodeID: record.NodeID, CycleKey: record.CycleKey, Quality: failover.TrafficQuality(record.Quality)}
+	if record.InboundBytes != nil {
+		sample.InboundBytes = *record.InboundBytes
+	}
+	if record.OutboundBytes != nil {
+		sample.OutboundBytes = *record.OutboundBytes
+	}
+	if record.TotalBytes != nil {
+		sample.TotalBytes = *record.TotalBytes
+	}
+	if record.QuotaBytes != nil {
+		sample.QuotaBytes = *record.QuotaBytes
+	}
+	if record.SampledAt != 0 {
+		sample.SampledAt = time.Unix(record.SampledAt, 0)
+	}
+	return sample
+}
+
 func registerRoutes(mux *http.ServeMux, adminHandler http.Handler, proxyHandler http.Handler) {
-	mux.Handle("/admin", adminHandler)
-	mux.Handle("/admin/", adminHandler)
-	mux.HandleFunc("/favicon.ico", func(w http.ResponseWriter, r *http.Request) {
-		capture.SetMeta(r, map[string]any{"mode": "admin", "stage": "favicon"})
-		w.WriteHeader(http.StatusNoContent)
-	})
+	registerAdminEndpoints(mux, adminHandler)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" {
 			capture.SetMeta(r, map[string]any{"mode": "admin", "stage": "admin-redirect"})
@@ -121,6 +346,54 @@ func registerRoutes(mux *http.ServeMux, adminHandler http.Handler, proxyHandler 
 		}
 		proxyHandler.ServeHTTP(w, r)
 	})
+}
+
+func registerAdminRoutes(mux *http.ServeMux, adminHandler http.Handler) {
+	registerAdminEndpoints(mux, adminHandler)
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
+			return
+		}
+		capture.SetMeta(r, map[string]any{"mode": "admin", "stage": "admin-redirect"})
+		http.Redirect(w, r, "/admin", http.StatusFound)
+	})
+}
+
+func registerProxyRoutes(mux *http.ServeMux, proxyHandler http.Handler) {
+	for _, path := range []string{"/admin", "/admin/", "/api/admin", "/api/admin/", "/favicon.ico"} {
+		mux.Handle(path, http.NotFoundHandler())
+	}
+	mux.Handle("/", proxyHandler)
+}
+
+func registerAdminEndpoints(mux *http.ServeMux, adminHandler http.Handler) {
+	mux.Handle("/admin", adminHandler)
+	mux.Handle("/admin/", adminHandler)
+	mux.Handle("/api/admin", adminHandler)
+	mux.Handle("/api/admin/", adminHandler)
+	mux.HandleFunc("/favicon.ico", func(w http.ResponseWriter, r *http.Request) {
+		capture.SetMeta(r, map[string]any{"mode": "admin", "stage": "favicon"})
+		w.WriteHeader(http.StatusNoContent)
+	})
+}
+
+func wrapHTTPHandler(cfg config.Config, store *storage.Store, log *logging.Logger, next http.Handler) http.Handler {
+	handler := capture.New(cfg, store, log).Middleware(next)
+	return requestMiddleware(log, store, handler)
+}
+
+func proxyRouteHandler(cfg config.Config, store *storage.Store, fallback http.Handler) http.Handler {
+	if !cfg.MediaProxyRoutes || store == nil {
+		return fallback
+	}
+	mediaConfig := mediaproxy.Config{TrustProxyEnv: true}
+	return proxyadapter.NewProductionRouter(
+		proxyadapter.NewStorageResolver(store, "admin"),
+		mediaproxy.NewExecutor(mediaConfig),
+		mediaConfig,
+		fallback,
+	)
 }
 
 func logBuildInfo(log *logging.Logger) {

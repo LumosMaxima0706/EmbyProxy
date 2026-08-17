@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"embyproxy/internal/auth"
 	"embyproxy/internal/capture"
 	"embyproxy/internal/config"
+	"embyproxy/internal/failover"
 	"embyproxy/internal/logging"
 	"embyproxy/internal/storage"
 
@@ -32,8 +34,13 @@ func TestAuthRoutesLoginStatusAndLogout(t *testing.T) {
 		t.Fatalf("login Cache-Control = %q, want no-store", got)
 	}
 	cookies := login.Result().Cookies()
-	if len(cookies) != 1 || cookies[0].Name != auth.SessionCookieName || !cookies[0].HttpOnly || cookies[0].SameSite != http.SameSiteStrictMode {
-		t.Fatalf("login cookies = %+v", cookies)
+	if len(cookies) != 2 {
+		t.Fatalf("login cookie count = %d", len(cookies))
+	}
+	for _, cookie := range cookies {
+		if cookie.Name != auth.SessionCookieName || !cookie.HttpOnly || cookie.SameSite != http.SameSiteStrictMode {
+			t.Fatalf("invalid login cookie attributes for path %q", cookie.Path)
+		}
 	}
 
 	statusReq := httptest.NewRequest(http.MethodGet, "https://proxy.example/admin/auth/status", nil)
@@ -53,12 +60,181 @@ func TestAuthRoutesLoginStatusAndLogout(t *testing.T) {
 	if logout.Code != http.StatusOK {
 		t.Fatalf("logout = %d body=%s", logout.Code, logout.Body.String())
 	}
+	cleared := logout.Result().Cookies()
+	if len(cleared) != 2 || cleared[0].MaxAge >= 0 || cleared[1].MaxAge >= 0 {
+		t.Fatalf("logout did not clear both scoped session cookies")
+	}
 	statusReq = httptest.NewRequest(http.MethodGet, "https://proxy.example/admin/auth/status", nil)
 	statusReq.AddCookie(cookies[0])
 	statusRec = httptest.NewRecorder()
 	handler.ServeHTTP(statusRec, statusReq)
 	if statusRec.Code != http.StatusUnauthorized {
 		t.Fatalf("status after logout = %d body=%s", statusRec.Code, statusRec.Body.String())
+	}
+}
+
+func TestAdminPageDisablesBrowserCaching(t *testing.T) {
+	handler := newAuthTestHandler(t, config.Config{AdminToken: "strong-admin-token"})
+	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/admin", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("admin page status = %d", rec.Code)
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("admin page Cache-Control = %q, want no-store", got)
+	}
+}
+
+func TestBrowserSessionAuthenticatesAPIAdminAndKeepsOriginGuard(t *testing.T) {
+	handler := newAuthTestHandler(t, config.Config{AdminToken: "strong-admin-token"})
+	handler.SetFailoverController(failover.NewController(nil, failover.DefaultPolicyConfig(), nil))
+	server := httptest.NewTLSServer(handler)
+	defer server.Close()
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := server.Client()
+	client.Jar = jar
+
+	loginBody := bytes.NewBufferString(`{"token":"strong-admin-token"}`)
+	login, err := client.Post(server.URL+"/admin/auth/login", "application/json", loginBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	login.Body.Close()
+	if login.StatusCode != http.StatusOK {
+		t.Fatalf("login status = %d", login.StatusCode)
+	}
+	status, err := client.Get(server.URL + "/api/admin/failover/status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	status.Body.Close()
+	if status.StatusCode != http.StatusOK {
+		t.Fatalf("session API status = %d", status.StatusCode)
+	}
+
+	sameOrigin, err := http.NewRequest(http.MethodPost, server.URL+"/api/admin/failover/mode", bytes.NewBufferString(`{"mode":"auto"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameOrigin.Header.Set("Content-Type", "application/json")
+	sameOrigin.Header.Set("Origin", server.URL)
+	sameOriginResponse, err := client.Do(sameOrigin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameOriginResponse.Body.Close()
+	if sameOriginResponse.StatusCode != http.StatusOK {
+		t.Fatalf("same-origin POST status = %d", sameOriginResponse.StatusCode)
+	}
+
+	crossSite, err := http.NewRequest(http.MethodPost, server.URL+"/api/admin/failover/mode", bytes.NewBufferString(`{"mode":"auto"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	crossSite.Header.Set("Content-Type", "application/json")
+	crossSite.Header.Set("Origin", "https://cross-site.invalid")
+	crossSite.Header.Set("Sec-Fetch-Site", "cross-site")
+	crossSiteResponse, err := client.Do(crossSite)
+	if err != nil {
+		t.Fatal(err)
+	}
+	crossSiteResponse.Body.Close()
+	if crossSiteResponse.StatusCode != http.StatusForbidden {
+		t.Fatalf("cross-site POST status = %d", crossSiteResponse.StatusCode)
+	}
+}
+
+func TestOwnerAdminBasicOnlyRequiresExactTrustedProxyContext(t *testing.T) {
+	cfg := config.Config{
+		AdminToken:         "strong-admin-token",
+		OwnerAdminAuthMode: "basic_only",
+		OwnerAdminHost:     "owner-admin.example",
+	}
+	handler := newAuthTestHandler(t, cfg)
+
+	tests := []struct {
+		name       string
+		remoteAddr string
+		host       string
+		header     string
+		want       int
+	}{
+		{name: "trusted loopback proxy", remoteAddr: "127.0.0.1:41234", host: "owner-admin.example", header: "1", want: http.StatusOK},
+		{name: "ipv6 loopback proxy", remoteAddr: "[::1]:41234", host: "owner-admin.example", header: "1", want: http.StatusOK},
+		{name: "external header spoof", remoteAddr: "192.0.2.10:41234", host: "owner-admin.example", header: "1", want: http.StatusUnauthorized},
+		{name: "wrong host", remoteAddr: "127.0.0.1:41234", host: "canary.example", header: "1", want: http.StatusUnauthorized},
+		{name: "missing trusted header", remoteAddr: "127.0.0.1:41234", host: "owner-admin.example", want: http.StatusUnauthorized},
+		{name: "wrong trusted header", remoteAddr: "127.0.0.1:41234", host: "owner-admin.example", header: "true", want: http.StatusUnauthorized},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "http://sidecar/api/admin/managed-routes", nil)
+			req.RemoteAddr = tt.remoteAddr
+			req.Host = tt.host
+			req.Header.Set(ownerAdminAuthenticatedHeader, tt.header)
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != tt.want {
+				t.Fatalf("status=%d want=%d body=%s", rec.Code, tt.want, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestOwnerAdminBasicOnlyStatusAndUI(t *testing.T) {
+	cfg := config.Config{
+		AdminToken:         "strong-admin-token",
+		OwnerAdminAuthMode: "basic_only",
+		OwnerAdminHost:     "owner-admin.example",
+	}
+	handler := newAuthTestHandler(t, cfg)
+
+	request := func(path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "http://sidecar"+path, nil)
+		req.RemoteAddr = "127.0.0.1:41234"
+		req.Host = "owner-admin.example"
+		req.Header.Set(ownerAdminAuthenticatedHeader, "1")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+
+	status := request("/admin/auth/status")
+	if status.Code != http.StatusOK || !strings.Contains(status.Body.String(), `"authMethod":"basic_proxy"`) {
+		t.Fatalf("status=%d body=%s", status.Code, status.Body.String())
+	}
+	page := request("/admin")
+	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), `data-owner-admin-auth="basic_only"`) {
+		t.Fatalf("page status=%d body=%s", page.Code, page.Body.String())
+	}
+	if !strings.Contains(page.Body.String(), `body[data-owner-admin-auth="basic_only"] #loginWrap`) {
+		t.Fatal("owner Admin page does not hide token login")
+	}
+	loginReq := httptest.NewRequest(http.MethodPost, "http://sidecar/admin/auth/login", strings.NewReader(`{"token":"unused"}`))
+	loginReq.RemoteAddr = "127.0.0.1:41234"
+	loginReq.Host = "owner-admin.example"
+	loginReq.Header.Set(ownerAdminAuthenticatedHeader, "1")
+	loginRec := httptest.NewRecorder()
+	handler.ServeHTTP(loginRec, loginReq)
+	if loginRec.Code != http.StatusNotFound {
+		t.Fatalf("basic-only token login status=%d", loginRec.Code)
+	}
+}
+
+func TestOwnerAdminHeaderDoesNotBypassWhenModeDisabled(t *testing.T) {
+	handler := newAuthTestHandler(t, config.Config{AdminToken: "strong-admin-token"})
+	req := httptest.NewRequest(http.MethodGet, "http://sidecar/api/admin/managed-routes", nil)
+	req.RemoteAddr = "127.0.0.1:41234"
+	req.Host = "owner-admin.example"
+	req.Header.Set(ownerAdminAuthenticatedHeader, "1")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -576,8 +752,8 @@ func beginAuthRouteTwoFactorSetup(t *testing.T, handler *Handler) authRouteTwoFa
 		t.Fatalf("login = %d body=%s", login.Code, login.Body.String())
 	}
 	cookies := login.Result().Cookies()
-	if len(cookies) != 1 {
-		t.Fatalf("login cookies = %+v", cookies)
+	if len(cookies) != 2 {
+		t.Fatalf("login cookie count = %d", len(cookies))
 	}
 	setupRec := serveAdminJSON(t, handler, http.MethodPost, "/admin/auth/2fa/setup", map[string]any{"token": "strong-admin-token"}, cookies[0])
 	if setupRec.Code != http.StatusOK {

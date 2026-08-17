@@ -787,6 +787,40 @@ func TestLogPlaybackStoppedAtSameTimestampClosesState(t *testing.T) {
 	}
 }
 
+func TestLogPlaybackProgressAtSameTimestampAdvancesPosition(t *testing.T) {
+	ctx := context.Background()
+	store := newStatsTestStore(t)
+	base := time.Date(2026, 7, 12, 14, 30, 0, 0, localtime.Location()).UnixMilli()
+	input := PlaybackInput{
+		Node:        Node{Name: "alpha"},
+		RequestIP:   "127.0.0.1",
+		Headers:     http.Header{"User-Agent": {"same-time-progress-client"}},
+		Status:      http.StatusNoContent,
+		IsPlayback:  true,
+		Mode:        "proxy",
+		Method:      http.MethodPost,
+		RequestURL:  "/emby/Sessions/Playing",
+		RequestBody: []byte(`{"ItemId":"item-1","PlaySessionId":"play-session-1","PositionTicks":0,"IsPaused":false}`),
+		OccurredAt:  base,
+	}
+	if err := store.LogPlayback(ctx, input); err != nil {
+		t.Fatalf("LogPlayback(start) error = %v", err)
+	}
+	input.RequestURL = "/emby/Sessions/Playing/Progress"
+	input.RequestBody = []byte(`{"ItemId":"item-1","PlaySessionId":"play-session-1","PositionTicks":300000,"IsPaused":false}`)
+	if err := store.LogPlayback(ctx, input); err != nil {
+		t.Fatalf("LogPlayback(progress) error = %v", err)
+	}
+
+	var position int64
+	if err := store.db.QueryRowContext(ctx, `SELECT last_position_ticks FROM playback_states`).Scan(&position); err != nil {
+		t.Fatalf("query playback state error = %v", err)
+	}
+	if position != 300000 {
+		t.Fatalf("last_position_ticks = %d, want 300000", position)
+	}
+}
+
 func TestLogPlaybackDurationSplitsAcrossBeijingDays(t *testing.T) {
 	ctx := context.Background()
 	store := newStatsTestStore(t)

@@ -12,11 +12,79 @@ import (
 
 	"embyproxy/internal/capture"
 	"embyproxy/internal/config"
+	"embyproxy/internal/failover"
 	"embyproxy/internal/logging"
 	"embyproxy/internal/proxy"
 	"embyproxy/internal/requestlog"
 	"embyproxy/internal/storage"
 )
+
+func TestIsolatedFailoverFixtureIsExplicitAndLocalOnly(t *testing.T) {
+	localConfig := func(mode string) config.Config {
+		return config.Config{
+			FailoverMockFixture: true, FailoverDNSProviderMode: mode,
+			ListenAddr: "127.0.0.1:19080", AdminListenAddr: "127.0.0.1:19081",
+		}
+	}
+	for _, mode := range []string{"mock", "noop", "local-only"} {
+		t.Run(mode, func(t *testing.T) {
+			nodes, err := isolatedFailoverFixtureNodes(localConfig(mode))
+			if err != nil || len(nodes) != 2 {
+				t.Fatalf("nodes=%+v err=%v", nodes, err)
+			}
+			for _, node := range nodes {
+				if !node.Enabled || node.Maintenance || node.HealthStatus != failover.HealthHealthy || node.PublicHost != "" || node.HealthURL != "" {
+					t.Fatalf("unsafe fixture node: %+v", node)
+				}
+			}
+		})
+	}
+
+	for _, mode := range []string{"", "unknown", "real", "external"} {
+		t.Run("denied_"+mode, func(t *testing.T) {
+			nodes, err := isolatedFailoverFixtureNodes(localConfig(mode))
+			if err == nil || len(nodes) != 0 {
+				t.Fatalf("mode=%q nodes=%+v err=%v", mode, nodes, err)
+			}
+		})
+	}
+
+	nodes, err := isolatedFailoverFixtureNodes(config.Config{FailoverDNSProviderMode: "mock"})
+	if err != nil || len(nodes) != 0 {
+		t.Fatalf("disabled fixture nodes=%+v err=%v", nodes, err)
+	}
+
+	for _, cfg := range []config.Config{
+		{FailoverMockFixture: true, FailoverDNSProviderMode: "mock"},
+		{FailoverMockFixture: true, FailoverDNSProviderMode: "mock", ListenAddr: "0.0.0.0:19080", AdminListenAddr: "127.0.0.1:19081"},
+		{FailoverMockFixture: true, FailoverDNSProviderMode: "mock", ListenAddr: "127.0.0.1:19080", AdminListenAddr: "0.0.0.0:19081"},
+	} {
+		if nodes, err := isolatedFailoverFixtureNodes(cfg); err == nil || len(nodes) != 0 {
+			t.Fatalf("non-local fixture enabled: cfg=%+v nodes=%+v err=%v", cfg, nodes, err)
+		}
+	}
+}
+
+func TestIsolatedMockFixtureCanPrepareDNSApply(t *testing.T) {
+	nodes, err := isolatedFailoverFixtureNodes(config.Config{
+		FailoverMockFixture: true, FailoverDNSProviderMode: "mock",
+		ListenAddr: "127.0.0.1:19080", AdminListenAddr: "127.0.0.1:19081",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller := failover.NewController(nodes, failover.DefaultPolicyConfig(), failover.NewMockDNSProvider())
+	controller.ConfigureDNSGuard(failover.DNSGuardConfig{
+		ProviderMode: failover.DNSProviderModeMock,
+		Allowlist:    []failover.DNSRecordRule{{Name: "stream.mock.invalid", Type: "A"}},
+	})
+	plan, err := controller.PrepareDNSApply(context.Background(), failover.DNSChange{
+		Name: "stream.mock.invalid", Type: "A", Value: "192.0.2.10", TTL: 60,
+	}, "mock-primary")
+	if err != nil || plan.ID == "" || plan.TargetNodeID != "mock-primary" {
+		t.Fatalf("plan=%+v err=%v", plan, err)
+	}
+}
 
 func TestShouldPrintVersion(t *testing.T) {
 	tests := []struct {
@@ -215,6 +283,91 @@ func TestEntryRoutesSetTrafficCaptureStage(t *testing.T) {
 	}
 	assertCaptureRouteMeta(t, records[0], "admin", "admin-redirect", "/", http.StatusFound)
 	assertCaptureRouteMeta(t, records[1], "admin", "favicon", "/favicon.ico", http.StatusNoContent)
+}
+
+func TestSeparateListenersKeepAdminAndProxyRoutesIsolated(t *testing.T) {
+	adminMux := http.NewServeMux()
+	registerAdminRoutes(adminMux, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	proxyMux := http.NewServeMux()
+	registerProxyRoutes(proxyMux, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+	}))
+
+	adminResponse := httptest.NewRecorder()
+	adminMux.ServeHTTP(adminResponse, httptest.NewRequest(http.MethodGet, "/api/admin/failover/status", nil))
+	if adminResponse.Code != http.StatusNoContent {
+		t.Fatalf("admin status=%d", adminResponse.Code)
+	}
+	adminProxyResponse := httptest.NewRecorder()
+	adminMux.ServeHTTP(adminProxyResponse, httptest.NewRequest(http.MethodGet, "/node/emby", nil))
+	if adminProxyResponse.Code != http.StatusNotFound {
+		t.Fatalf("admin listener proxy status=%d", adminProxyResponse.Code)
+	}
+	proxyResponse := httptest.NewRecorder()
+	proxyMux.ServeHTTP(proxyResponse, httptest.NewRequest(http.MethodGet, "/node/emby", nil))
+	if proxyResponse.Code != http.StatusAccepted {
+		t.Fatalf("proxy status=%d", proxyResponse.Code)
+	}
+	proxyAdminResponse := httptest.NewRecorder()
+	proxyMux.ServeHTTP(proxyAdminResponse, httptest.NewRequest(http.MethodGet, "/admin", nil))
+	if proxyAdminResponse.Code != http.StatusNotFound {
+		t.Fatalf("proxy listener admin status=%d", proxyAdminResponse.Code)
+	}
+}
+
+func TestProxyRouteHandlerDefaultsToLegacyProxy(t *testing.T) {
+	store, err := storage.New(filepath.Join(t.TempDir(), "proxy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if _, err := store.DB().ExecContext(context.Background(), `
+		INSERT INTO managed_routes
+			(slug, node_name, enabled, public, default_line, created_at, updated_at)
+		VALUES ('demo', 'demo-node', 1, 1, 'main', 1, 1)
+	`); err != nil {
+		t.Fatal(err)
+	}
+	fallback := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTeapot)
+	})
+	handler := proxyRouteHandler(config.Config{}, store, fallback)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/s/demo/path", nil))
+	if recorder.Code != http.StatusTeapot {
+		t.Fatalf("status=%d", recorder.Code)
+	}
+}
+
+func TestProxyRouteHandlerEnabledKeepsLegacyFallback(t *testing.T) {
+	store, err := storage.New(filepath.Join(t.TempDir(), "proxy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	fallback := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTeapot)
+	})
+	handler := proxyRouteHandler(config.Config{MediaProxyRoutes: true}, store, fallback)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/missing/path", nil))
+	if recorder.Code != http.StatusTeapot {
+		t.Fatalf("status=%d", recorder.Code)
+	}
+}
+
+func TestProxyRouteHandlerEnabledWithoutStoreKeepsLegacyFallback(t *testing.T) {
+	fallback := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTeapot)
+	})
+	handler := proxyRouteHandler(config.Config{MediaProxyRoutes: true}, nil, fallback)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/s/demo/path", nil))
+	if recorder.Code != http.StatusTeapot {
+		t.Fatalf("status=%d", recorder.Code)
+	}
 }
 
 func assertCaptureRouteMeta(t *testing.T, record capture.Record, mode, stage, inboundURL string, status int) {

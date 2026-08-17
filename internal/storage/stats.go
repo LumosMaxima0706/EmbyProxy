@@ -651,12 +651,20 @@ func updatePlaybackState(ctx context.Context, tx *sql.Tx, in playbackStateUpdate
 	if state.Closed || in.OccurredAt < state.LastEventTS {
 		return nil
 	}
-	if in.OccurredAt == state.LastEventTS {
+	// Requests are timestamped in milliseconds. Two legitimate progress
+	// requests can therefore share a timestamp; accept a changed position in
+	// arrival order instead of treating it as a duplicate. Stopped remains
+	// special-cased so an equal-timestamp stop still closes the state.
+	sameTimestamp := in.OccurredAt == state.LastEventTS
+	if sameTimestamp {
 		if in.Event != "stopped" {
-			return nil
+			if !in.HasPosition || !state.HasPosition || in.PositionTicks == state.LastPositionTicks {
+				return nil
+			}
+		} else {
+			state.Closed = true
+			return upsertPlaybackState(ctx, tx, state, in.Key)
 		}
-		state.Closed = true
-		return upsertPlaybackState(ctx, tx, state, in.Key)
 	}
 	if state.ItemKey != "" && in.ItemKey != "" && state.ItemKey != in.ItemKey {
 		if in.Event == "stopped" {
@@ -682,7 +690,7 @@ func updatePlaybackState(ctx context.Context, tx *sql.Tx, in playbackStateUpdate
 
 	intervalMillis := in.OccurredAt - state.LastEventTS
 	positionChanged := state.HasPosition && in.HasPosition && state.LastPositionTicks != in.PositionTicks
-	if intervalMillis <= playbackMaxIntervalMillis && !state.IsPaused && positionChanged {
+	if !sameTimestamp && intervalMillis <= playbackMaxIntervalMillis && !state.IsPaused && positionChanged {
 		if err := addPlaybackDuration(ctx, tx, state.LastEventTS, in.OccurredAt, state.Node, state.Client, state.Mode); err != nil {
 			return err
 		}

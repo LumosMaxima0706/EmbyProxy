@@ -1,0 +1,107 @@
+# Step Execution Tracker
+
+Statuses are `TODO`, `IN_PROGRESS`, `BLOCKED`, `DONE`, or `SKIPPED`. Only one step is `IN_PROGRESS` at a time. Every status change must include evidence in this file, `08-progress-log.md`, and, when applicable, `13-issue-resolution-log.md` and `14-verification-matrix.md`.
+
+| Step ID | Phase | Task | Status | Depends on | Files expected to change | Implementation notes | Validation command | Validation result | Commit hash | Next action |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| A-001 | A | Normalize repo/runbook operating system and classify dirty work | DONE | Owner authorization, current branch | `11-master-implementation-plan.md`, `12-step-execution-tracker.md`, `13-issue-resolution-log.md`, `14-verification-matrix.md`, `15-delivery-checklist.md`, existing runbook docs | Created executable phases, task states, issue and evidence rules; managed-route dirty batch preserved | `git status --short --untracked-files=all`; `git diff --check`; runbook file checks | Passed; runbook OS committed | `8d60aa5` | B-001 is blocked pending toolchain recovery |
+| B-001 | B | Recover or document Go/gofmt verification toolchain | DONE | A-001 | Runbook docs and temporary local toolchain | Recovered Go 1.26 from the configured apt package source into a temporary user-writable directory; no system package database change | `apt-cache policy`; `apt-get download`; `dpkg-deb -x`; `go version`; `gofmt -h` | Passed; Go 1.26.0 and gofmt available through temporary PATH | `8d60aa5` (tracking baseline) | C-001 now IN_PROGRESS |
+| C-001 | C | Verify managed-route transactional storage CRUD batch | DONE | B-001 | `internal/storage/managed_routes.go`, tests | Transactional list/save/delete and line replacement preserved; storage subset committed after formatting and targeted test | `gofmt`; `go test ./internal/storage`; `git diff --check` | Passed; storage package test passed | `98229bd` | D-001 now IN_PROGRESS |
+| D-001 | D | Verify authenticated managed-route Admin API | DONE | C-001 | `internal/admin/admin.go`, `internal/admin/managed_routes_api.go`, tests | Authenticated CRUD API, validation, storage integration, and tests completed | `gofmt`; `go test ./internal/admin ./internal/proxyadapter`; `go test ./...`; `go vet ./...`; `git diff --check` | Passed; targeted/full tests and vet passed | `0b7b590` | E-001 is the next dependency-satisfied task |
+| E-001 | E | Integrate managed-route editor into embedded Admin UI | DONE | D-001 | `internal/admin/static/index.html`, `internal/admin/managed_routes_ui_test.go` | Added authenticated managed-route tab with list, editor, line add/remove, save/delete/refresh; protected UI clears route state on logout | `gofmt -w internal/admin/managed_routes_ui_test.go`; `go test ./internal/admin ./internal/proxyadapter`; `go test ./...`; `go vet ./...`; `git diff --check` | PASS; static UI contract and full Go verification passed; browser automation unavailable, manual review remains in delivery checklist | `8c00f1a` | F-001 now IN_PROGRESS |
+| F-001 | F | Wire runtime storage resolver and safe feature-flag loading | DONE | C-001, D-001, E-001 | `cmd/embyproxy/main.go`, `internal/proxyadapter/`, `internal/config/config_test.go`, `cmd/embyproxy/main_test.go` | Existing runtime wiring verified; added fail-closed tests for unknown flag values and missing store while preserving legacy fallback | `gofmt -w internal/config/config_test.go cmd/embyproxy/main_test.go`; `go test ./internal/config ./cmd/embyproxy ./internal/proxyadapter`; `go test ./...`; `go vet ./...`; `git diff --check` | PASS; resolver/feature flag and fallback matrix passed | `29118fb` | G-001 now IN_PROGRESS |
+| G-001 | G | Verify managed route reaches mediaproxy core | DONE | F-001 | `internal/proxyadapter/`, `internal/mediaproxy/`, tests, verification docs | Local httptest matrix covers HTTP, Range, WebSocket, Location/Content-Location rewrite, fallback, unsafe target rejection, and redaction | `gofmt -w internal/proxyadapter/production_test.go`; `go test ./internal/proxyadapter ./internal/mediaproxy`; `go test ./...`; `go vet ./...`; `git diff --check` | PASS; managed route reaches shared mediaproxy executor with safe headers and redacted request metadata | `4e60097` | H-001 now DONE after persistence evidence |
+| H-001 | H | Add migration and backward-compatibility evidence | DONE | C-001 through G-001 | `internal/storage/managed_routes_test.go`, storage migrations, runbook | Verified schema initialization and managed route/line persistence across SQLite store close/reopen; existing legacy fallback tests remain passing | `gofmt -w internal/storage/managed_routes_test.go`; `go test ./internal/storage ./internal/proxyadapter`; `go test ./...`; `go vet ./...`; `git diff --check` | PASS; reopen persistence and full compatibility suite passed | `fc00c61` | I-001 now IN_PROGRESS |
+| I-001 | I | Full regression/security hardening | DONE | C-001 through H-001 | tests, runbook | Full regression, vet, auth/API checks, target validation, WebSocket, fallback, persistence, and redaction evidence completed locally | `go test ./internal/proxyadapter -run 'Test(AdapterLoggingDoesNotExposeRequestSecrets|ProductionLogsDoNotContainRequestSecrets|ProductionNodeAccessLogRedactsSecretAndTail)$'`; `go test ./internal/admin -run 'TestManagedRoutesAPI|TestAuthRoutes'`; `go test ./...`; `go vet ./...`; `git diff --check` | PASS; no production sensitive log call found beyond redaction/request URI helpers; no tracked secret files or generated/binary artifacts | Docs evidence pending commit | J-001 now IN_PROGRESS; remaining provenance is release hygiene |
+| J-001 | J | Complete release provenance/docs hygiene | BLOCKED | I-001, owner/rightsholder evidence | `docs/third_party_notices.md`, release docs, matrix | Evidence tracking is complete locally; rights-holder/release decisions are required to create authoritative notices or SBOM | release notice/SBOM/manual review | BLOCKED by `ISSUE-PROV-002`; non-blocking for implementation, blocks formal public distribution | TBD | Keep evidence matrix pending and request owner/rightsholder review at release gate |
+| K-001 | K | Final delivery and publish/deploy gate preparation | DONE | I-001; J-001 for release | runbook, delivery checklist, commit/path evidence | Reconciled local implementation commits, docs evidence, path scope, clean source state, and release-only blockers; no publish/deploy action taken | `git status --short --untracked-files=all`; `git diff --check`; tracker/gap/verification/progress consistency review | PASS for local delivery preparation; BWG publish bridge and deployment remain separate human gates | Docs commit pending | Stop for owner review before any publish/deploy gate |
+
+## Current Task Rule
+
+E-001 is complete in `8c00f1a`; F-001 is complete in `29118fb`; G-001 is complete in `4e60097`; H-001 is complete in `fc00c61`; I-001 verification is complete. J-001 is release-only BLOCKED by `ISSUE-PROV-002`; K-001 local delivery preparation is DONE. No implementation task remains active in this run.
+
+## Publish Bridge Result
+
+Status: DONE for target `5cbbe54`.
+
+Evidence: local bundle verification, BWG branch/base/status, bundle/temp-ref/path whitelist, ff-only merge, feature-only push, remote ref verification, and temporary artifact cleanup all passed. The publish-result docs commit is the next approved bundle target.
+
+## Publish Bridge Gate
+
+Status: DONE (`ISSUE-PUBLISH-001` resolved for the implementation publish).
+
+Scope was limited to the approved `feature/failover-phase2-local` branch. BWG-only validation, ff-only merge, feature-ref push, remote verification, and cleanup passed. No source implementation is in progress.
+
+## Deployment steps
+
+| Step ID | Phase | Task | Status | Depends on | Files expected to change | Implementation notes | Validation command | Validation result | Commit hash | Next action |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| DEPLOY-001 | Deployment | BWG read-only preflight and target conflict check | DONE | K-001, owner deployment authorization | `18-21`, `08`, `12-15` | Confirmed checkout, service boundary, port `127.0.0.1:18082`, disk, paths, existing service safety, and Nginx state without mutation | Local tests plus read-only `ssh bwg` checks | PASS; no conflicts, existing Nginx/rathole active, `nginx -t` PASS | `15a114a` (local evidence baseline) | DEPLOY-002 is ready |
+| DEPLOY-002 | Deployment | Backup and upload independent sidecar artifact | DONE | DEPLOY-001 | deployment templates, deployment log, rollback plan | Built static artifact from `e0f2bb6`; installed audited unit/config, first-deploy manifest, independent paths, dedicated user, and generated credential without output | checksum, unit verification, permissions, backup listing, pre-start state | PASS; artifact checksum matched, unit verified, service inactive/disabled, port free | `b2a13a1` (template baseline) | DEPLOY-003 is ready |
+| DEPLOY-003 | Deployment | Start sidecar and run health/smoke checks | DONE | DEPLOY-002 | healthcheck, execution log | Enabled/started only the new sidecar; verified admin/auth/CRUD/proxy/fail-closed/log safety and existing services | service status, listener, localhost/public-upstream smoke, bounded logs | PASS; sidecar usable on loopback, no public ingress | `51e7a8c` | DEPLOY-004 closeout |
+| DEPLOY-004 | Deployment | Close deployment gate and record rollback/readiness | DONE | DEPLOY-003 | all deployment docs, progress log, checklist, handoff | Reconciled final remote state, rollback, health, and publish boundary; no traffic cutover | final status, docs checks, local tests, final remote checks | PASS; deployment complete for owner-controlled localhost use | `51e7a8c` | Publish deployment record through BWG bridge; production traffic remains separately gated |
+
+DEPLOY-001 through DEPLOY-004 are DONE. Deployment documentation closeout passed;
+publish the record through the BWG bridge before stopping.
+
+## Deployment record publish bridge
+
+Status: DONE
+
+- Bundle target: `1f60e1c`.
+- BWG validation and ff-only merge: PASS.
+- Remote feature ref: `1f60e1c`.
+- Scope: `docs/fusion-project-runbook/*` and `deploy/*` only.
+- No force push, main/master push, DNS, traffic, or service action.
+
+## Post-deploy stabilization
+
+| Step ID | Phase | Task | Status | Depends on | Files expected to change | Implementation notes | Validation command | Validation result | Commit hash | Next action |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| POSTDEPLOY-001 | Stabilization | Observe deployed BWG sidecar, repeat self-use smoke, verify rollback, and document access | IN_PROGRESS | DEPLOY-004 and deployment publish | `08`, `12-15`, `20-23` | Read-only runtime checks; no public ingress or service restart unless recovery is required | local/BWG/origin refs; systemd/listener/log checks; localhost smoke; rollback path checks | PENDING | TBD | Run BWG read-only stabilization checks |
+| POSTDEPLOY-001 | Stabilization | Observe deployed BWG sidecar, repeat self-use smoke, verify rollback, and document access | DONE | DEPLOY-004 and deployment publish | `08`, `12-15`, `20-23` | Read-only runtime checks; normalized first-deploy manifest metadata; no public ingress or service restart | local/BWG/origin refs; systemd/listener/log checks; SSH tunnel; localhost smoke; rollback path checks | PASS; service stable, all smoke checks pass, rollback metadata ready | `aa0f123` | Stabilization docs published at `1aaf193`; owner self-use |
+
+## Stabilization docs publish bridge
+
+Status: DONE
+
+- Target: `1aaf193`.
+- BWG bundle verification, path whitelist, ff-only merge, feature-only push, remote
+  ref verification, and temporary cleanup: PASS.
+
+## Day-2 operations finalization
+
+| Step ID | Phase | Task | Status | Depends on | Files expected to change | Implementation notes | Validation command | Validation result | Commit hash | Next action |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| DAY2-001 | Operations | Finalize owner self-use operations, troubleshooting, backup/restore, and day-2 checklist | DONE | POSTDEPLOY-001 | `24-27`, `08`, `12-15`, `21-23` | Documentation-only stabilization; one owner-controlled upstream status smoke used a temporary route that was deleted | local/BWG/origin refs; systemd/listener/log checks; tunnel smoke; CRUD/upstream/fail-closed/fallback; rollback metadata; `nginx -t` | PASS; service stable, tunnel and smoke pass, rollback ready, ingress unchanged | `412987e`, `1d285e9`, `3419686` | Owner day-2 self-use; public cutover remains separately gated |
+
+## Day-2 docs publish bridge
+
+Status: DONE for target `3419686`. Bundle validation, runbook path whitelist,
+ff-only staging update, feature-only push, remote verification, and cleanup passed.
+
+The subsequent publish-result docs retry is DONE at `a576863`; its initial
+pre-merge hash assertion failure and successful cleanup/retry are recorded in
+`DAY2-PUBLISH-ISSUE-001`.
+
+## Public traffic cutover
+
+| Step ID | Phase | Task | Status | Depends on | Files expected to change | Validation result | Next action |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| PUB-001 | Public cutover | Discover live Nginx/rathole/DNS entry topology | DONE | DAY2-001 | `28`, `08`, `13`, `14` | PASS read-only; services active and `nginx -t` PASS; no mutation | Owner selects exact hostname/path and scope |
+| PUB-002 | Public cutover | Write execution, healthcheck, and rollback plan | DONE | PUB-001 | `29-32`, `12`, `15`, `24`, `27` | Owner approved new BWG-only `/s/` canary with Admin denied and existing entries untouched | Create verified backup |
+| PUB-003 | Public cutover | Create verified pre-cutover backup | DONE | PUB-002 | BWG backup root, `30`, `32` | 14 files present; all 12 checksum entries PASS | Obtain exact canary hostname |
+| PUB-004 | Public cutover | Render and dry-run dedicated canary entry | DONE | PUB-003, exact hostname | New Nginx file only | Staging syntax, Host probes, DNS readiness, and route isolation PASS | Controlled apply |
+| PUB-005 | Public cutover | Apply BWG-only canary DNS/Nginx/TLS | DONE | PUB-004 | New canary file, A record, certificate | Scoped apply/reload PASS; existing entries unchanged | Public healthcheck |
+| PUB-006 | Public cutover | Public healthcheck/smoke/cleanup | DONE | PUB-005 | Temporary managed route only | Proxy non-gateway, Admin 404, fail-closed/fallback/log/service checks PASS; route cleaned | Owner observation; NOSLA gate remains separate |
+| PUB-007 | Public cutover | Validate owner-created `v1` route publicly | DONE | PUB-006, owner route creation | `08`, `12`, `14`, `15`, `30`, `31` | Public path HTTP 200/TLS PASS; Admin 404; services/listener/log scans PASS | Retain route for owner self-use |
+
+## NOSLA-primary / BWG-fallback and secure public Admin
+
+| Step ID | Phase | Task | Status | Depends on | Files expected to change | Validation result | Next action |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| FAILADMIN-000 | 0 | Establish stage runbook and safety boundary | DONE | PUB-007 | `33`, `08`, `12` | Starting canary state and authorized/prohibited scope recorded | Read-only topology discovery |
+| FAILADMIN-001 | 1 | Discover BWG/NOSLA topology, accounting, cache, scheduler, and Admin constraints | DONE | FAILADMIN-000 | `33`, `08`, `12-15` | Legacy timeout root cause, DNS topology, counters, no-cache state, and Admin constraints verified read-only | Owner billing seed accepted; implement hybrid source |
+| FAILADMIN-002 | 2/7 | Implement and simulate fail-closed policy decision layer | DONE | FAILADMIN-001 topology evidence | `internal/failover/*`, `cmd/failover-policy/*`, `33`, trackers | 85% threshold, reset grace/new-cycle return, manual holds, dry-run non-mutation, auto refusal PASS | Keep local; do not deploy before accounting gate |
+| FAILADMIN-003 | 3 | Establish reliable traffic accounting and quotas | DONE | FAILADMIN-001 | `deploy/failover/*`, `33` | Owner seed plus restricted forced-command host RX+TX counters deployed; source is explicitly an estimate, not provider API | Calibrate at next provider reset/panel observation |
+| FAILADMIN-004 | 5-9 | Backup, select apply adapter, canary, production apply, secure Admin | DONE | FAILADMIN-003 | `deploy/failover/*`, `08`, `12-15`, `33` | Backups, rollback, dry-run matrix, single-controller handoff, NOSLA apply, public health, no-cache, Admin two-layer isolation, and logs PASS | Operate in auto; observe/reset calibration and ACME staging before renewal |

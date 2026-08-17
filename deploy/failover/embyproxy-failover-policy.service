@@ -1,0 +1,20 @@
+[Unit]
+Description=EmbyProxy NOSLA-primary/BWG-fallback policy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+EnvironmentFile=/etc/embyproxy-failover-policy/policy.env
+ExecStart=/usr/bin/python3 /usr/local/sbin/embyproxy-failover-policy
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+ReadWritePaths=/var/lib/embyproxy-gsy-sidecar /var/backups/embyproxy-failover-policy

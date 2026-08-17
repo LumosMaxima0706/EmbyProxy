@@ -1,0 +1,10 @@
+[Unit]
+Description=Run NOSLA query-free playback stats collector
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+Unit=embyproxy-stats-collector-nosla.service
+
+[Install]
+WantedBy=timers.target
