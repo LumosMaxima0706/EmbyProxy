@@ -239,3 +239,65 @@ An old published row migrates to `unverified`; no existing node is silently
 marked successful. The UI already maps `ok` to the green playback-speed-normal
 label and keeps all other published nodes unverified until accepted evidence is
 recorded.
+
+## 2026-08-17 BWG legacy UHD redirect-route incident
+
+Pushing or merging Git does not deploy a binary, migration, helper or Nginx
+fragment. During this incident the running binaries predated the Git merge.
+The production change that exposed the fault was automatic failover from NOSLA
+to BWG after the NOSLA traffic threshold fired.
+
+The UHD mapping predates `emby_publications`: its primary route was supplied by
+the legacy sidecar environment, while one exact media redirect route existed
+only in the NOSLA stream configuration. The primary request on BWG returned a
+rewritten 302 to the stream hostname, but the rewritten media path had no exact
+BWG location and hit the local fail-closed 403. The diagnostic signature was:
+
+```text
+primary route: upstream 302
+same client shortly afterwards: redirect-route 403
+403 upstream_response_time: absent
+403 request_time: approximately zero
+```
+
+This is an edge-route parity failure, not an upstream-throughput, Range,
+migration or publication-agent failure. A direct TCP/TLS check of both the
+saved host and redirect host can be healthy while Yamby still fails at the
+local BWG allowlist boundary.
+
+The reviewed legacy templates are
+`deploy/failover/nosla-vod1-locations.inc` and
+`deploy/failover/bwg-vod1-locations.inc`. They must differ only in the
+edge-specific connection-upgrade variable. Run the Go parity test before
+deployment. On BWG, run the fixed-target installer in dry-run mode first:
+
+```bash
+sudo deploy/failover/install-bwg-vod1-route.sh dry-run
+sudo deploy/failover/install-bwg-vod1-route.sh apply
+```
+
+The installer accepts no slug, hostname or arbitrary destination. It stages an
+isolated candidate, runs candidate and host `nginx -t`, atomically replaces only
+`uhd-vod1-redirect.conf`, gracefully reloads Nginx, and emits an operation-local
+rollback path. To roll back only that operation:
+
+```bash
+sudo deploy/failover/install-bwg-vod1-route.sh rollback <operation-backup-dir>
+```
+
+Never remove the publication include directory or another slug fragment. After
+apply or rollback, verify stream Admin isolation and then obtain an
+authenticated Yamby sequence: primary 302 followed by the allowlisted stream
+route returning sustained 200/206 bytes. Unauthenticated 401/404 proves routing
+reached the upstream but does not prove playback recovery.
+
+Before automatic failover, compare the effective publication fragments on both
+edges and run an authenticated playback canary through the candidate edge.
+`/health`, SystemInfo, Items and image checks alone are insufficient. Abort or
+automatically roll back a failover when the candidate edge produces a rewritten
+redirect followed by local 403, lacks sustained media bytes, or differs from
+the active edge in a required exact redirect route. New publication-managed
+servers use the shared renderer and are already covered by dual-edge,
+Range/If-Range, redirect rewrite and multi-line tests; legacy environment-only
+mappings require this explicit parity gate until migrated into publication
+state.

@@ -49,6 +49,36 @@ func TestRenderNginxFragmentUsesEdgeConnectionVariable(t *testing.T) {
 	}
 }
 
+func TestLegacyVOD1TemplatesRemainEquivalentAcrossEdges(t *testing.T) {
+	root := filepath.Join("..", "..", "deploy", "failover")
+	nosla, err := os.ReadFile(filepath.Join(root, "nosla-vod1-locations.inc"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bwg, err := os.ReadFile(filepath.Join(root, "bwg-vod1-locations.inc"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	normalizedBWG := strings.ReplaceAll(string(bwg), "$stream_bwg_connection_upgrade", "$stream_connection_upgrade")
+	if strings.TrimSpace(normalizedBWG) != strings.TrimSpace(string(nosla)) {
+		t.Fatal("legacy VOD1 edge templates differ beyond the edge-specific connection variable")
+	}
+	for name, fragment := range map[string]string{"nosla": string(nosla), "bwg": string(bwg)} {
+		for _, marker := range []string{
+			"proxy_set_header Range $http_range;",
+			"proxy_set_header If-Range $http_if_range;",
+			"proxy_buffering off;",
+			"proxy_request_buffering off;",
+			"proxy_cache off;",
+			"proxy_max_temp_file_size 0;",
+		} {
+			if strings.Count(fragment, marker) != 1 {
+				t.Fatalf("%s legacy VOD1 template must contain exactly one %q", name, marker)
+			}
+		}
+	}
+}
+
 func TestRenderNginxFragmentIncludesSavedBackupsAndControlledRedirectHosts(t *testing.T) {
 	manifest := testManifest()
 	manifest.Routes = []publicationprotocol.EdgeRoute{
