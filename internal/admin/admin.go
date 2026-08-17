@@ -18,6 +18,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"embyproxy/internal/auth"
@@ -29,6 +30,7 @@ import (
 	"embyproxy/internal/logging"
 	"embyproxy/internal/proxy"
 	"embyproxy/internal/requestlog"
+	"embyproxy/internal/statslog"
 	"embyproxy/internal/storage"
 	"embyproxy/internal/telegram"
 	"embyproxy/internal/validators"
@@ -71,19 +73,44 @@ const telegramServerRemarkMaxRunes = 80
 const ownerAdminAuthenticatedHeader = "X-Owner-Admin-Authenticated"
 
 type Handler struct {
-	cfg             config.Config
-	store           *storage.Store
-	checker         *auth.Checker
-	telegram        *telegram.Service
-	log             *logging.Logger
-	resetRoute      ResetFunc
-	imageCache      ImageCacheManager
-	failover        *failover.Controller
-	dnsStatusReader func() map[string]any
+	cfg               config.Config
+	store             *storage.Store
+	checker           *auth.Checker
+	telegram          *telegram.Service
+	log               *logging.Logger
+	resetRoute        ResetFunc
+	imageCache        ImageCacheManager
+	globalStats       *statslog.Store
+	failover          *failover.Controller
+	dnsStatusReader   func() map[string]any
+	publicationSyncer PublicationSyncer
+	publicationMu     sync.Mutex
+}
+
+// readExternalFailoverState reads the policy runner's state file without
+// exposing raw accounting or credential fields through the admin API.
+func (h *Handler) readExternalFailoverState() map[string]any {
+	path := strings.TrimSpace(h.cfg.FailoverStateFile)
+	if path == "" {
+		return nil
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var state map[string]any
+	if json.Unmarshal(raw, &state) != nil {
+		return nil
+	}
+	return state
 }
 
 func (h *Handler) SetFailoverController(controller *failover.Controller) {
 	h.failover = controller
+}
+
+func (h *Handler) SetGlobalStatsStore(store *statslog.Store) {
+	h.globalStats = store
 }
 
 func (h *Handler) SetDNSStatusReader(reader func() map[string]any) {
@@ -143,6 +170,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleManagedRoutesAPI(w, r, path)
 		return
 	}
+	if strings.HasPrefix(path, "/api/admin/emby-servers/") {
+		h.handlePublicationAPI(w, r, path)
+		return
+	}
 	if strings.HasPrefix(path, "/api/admin/failover/") || strings.HasPrefix(path, "/api/admin/traffic/") || strings.HasPrefix(path, "/api/admin/dns/") {
 		h.handleFailoverAPI(w, r, path)
 		return
@@ -156,6 +187,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) serveIndex(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
 	html := indexHTML
 	if h.trustedOwnerAdminRequest(r) {
 		html = strings.Replace(html, "<body>", `<body data-owner-admin-auth="basic_only">`, 1)
@@ -555,12 +587,18 @@ func (h *Handler) dispatch(ctx context.Context, uid, action string, body map[str
 		return h.exportNodes(ctx, uid, body), http.StatusOK
 	case "delete":
 		name := validators.NormalizeName(body["name"])
+		if publication, err := h.publicationStatus(ctx, uid, name); err != nil {
+			return fail("PUBLICATION_STATUS_FAILED"), http.StatusInternalServerError
+		} else if publication.Status != storage.PublicationSavedUnpublished {
+			return map[string]any{"ok": false, "error": "PUBLISHED_REQUIRES_UNPUBLISH", "status": publication.Status}, http.StatusOK
+		}
 		if name == "" {
 			return fail("name 不能为空"), http.StatusOK
 		}
 		if err := h.store.DeleteNode(ctx, uid, name); err != nil {
 			return fail(err.Error()), http.StatusInternalServerError
 		}
+		_ = h.store.DeletePublication(ctx, uid, name)
 		h.reset(uid, name)
 		return ok(), http.StatusOK
 	case "batchDelete":
@@ -569,7 +607,13 @@ func (h *Handler) dispatch(ctx context.Context, uid, action string, body map[str
 			if nm == "" {
 				continue
 			}
+			if publication, err := h.publicationStatus(ctx, uid, nm); err != nil {
+				return fail("PUBLICATION_STATUS_FAILED"), http.StatusInternalServerError
+			} else if publication.Status != storage.PublicationSavedUnpublished {
+				return map[string]any{"ok": false, "error": "PUBLISHED_REQUIRES_UNPUBLISH", "name": nm, "status": publication.Status}, http.StatusOK
+			}
 			_ = h.store.DeleteNode(ctx, uid, nm)
+			_ = h.store.DeletePublication(ctx, uid, nm)
 			h.reset(uid, nm)
 		}
 		return ok(), http.StatusOK
@@ -660,11 +704,45 @@ func (h *Handler) dispatch(ctx context.Context, uid, action string, body map[str
 		return h.keepaliveTest(ctx, body)
 	case "stats.get":
 		days := clamp(intValue(body["days"], 7), 1, 30)
+		if h.globalStats != nil {
+			stats, err := h.globalStats.QueryStats(ctx, days)
+			if err != nil {
+				return fail(err.Error()), http.StatusInternalServerError
+			}
+			response := map[string]any{
+				"ok":              true,
+				"stats":           stats,
+				"stats_source":    "central_stats_store",
+				"stats_available": len(stats) > 0,
+				"capabilities": map[string]bool{
+					"sessions": false, "duration": false, "client_class": false,
+				},
+			}
+			if len(stats) == 0 {
+				response["stats_unavailable_reason"] = "no_central_data"
+			}
+			if recent, err := h.globalStats.Recent(ctx, 20); err == nil {
+				response["recent_activity"] = recent
+			}
+			return response, http.StatusOK
+		}
 		stats, err := h.store.GetPlayStats(ctx, days)
 		if err != nil {
 			return fail(err.Error()), http.StatusInternalServerError
 		}
-		return map[string]any{"ok": true, "stats": stats}, http.StatusOK
+		response := map[string]any{
+			"ok":              true,
+			"stats":           stats,
+			"stats_source":    "local_sidecar_store",
+			"stats_available": true,
+		}
+		if state := h.readExternalFailoverState(); state != nil {
+			if target := normalizedFailoverTarget(state["active_target"]); target == "NOSLA" {
+				response["stats_available"] = false
+				response["stats_unavailable_reason"] = "active_traffic_served_by_nosla"
+			}
+		}
+		return response, http.StatusOK
 	case "logs.list":
 		return h.listLogs(body), http.StatusOK
 	case "logs.clear":
@@ -1076,14 +1154,29 @@ func (h *Handler) list(ctx context.Context, uid string) map[string]any {
 	publicURLs := h.publicNodeURLs()
 	views := make([]adminNodeView, 0, len(nodes))
 	for _, node := range nodes {
-		views = append(views, adminNodeView{Node: node, PublicURL: publicURLs[strings.ToLower(node.Name)]})
+		publication, err := h.publicationStatus(ctx, uid, node.Name)
+		if err != nil {
+			publication = publicationStatusView{Status: "publish_failed", Reason: "publication_status_unavailable", NOSLAStatus: "unknown", BWGStatus: "unknown"}
+		}
+		publicURL := publication.PublicURL
+		if publicURL == "" {
+			publicURL = publicURLs[strings.ToLower(node.Name)]
+		}
+		views = append(views, adminNodeView{
+			Node: node, PublicURL: publicURL,
+			PublicURLStatus: publication.Status, PublicURLReason: publication.Reason,
+			Publication: publication,
+		})
 	}
 	return map[string]any{"ok": true, "nodes": views, "uid": uid, "build": buildinfo.Current()}
 }
 
 type adminNodeView struct {
 	storage.Node
-	PublicURL string `json:"publicUrl,omitempty"`
+	PublicURL       string                `json:"publicUrl,omitempty"`
+	PublicURLStatus string                `json:"publicUrlStatus"`
+	PublicURLReason string                `json:"publicUrlReason"`
+	Publication     publicationStatusView `json:"publication"`
 }
 
 func (h *Handler) publicNodeURLs() map[string]string {
@@ -1137,8 +1230,26 @@ func (h *Handler) save(ctx context.Context, uid string, body map[string]any) map
 	if oldName != "" && oldName != node.Name && existsNew {
 		return fail("请求路径重复:该节点已存在")
 	}
+	var publishedTargetUpdate bool
+	var previousNode storage.Node
 	if prevOK {
 		if prevNode, ok := storage.UnpackNode(prevName, prevPacked); ok {
+			previousNode = prevNode
+			publication, statusErr := h.publicationStatus(ctx, uid, prevName)
+			if statusErr != nil {
+				return fail("PUBLICATION_STATUS_FAILED")
+			}
+			if publication.Status != storage.PublicationSavedUnpublished &&
+				(prevName != node.Name || strings.TrimSpace(prevNode.Target) != strings.TrimSpace(node.Target)) {
+				if publication.Status != storage.PublicationPublished || prevName != node.Name {
+					return fail("PUBLISHED_REQUIRES_UNPUBLISH")
+				}
+				oldTargets, newTargets := storage.SplitTargets(prevNode.Target), storage.SplitTargets(node.Target)
+				if len(oldTargets) == 0 || len(newTargets) == 0 || oldTargets[0] != newTargets[0] {
+					return fail("PUBLISHED_PRIMARY_UPSTREAM_CANNOT_CHANGE")
+				}
+				publishedTargetUpdate = true
+			}
 			if _, hasFav := raw["fav"]; !hasFav {
 				node.Fav = prevNode.Fav
 			}
@@ -1146,6 +1257,13 @@ func (h *Handler) save(ctx context.Context, uid string, body map[string]any) map
 				node.Rank = prevNode.Rank
 			}
 		}
+	}
+	if publishedTargetUpdate {
+		if err := h.syncPublishedNodeTargets(ctx, uid, previousNode, node); err != nil {
+			return fail(err.Error())
+		}
+		h.reset(uid, node.Name)
+		return map[string]any{"ok": true, "node": node, "publication_sync": "synced"}
 	}
 	if err := h.store.SaveNode(ctx, uid, node); err != nil {
 		return fail(err.Error())
@@ -1173,6 +1291,18 @@ func (h *Handler) importNodes(ctx context.Context, uid string, body map[string]a
 		if validated.Error != "" {
 			results = append(results, map[string]any{"ok": false, "name": item["name"], "error": validated.Error})
 			continue
+		}
+		existing, existingErr := h.store.GetNode(ctx, uid, validated.Node.Name)
+		if existingErr != nil {
+			results = append(results, map[string]any{"ok": false, "name": validated.Node.Name, "error": "NODE_LOOKUP_FAILED"})
+			continue
+		}
+		if existing != nil {
+			publication, statusErr := h.publicationStatus(ctx, uid, validated.Node.Name)
+			if statusErr != nil || publication.Status != storage.PublicationSavedUnpublished {
+				results = append(results, map[string]any{"ok": false, "name": validated.Node.Name, "error": "PUBLISHED_REQUIRES_UNPUBLISH"})
+				continue
+			}
 		}
 		if err := h.store.SaveNode(ctx, uid, validated.Node); err != nil {
 			results = append(results, map[string]any{"ok": false, "name": validated.Node.Name, "error": err.Error()})
@@ -1234,6 +1364,7 @@ func (h *Handler) checkStatus(ctx context.Context, uid string, body map[string]a
 			results = append(results, map[string]any{"name": nm, "target": nm, "status": 0, "error": "节点不存在"})
 			continue
 		}
+		lineResults := checkSavedUpstreamLines(ctx, *node)
 		proxyPath := "/" + urlPathEscape(nm)
 		if node.Secret != "" {
 			proxyPath += "/" + urlPathEscape(node.Secret)
@@ -1245,13 +1376,65 @@ func (h *Handler) checkStatus(ctx context.Context, uid string, body map[string]a
 		res, err := client.Do(req)
 		ms := time.Since(started).Milliseconds()
 		if err != nil {
-			results = append(results, map[string]any{"name": nm, "target": checked, "checked": checked, "status": 0, "error": errorText(err), "ms": ms})
+			results = append(results, map[string]any{"name": nm, "status": 0, "error": errorText(err), "ms": ms, "lines": lineResults})
 			continue
 		}
 		_ = res.Body.Close()
-		results = append(results, map[string]any{"name": nm, "target": checked, "checked": checked, "status": res.StatusCode, "ms": ms})
+		results = append(results, map[string]any{"name": nm, "status": res.StatusCode, "ms": ms, "lines": lineResults})
 	}
 	return map[string]any{"ok": true, "results": results}
+}
+
+func checkSavedUpstreamLines(ctx context.Context, node storage.Node) []map[string]any {
+	client := &http.Client{Timeout: 8 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
+	return checkSavedUpstreamLinesWithClient(ctx, node, client)
+}
+
+func checkSavedUpstreamLinesWithClient(ctx context.Context, node storage.Node, client *http.Client) []map[string]any {
+	targets := storage.SplitTargets(node.Target)
+	results := make([]map[string]any, len(targets))
+	var wg sync.WaitGroup
+	for index, target := range targets {
+		index, target := index, target
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			result := map[string]any{"line_id": publicationPlanLineID(index), "priority": index + 1, "status": 0, "health": "unreachable"}
+			base, err := url.Parse(target)
+			if err != nil || base.Scheme != "https" || base.Hostname() == "" || base.User != nil || base.RawQuery != "" || base.Fragment != "" {
+				result["health"], result["error"] = "invalid", "upstream_invalid"
+				results[index] = result
+				return
+			}
+			base.Path = strings.TrimRight(base.Path, "/") + "/emby/System/Info/Public"
+			req, _ := http.NewRequestWithContext(ctx, http.MethodGet, base.String(), nil)
+			req.Header.Set("User-Agent", "emby-proxy-line-check/1.0")
+			started := time.Now()
+			response, requestErr := client.Do(req)
+			result["ms"] = time.Since(started).Milliseconds()
+			if requestErr != nil {
+				if errors.Is(requestErr, context.DeadlineExceeded) || strings.Contains(strings.ToLower(requestErr.Error()), "timeout") {
+					result["health"], result["error"] = "timeout", "upstream_timeout"
+				} else {
+					result["error"] = "upstream_unreachable"
+				}
+				results[index] = result
+				return
+			}
+			_ = response.Body.Close()
+			result["status"] = response.StatusCode
+			if response.StatusCode >= 200 && response.StatusCode < 400 {
+				result["health"] = "reachable"
+			} else if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden {
+				result["health"] = "unauthorized"
+			} else {
+				result["health"] = "unhealthy"
+			}
+			results[index] = result
+		}()
+	}
+	wg.Wait()
+	return results
 }
 
 func (h *Handler) tgSet(ctx context.Context, body map[string]any) map[string]any {

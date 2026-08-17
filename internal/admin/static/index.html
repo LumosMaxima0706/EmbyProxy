@@ -156,6 +156,8 @@ main{min-width:0;min-height:0}
 .chip.ok{background:var(--green-wash);border-color:rgba(35,117,71,.16);color:var(--green)}
 .chip.warn{background:var(--amber-wash);border-color:rgba(189,106,52,.18);color:var(--amber)}
 .chip.blue{background:var(--blue-wash);border-color:rgba(49,95,143,.16);color:var(--blue)}
+.chip.err{background:#fff0ef;border-color:rgba(157,47,42,.18);color:var(--red)}
+.publication-plan{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;border:1px solid var(--line);border-radius:16px;background:var(--paper-2);padding:16px;color:var(--ink-2);font:12px/1.7 "Cascadia Code","SFMono-Regular",Consolas,monospace}
 .row-actions{display:flex;gap:7px;align-items:center;justify-content:center;justify-self:stretch;flex-wrap:wrap;width:auto;max-width:100%}
 .row-action{width:78px;padding:0 8px;overflow:hidden;text-overflow:ellipsis}
 .check-action.info{background:var(--blue-wash);border-color:rgba(49,95,143,.16);color:var(--blue)}
@@ -479,7 +481,7 @@ body[data-owner-admin-auth="basic_only"] #twoFactorCard { display:none!important
       </div>
       <nav class="rail-nav">
         <button class="rail-button active" onclick="switchTab('nodes',this)">节点</button>
-        <button class="rail-button" onclick="switchTab('managedRoutes',this)">路由</button>
+        <button class="rail-button" onclick="switchTab('managedRoutes',this)">高级路由</button>
         <button class="rail-button" onclick="switchTab('stats',this)">统计</button>
 		<button class="rail-button" onclick="switchTab('failover',this)">切换</button>
         <button class="rail-button" onclick="switchTab('logs',this)">日志</button>
@@ -612,6 +614,7 @@ body[data-owner-admin-auth="basic_only"] #twoFactorCard { display:none!important
               <tbody id="statsBody"></tbody>
             </table>
           </div>
+          <div class="context-card" id="statsRecentActivity"></div>
         </section>
 
 		<section id="tabFailover" class="stats-deck" style="display:none">
@@ -679,6 +682,19 @@ body[data-owner-admin-auth="basic_only"] #twoFactorCard { display:none!important
         </section>
       </main>
     </section>
+  </div>
+</div>
+
+<div class="sheet-layer" id="publicationPlanModal" style="display:none" onclick="if(event.target===this)hideModal('publicationPlanModal')">
+  <div class="sheet">
+    <div class="sheet-head">
+      <div><h2>反代发布 Dry-run</h2><p>仅展示安全的发布计划，不修改数据库、边缘配置或运行服务。</p></div>
+      <button class="sheet-close" onclick="hideModal('publicationPlanModal')">x</button>
+    </div>
+    <div class="form-grid">
+      <div class="form-group form-full"><pre class="publication-plan" id="publicationPlanOutput"></pre></div>
+    </div>
+    <div class="form-actions"><button class="btn" onclick="hideModal('publicationPlanModal')">关闭</button></div>
   </div>
 </div>
 
@@ -1227,6 +1243,7 @@ let logViewEpoch = 0;
 let logGapRefreshPending = false;
 let pendingLogCount = 0;
 let statsRows = [];
+let statsCapabilities = {};
 let statsSortKey = 'lastActivityAt';
 let statsSortDirection = 'desc';
 const LOG_PAGE_LIMIT = 2000;
@@ -1441,6 +1458,16 @@ function initApp() {
 }
 
 const MANAGED_ROUTES_ENDPOINT = '/api/admin/managed-routes';
+const EMBY_SERVERS_ENDPOINT = '/api/admin/emby-servers';
+
+async function publicationFetch(name, action, options = {}) {
+  const generation = authGeneration;
+  const safeName = encodeURIComponent(String(name || ''));
+  const r = await authFetch(`${EMBY_SERVERS_ENDPOINT}/${safeName}/${action}`, options);
+  if (generation !== authGeneration) return { ok: false, error: '', _status: 401, _stale: true };
+  if (handleSessionAuthFailure(r, generation)) return { ok: false, error: '', _status: 401, _stale: true };
+  return r;
+}
 
 async function managedRouteFetch(path = '', options = {}) {
   const generation = authGeneration;
@@ -1805,9 +1832,108 @@ function syncImpersonateProfileState() {
   document.getElementById('f-impersonateProfile').disabled = !enabled;
 }
 
+function publicationLabel(status) {
+  return ({
+    saved_unpublished: '已保存上游，尚未发布公网反代入口',
+    publishing: '正在发布公网反代入口',
+    published: '已发布公网反代入口',
+    unpublishing: '正在取消公网反代入口',
+    publish_failed: '反代发布失败',
+    needs_sync: '反代入口需要同步',
+  })[status] || '反代状态未知';
+}
+
+function publicationChipClass(status) {
+  if (status === 'published') return 'ok';
+  if (status === 'publish_failed') return 'err';
+  if (status === 'publishing' || status === 'unpublishing') return 'blue';
+  return 'warn';
+}
+
+function edgeSyncLabel(value) {
+  return ({ synced: '已同步', removed: '未同步', pending: '同步中', failed: '失败', not_configured: '未同步', unavailable: '不可用', not_attempted: '未尝试', unknown: '未知' })[value] || '未知';
+}
+
+function publicationErrorText(step, reason) {
+  const labels = {
+    PUBLICATION_REQUIRES_RECONCILIATION: '需要清理上次失败状态',
+    stale_failed_state_only: '上次失败仅留下状态记录，未发现公网入口产物',
+    partial_artifacts_exist: '发现部分发布残留，需要清理',
+    no_publication_to_unpublish: '当前未发布，无需取消发布',
+    cleanup_required: '需要先清理发布残留',
+    helper_failed: '边缘清理 helper 执行失败',
+    edge_adapter_unreachable: 'edge adapter 无法连接',
+    edge_adapter_connect: 'edge adapter socket 连接失败',
+    edge_sync_unavailable: 'edge adapter 未注册或未启用',
+    edge_sync: 'edge sync 步骤失败',
+    edge_sync_denied: 'edge adapter 权限或信任校验失败',
+    edge_sync_partial: '一端同步成功，另一端需要清理',
+    edge_command_failed: 'edge helper 执行失败',
+    edge_include_hook_missing: 'Nginx include hook 缺失',
+    nginx_test_failed: 'nginx -t 失败',
+    reload_failed: 'Nginx reload 失败',
+    rollback_failed: 'rollback 失败，需要清理',
+    route_conflict: 'route 已存在且不匹配',
+    upstream_not_saved: '上游尚未保存',
+    upstream_invalid: '已保存的上游不合法',
+  };
+  const detail = labels[String(reason || '')] || String(reason || '未知错误');
+  return `${detail}${step ? ` (${step})` : ''}`;
+}
+
+function edgeSyncClass(value) {
+  if (value === 'synced') return 'ok';
+  if (value === 'failed') return 'err';
+  if (value === 'pending') return 'blue';
+  return 'warn';
+}
+
+function playbackPublicationLabel(value) {
+  return ({
+    ok: '播放测速正常', slow: '播放测速慢', range_failed: 'Range 异常',
+    redirect_host_unallowed: '重定向媒体地址未允许', failed: '播放链路失败',
+    unverified: '播放未验证', not_published: '未发布',
+  })[String(value || '')] || '播放未验证';
+}
+
+function lineCheckChips(check) {
+  const lines = Array.isArray(check?.lines) ? check.lines : [];
+  return lines.map((line, index) => {
+    const health = String(line?.health || 'unreachable');
+    const css = health === 'reachable' ? 'ok' : health === 'timeout' || health === 'invalid' ? 'err' : 'warn';
+    const label = health === 'reachable' ? '可达' : health === 'timeout' ? '超时' : health === 'unauthorized' ? '需认证' : health === 'invalid' ? '无效' : '异常';
+    return `<span class="chip ${css}">线路 ${index + 1}: ${label}</span>`;
+  }).join('');
+}
+
+function publicationActions(n, status, proxyUrl) {
+  const name = attr(n.name);
+  if (status === 'published') return `
+    <button class="btn btn-sm" data-copy="${attr(proxyUrl)}" onclick="copyText(this.dataset.copy)">复制 Yamby 地址</button>
+    <button class="btn btn-sm" onclick="checkPublishedProxy('${name}')">检测反代</button>
+    <button class="btn btn-sm btn-danger" onclick="unpublishNode('${name}')">取消发布</button>`;
+  if (status === 'publishing' || status === 'unpublishing') return '<button class="btn btn-sm" disabled>处理中</button>';
+  const publishText = status === 'publish_failed' ? '重试发布' : '发布反代';
+  const cleanup = (status === 'publish_failed' || status === 'needs_sync')
+    ? `<button class="btn btn-sm btn-danger" onclick="cleanupPublication('${name}')">清理发布残留</button>` : '';
+  const reconcile = (status === 'publish_failed' || status === 'needs_sync')
+    ? `<button class="btn btn-sm" onclick="reconcilePublication('${name}')">清理失败状态</button>` : '';
+  return `
+    <button class="btn btn-sm btn-primary" onclick="publishNode('${name}')">${publishText}</button>
+    <button class="btn btn-sm" onclick="showPublicationDryRun('${name}')">查看 dry-run</button>
+    ${reconcile}${cleanup}`;
+}
+
 function nodeCard(n) {
   const targets = splitTargets(n.target);
-  const proxyUrl = String(n.publicUrl || '');
+  const publication = n.publication || {};
+  const proxyUrl = String(publication.public_url || n.publicUrl || '');
+  const publicStatus = String(publication.status || n.publicUrlStatus || (proxyUrl ? 'published' : 'saved_unpublished'));
+  const publicReason = String(publication.reason || n.publicUrlReason || (proxyUrl ? 'public_entry_configured' : 'no_edge_route_configured'));
+  const failedStep = String(publication.failed_step || '');
+  const noslaStatus = String(publication.nosla_status || 'unknown');
+  const bwgStatus = String(publication.bwg_status || 'unknown');
+  const playbackStatus = String(publication.playback_status || (publicStatus === 'published' ? 'unverified' : 'not_published'));
   const sel = selectedNodes.has(n.name);
   const focused = focusedNodeName === n.name;
   const identityLabel = impersonateProfileLabel(n.impersonateProfile);
@@ -1828,13 +1954,19 @@ function nodeCard(n) {
     <div class="route-address">
       <div class="proxy-line">
         <div class="mono">
-          <span class="proxy-text">${proxyUrl ? esc(proxyUrl) : '未配置公网入口'}</span>
+          <span class="proxy-text">${publicStatus === 'published' && proxyUrl ? esc(proxyUrl) : '未发布，暂无公网地址'}</span>
           <button class="reveal-button" data-public-url="${attr(proxyUrl)}" onclick="openPublicMediaUrl(this.dataset.publicUrl)" title="打开公网观看地址" aria-label="打开公网观看地址" ${proxyUrl ? '' : 'disabled'}>${eyeIcon}</button>
         </div>
         <button class="copy-button" data-copy="${attr(proxyUrl)}" onclick="copyText(this.dataset.copy)" ${proxyUrl ? '' : 'disabled'}>复制</button>
       </div>
     </div>
     <div class="chip-pack">
+      <span class="chip ${publicationChipClass(publicStatus)}" title="${attr([failedStep, publicReason].filter(Boolean).join(': '))}">${esc(publicationLabel(publicStatus))}</span>
+      <span class="chip ${edgeSyncClass(noslaStatus)}">NOSLA: ${esc(edgeSyncLabel(noslaStatus))}</span>
+      <span class="chip ${edgeSyncClass(bwgStatus)}">BWG: ${esc(edgeSyncLabel(bwgStatus))}</span>
+      <span class="chip ${check?.type === 'ok' ? 'ok' : check?.type === 'err' ? 'err' : ''}">上游: ${check ? esc(compactCheckText(check.text)) : '未检测'}</span>
+      <span class="chip ${playbackStatus === 'ok' ? 'ok' : playbackStatus === 'failed' || playbackStatus === 'range_failed' || playbackStatus === 'redirect_host_unallowed' ? 'err' : 'warn'}">${esc(playbackPublicationLabel(playbackStatus))}</span>
+      ${lineCheckChips(check)}
       ${n.tag?`<span class="node-tag">${esc(n.tag)}</span>`:''}
       <span class="chip blue">${targets.length} 上游</span>
       ${n.secret?'<span class="chip warn">密钥</span>':'<span class="chip">公开</span>'}
@@ -1844,7 +1976,8 @@ function nodeCard(n) {
     </div>
     <div class="row-actions">
       <button class="btn btn-sm btn-primary row-action" onclick="openEditModal('${n.name}')">编辑</button>
-      <button class="btn btn-sm row-action check-action${checkClass}" title="${attr(checkTitle)}" onclick="checkNodeStatus('${n.name}')">${esc(checkText)}</button>
+      <button class="btn btn-sm row-action check-action${checkClass}" title="${attr(checkTitle)}" onclick="checkNodeStatus('${n.name}')">检测上游</button>
+      ${publicationActions(n, publicStatus, proxyUrl)}
       ${n.renewDays ? `<button class="btn btn-sm" data-name="${attr(n.name)}" data-display="${attr(n.displayName||n.name)}" data-renew="${Number(n.renewDays||0)}" data-remind="${Number(n.remindBeforeDays||0)}" data-at="${attr(n.keepaliveAt||'00:00')}" onclick="testKeepaliveFromButton(this)">保号测试</button>` : ''}
       <button class="btn btn-sm btn-danger row-action" onclick="deleteNode('${n.name}')">删除</button>
     </div>
@@ -1859,6 +1992,85 @@ function openPublicMediaUrl(rawURL) {
   } catch (_) {
     toast('公网观看地址未配置或无效', 'err');
   }
+}
+
+async function showPublicationDryRun(name) {
+  const r = await publicationFetch(name, 'publish/dry-run', { method: 'POST' });
+  if (!r.ok) {
+    if (!r._stale) toast(`Dry-run 失败: ${r.failed_step || 'plan'} / ${r.reason || r.error}`, 'err');
+    return;
+  }
+  const plan = r.plan || {};
+  const lines = [
+    `Emby server: ${plan.node_name || name}`,
+    `Route slug: ${plan.route_slug || name}`,
+    `Public entry: ${plan.public_url || '--'}`,
+    `Upstream: ${plan.upstream_scheme || 'https'}://${plan.upstream_host || '<saved-host>'}:${plan.upstream_port || 443}`,
+    `Base path: ${plan.has_base_path ? 'configured' : 'none'}`,
+    `BWG edge: planned`,
+    `NOSLA edge: planned`,
+    `Changes: ${(plan.changes || []).join(', ') || '--'}`,
+    `Nginx reload: required on both edges`,
+    `Sidecar restart: required on BWG`,
+  ];
+  document.getElementById('publicationPlanOutput').textContent = lines.join('\n');
+  showModal('publicationPlanModal');
+}
+
+async function publishNode(name) {
+  if (!window.confirm(`确认发布 "${name}" 的公网反代入口？系统只会使用已保存的上游，并同步 NOSLA/BWG。`)) return false;
+  const r = await publicationFetch(name, 'publish', { method: 'POST' });
+  await loadNodes();
+  if (!r.ok) {
+    if (!r._stale) toast(`发布失败: ${publicationErrorText(r.failed_step || 'unknown', r.reason || r.error)}`, 'err');
+    return false;
+  }
+  toast('公网反代入口已发布', 'ok');
+  return true;
+}
+
+async function unpublishNode(name, options = {}) {
+  if (!options.confirmed && !window.confirm(`确认取消 "${name}" 的公网反代入口？上游配置会保留。`)) return false;
+  const r = await publicationFetch(name, 'unpublish', { method: 'POST' });
+  await loadNodes();
+  if (!r.ok) {
+    if (!r._stale) toast(`取消发布失败: ${publicationErrorText(r.failed_step || 'unknown', r.reason || r.error)}`, 'err');
+    return false;
+  }
+  if (!options.silent) toast(r.reason === 'no_publication_to_unpublish' ? '当前未发布，无需取消发布' : '公网反代入口已取消，上游配置已保留', 'ok');
+  return true;
+}
+
+async function reconcilePublication(name) {
+  const r = await publicationFetch(name, 'publish/reconcile', { method: 'POST' });
+  await loadNodes();
+  if (!r.ok) {
+    if (!r._stale) toast(`状态对账失败: ${publicationErrorText(r.failed_step || 'reconciliation', r.reason || r.error)}`, 'err');
+    return false;
+  }
+  toast(r.reason === 'stale_failed_state_only' ? '失败状态已清理，可以重新发布' : '发布状态已完成对账', 'ok');
+  return true;
+}
+
+async function cleanupPublication(name) {
+  if (!window.confirm(`确认只清理 "${name}" 的发布残留？`)) return false;
+  const r = await publicationFetch(name, 'publish/cleanup', { method: 'POST' });
+  await loadNodes();
+  if (!r.ok) {
+    if (!r._stale) toast(`清理发布残留失败: ${publicationErrorText(r.failed_step || 'cleanup', r.reason || r.error)}`, 'err');
+    return false;
+  }
+  toast('发布残留已清理，上游配置已保留', 'ok');
+  return true;
+}
+
+async function checkPublishedProxy(name) {
+  const r = await publicationFetch(name, 'verify-proxy', { method: 'POST' });
+  if (!r.ok) {
+    toast(`反代检测失败${r.status_code ? `: HTTP ${r.status_code}` : ''}`, 'err');
+    return;
+  }
+  toast(`反代可达: HTTP ${r.status_code} / ${r.latency_ms}ms`, 'ok');
 }
 
 function onNodeDragStart(event, name) {
@@ -2049,7 +2261,12 @@ async function saveNode() {
 }
 
 async function deleteNode(name) {
-  if (!confirm(`确认删除节点 "${name}"？`)) return;
+  const node = allNodes.find(item => item.name === name);
+  const status = String(node?.publication?.status || node?.publicUrlStatus || 'saved_unpublished');
+  if (status === 'published' || status === 'publishing' || status === 'unpublishing' || status === 'needs_sync' || status === 'publish_failed') {
+    if (!confirm('该服务器已发布公网反代入口。删除会同时取消反代发布，确认继续？')) return;
+    if (!await unpublishNode(name, { confirmed: true, silent: true })) return;
+  } else if (!confirm(`确认删除节点 "${name}"？`)) return;
   const r = await api('delete', { name });
   if (r.ok) { toast('已删除', 'ok'); await loadNodes(); }
   else toast('删除失败: ' + r.error, 'err');
@@ -2057,7 +2274,13 @@ async function deleteNode(name) {
 
 async function deleteSelected() {
   if (!selectedNodes.size) return;
-  if (!confirm(`确认删除选中的 ${selectedNodes.size} 个节点？`)) return;
+  const published = allNodes.filter(node => selectedNodes.has(node.name) && ['published','publishing','unpublishing','needs_sync','publish_failed'].includes(String(node?.publication?.status || node?.publicUrlStatus || '')));
+  if (published.length) {
+    if (!confirm(`选中项中有 ${published.length} 个已发布公网反代入口。删除会先取消发布，确认继续？`)) return;
+    for (const node of published) {
+      if (!await unpublishNode(node.name, { confirmed: true, silent: true })) return;
+    }
+  } else if (!confirm(`确认删除选中的 ${selectedNodes.size} 个节点？`)) return;
   const r = await api('batchDelete', { names: [...selectedNodes] });
   if (r.ok) { selectedNodes.clear(); updateSelBar(); toast('已删除', 'ok'); await loadNodes(); }
   else toast('删除失败: ' + r.error, 'err');
@@ -2085,7 +2308,8 @@ async function checkNodeStatus(name) {
     filterNodes();
     return;
   }
-  nodeChecks[name] = formatCheckResult(r.results && r.results[0]);
+  const rawResult = r.results && r.results[0];
+  nodeChecks[name] = { ...formatCheckResult(rawResult), lines: Array.isArray(rawResult?.lines) ? rawResult.lines : [] };
   filterNodes();
 }
 
@@ -2608,6 +2832,15 @@ async function loadStats() {
   const r = await api('stats.get', { days });
   if (!r.ok) { toast('加载统计失败', 'err'); return; }
   statsRows = Array.isArray(r.stats) ? r.stats : [];
+  statsCapabilities = r.capabilities || {};
+  if (r.stats_available === false) {
+    const unavailable = '未接入';
+    document.getElementById('headStatus').innerHTML = statusCells([[unavailable, '统计数据']]);
+    document.getElementById('statsCards').innerHTML = `<div class="stat-block"><div class="val">${unavailable}</div><div class="lbl">当前生产流量由 NOSLA 承载，本机统计未接入</div></div>`;
+    document.getElementById('statsRecentActivity').textContent = '最近活动：未接入';
+    renderStatsTable();
+    return;
+  }
 
   let totalPlays = 0, totalSessions = 0, totalPlaybackMillis = 0, totalInboundBytes = 0, totalOutboundBytes = 0;
   const nodeSet = new Set(), clientSet = new Set();
@@ -2623,17 +2856,21 @@ async function loadStats() {
 
   document.getElementById('headStatus').innerHTML = statusCells([
     [totalPlays, '播放'],
-    [totalSessions, '会话'],
+    [statsCapabilities.sessions ? totalSessions : '未接入', '会话'],
   ]);
   document.getElementById('statsCards').innerHTML = `
     <div class="stat-block"><div class="val">${totalPlays}</div><div class="lbl">总播放次数</div></div>
-    <div class="stat-block"><div class="val">${totalSessions}</div><div class="lbl">总会话数</div></div>
-    <div class="stat-block"><div class="val">${formatPlaybackDuration(totalPlaybackMillis)}</div><div class="lbl">总播放时长</div></div>
+    <div class="stat-block"><div class="val">${statsCapabilities.sessions ? totalSessions : '未接入'}</div><div class="lbl">总会话数</div></div>
+    <div class="stat-block"><div class="val">${statsCapabilities.duration ? formatPlaybackDuration(totalPlaybackMillis) : '未接入'}</div><div class="lbl">总播放时长</div></div>
     <div class="stat-block"><div class="val">${formatBytes(totalInboundBytes)}</div><div class="lbl">入站流量</div></div>
     <div class="stat-block"><div class="val">${formatBytes(totalOutboundBytes)}</div><div class="lbl">出站流量</div></div>
     <div class="stat-block"><div class="val">${nodeSet.size}</div><div class="lbl">活跃节点</div></div>
-    <div class="stat-block"><div class="val">${clientSet.size}</div><div class="lbl">客户端种类</div></div>
+    <div class="stat-block"><div class="val">${statsCapabilities.client_class ? clientSet.size : '未接入'}</div><div class="lbl">客户端种类</div></div>
   `;
+  const recent = Array.isArray(r.recent_activity) ? r.recent_activity : [];
+  document.getElementById('statsRecentActivity').textContent = recent.length
+    ? `最近活动：${recent.length} 条脱敏聚合记录`
+    : '最近活动：暂无数据';
   renderStatsTable();
 }
 
@@ -2653,7 +2890,7 @@ function renderStatsTable() {
   const stats = sortedStatsRows();
   const tbody = document.getElementById('statsBody');
   tbody.innerHTML = stats.length ? stats.map(s => `
-    <tr><td>${esc(s.day)}</td><td>${esc(formatStatsActivity(s))}</td><td>${esc(s.node)}</td><td>${esc(s.client)}</td><td>${s.plays}</td><td>${s.sessions}</td><td>${formatPlaybackDuration(statsPlaybackMillis(s))}</td><td>${formatBytes(trafficInboundBytes(s))}</td><td>${formatBytes(trafficOutboundBytes(s))}</td></tr>
+    <tr><td>${esc(s.day)}</td><td>${esc(formatStatsActivity(s))}</td><td>${esc(s.node)}</td><td>${statsCapabilities.client_class ? esc(s.client) : '未接入'}</td><td>${s.plays}</td><td>${statsCapabilities.sessions ? s.sessions : '未接入'}</td><td>${statsCapabilities.duration ? formatPlaybackDuration(statsPlaybackMillis(s)) : '未接入'}</td><td>${formatBytes(trafficInboundBytes(s))}</td><td>${formatBytes(trafficOutboundBytes(s))}</td></tr>
   `).join('') : '<tr><td class="table-empty" colspan="9">暂无数据</td></tr>';
   updateStatsSortHeaders();
 }
@@ -2700,23 +2937,23 @@ function updateStatsSortHeaders() {
 }
 
 function formatStatsActivity(stat) {
-  const formatted = String(stat?.lastActivity || '').trim();
+  const formatted = String(stat?.lastActivity ?? stat?.last_activity ?? '').trim();
   if (formatted) return formatted;
-  const timestamp = Number(stat?.lastActivityAt || 0);
+  const timestamp = Number(stat?.lastActivityAt ?? stat?.last_activity_at ?? 0);
   if (!Number.isFinite(timestamp) || timestamp <= 0) return '--';
   return new Date(timestamp).toLocaleString('zh-CN', { hour12: false });
 }
 
 function trafficInboundBytes(stat) {
-  return Number(stat?.inboundBytes || 0);
+  return Number(stat?.inboundBytes ?? stat?.inbound_bytes ?? 0);
 }
 
 function trafficOutboundBytes(stat) {
-  return Number(stat?.outboundBytes || 0);
+  return Number(stat?.outboundBytes ?? stat?.outbound_bytes ?? 0);
 }
 
 function statsPlaybackMillis(stat) {
-  const value = Number(stat?.playbackMillis || 0);
+  const value = Number(stat?.playbackMillis ?? stat?.playback_ms ?? 0);
   return Number.isFinite(value) ? Math.max(0, value) : 0;
 }
 
@@ -3352,7 +3589,10 @@ async function loadFailoverStatus() {
 
 function renderFailoverStatus(status, events) {
   const state = status.state || {};
-  const nodes = status.nodes || [];
+	const nodes = status.nodes || [];
+	if (state.active_target || state.activeTarget) {
+	  state.active_node_id = String(state.active_target || state.activeTarget).toUpperCase();
+	}
   const cards = [
 	['当前节点', state.active_node_id || '--'],
 	['当前模式', state.mode || '--'],
@@ -3372,7 +3612,7 @@ function renderFailoverStatus(status, events) {
   ).join('');
   document.getElementById('failoverEvents').innerHTML = events.length ? events.map(event => `
 	<tr><td>${esc(new Date(event.created_at).toLocaleString('zh-CN'))}</td><td>${esc(event.event_type)}</td><td>${esc(event.from_node_id || '--')}</td><td>${esc(event.to_node_id || '--')}</td><td>${esc(event.reason_code)}</td><td>${event.success ? '成功' : '失败'}</td></tr>
-  `).join('') : '<tr><td colspan="6" class="table-empty">暂无事件</td></tr>';
+	`).join('') : '<tr><td colspan="6" class="table-empty">暂无切换事件</td></tr>';
 }
 
 async function setFailoverMode(mode) {
@@ -3382,7 +3622,7 @@ async function setFailoverMode(mode) {
 }
 
 async function pauseFailoverAutomation() {
-  const active = failoverSnapshot?.state?.active_node_id;
+	const active = String(failoverSnapshot?.state?.active_target || failoverSnapshot?.state?.active_node_id || '').toLowerCase();
   if (active !== 'nosla' && active !== 'bwg') {
 	toast('当前节点状态不可用', 'err');
 	return;
@@ -3391,7 +3631,7 @@ async function pauseFailoverAutomation() {
 }
 
 async function dryRunFailoverDNS() {
-	const targetNode = failoverSnapshot?.state?.active_node_id;
+	const targetNode = String(failoverSnapshot?.state?.active_target || failoverSnapshot?.state?.active_node_id || '').toLowerCase();
 	if (!targetNode) {
 		toast('当前节点状态不可用', 'err');
 		return;

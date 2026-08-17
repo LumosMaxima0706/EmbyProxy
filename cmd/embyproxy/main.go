@@ -26,6 +26,7 @@ import (
 	"embyproxy/internal/proxyadapter"
 	"embyproxy/internal/requestlog"
 	"embyproxy/internal/scheduler"
+	"embyproxy/internal/statslog"
 	"embyproxy/internal/storage"
 	"embyproxy/internal/telegram"
 )
@@ -60,6 +61,12 @@ func main() {
 		os.Exit(1)
 	}
 	defer store.Close()
+	globalStats, err := statslog.Open(cfg.GlobalStatsDBPath)
+	if err != nil {
+		log.Error("startup", "global stats database init failed", map[string]any{"event": "globalStatsDatabaseInitFailed"})
+		os.Exit(1)
+	}
+	defer globalStats.Close()
 	applyRuntimeConfig(context.Background(), store, log)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -75,6 +82,15 @@ func main() {
 	checker := auth.NewChecker(cfg, store)
 	proxyHandler := proxy.New(cfg, store, ids, log)
 	adminHandler := admin.New(cfg, store, checker, tg, log, proxyHandler.ResetNodeRoutingState, proxyHandler)
+	if cfg.PublicationAgentSocket != "" {
+		publicationSyncer, syncerErr := admin.NewSocketPublicationSyncer(cfg.PublicationAgentSocket, 45*time.Second)
+		if syncerErr != nil {
+			log.Error("startup", "publication adapter config invalid", map[string]any{"event": "publicationAdapterConfigInvalid"})
+			os.Exit(1)
+		}
+		adminHandler.SetPublicationSyncer(publicationSyncer)
+	}
+	adminHandler.SetGlobalStatsStore(globalStats)
 	failoverNodes, err := isolatedFailoverFixtureNodes(cfg)
 	if err != nil {
 		log.Error("startup", "isolated failover fixture config invalid", map[string]any{"event": "failoverMockFixtureConfigInvalid"})

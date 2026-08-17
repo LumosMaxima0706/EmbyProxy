@@ -18,7 +18,9 @@ import (
 	"embyproxy/internal/logging"
 	"embyproxy/internal/proxy"
 	"embyproxy/internal/requestlog"
+	"embyproxy/internal/statslog"
 	"embyproxy/internal/storage"
+	"time"
 )
 
 func TestServeAdminValidatesTokenConfig(t *testing.T) {
@@ -51,6 +53,30 @@ func TestServeAdminValidatesTokenConfig(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestStatsAPIUsesCentralStatsStore(t *testing.T) {
+	cfg := config.Config{AdminToken: "strong-admin-token"}
+	handler := newAuthTestHandler(t, cfg)
+	central, err := statslog.Open(filepath.Join(t.TempDir(), "global-stats.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer central.Close()
+	handler.SetGlobalStatsStore(central)
+	if _, err := central.Ingest(context.Background(), "nosla", []statslog.Event{{
+		OccurredAt: time.Now(), PathClass: statslog.PlaybackInfo, Status: http.StatusOK, ResponseBytes: 12,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	login := serveAdminJSON(t, handler, http.MethodPost, "/admin/auth/login", map[string]any{"token": cfg.AdminToken}, nil)
+	if login.Code != http.StatusOK {
+		t.Fatalf("login status=%d", login.Code)
+	}
+	response := serveAdminJSON(t, handler, http.MethodPost, "/admin/api", map[string]any{"action": "stats.get", "days": 1}, login.Result().Cookies()[0])
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"stats_source":"central_stats_store"`) || !strings.Contains(response.Body.String(), `"stats_available":true`) {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 
@@ -90,13 +116,37 @@ func TestListBuildsPublicNodeURLsWithoutAdminOriginOrSecrets(t *testing.T) {
 	if err := handler.store.SaveNode(ctx, "admin", storage.Node{Name: "uhd", Target: "https://upstream.example", Secret: "must-not-appear"}); err != nil {
 		t.Fatal(err)
 	}
+	if err := handler.store.SaveNode(ctx, "admin", storage.Node{Name: "feimu", Target: "https://saved-only.example"}); err != nil {
+		t.Fatal(err)
+	}
 	res := handler.list(ctx, "admin")
+	views, ok := res["nodes"].([]adminNodeView)
+	if !ok {
+		t.Fatalf("nodes type = %T, want []adminNodeView", res["nodes"])
+	}
+	byName := make(map[string]adminNodeView, len(views))
+	for _, view := range views {
+		byName[view.Name] = view
+	}
+	if got := byName["uhd"]; got.PublicURLStatus != "published" || got.PublicURLReason != "public_entry_configured" {
+		t.Fatalf("published node status = %+v", got)
+	}
+	if got := byName["feimu"]; got.PublicURL != "" || got.PublicURLStatus != "saved_unpublished" || got.PublicURLReason != "no_edge_route_configured" {
+		t.Fatalf("saved-only node status = %+v", got)
+	}
 	encoded, err := json.Marshal(res)
 	if err != nil {
 		t.Fatal(err)
 	}
 	body := string(encoded)
-	for _, want := range []string{`"publicUrl":"https://stream.example/https/media.example/443/"`} {
+	for _, want := range []string{
+		`"publicUrl":"https://` + `stream.example/https/` + `media.example/443/"`,
+		`"publicUrlStatus":"published"`,
+		`"publicUrlReason":"public_entry_configured"`,
+		`"name":"feimu"`,
+		`"publicUrlStatus":"saved_unpublished"`,
+		`"publicUrlReason":"no_edge_route_configured"`,
+	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("list response missing %q: %s", want, body)
 		}
@@ -108,11 +158,13 @@ func TestListBuildsPublicNodeURLsWithoutAdminOriginOrSecrets(t *testing.T) {
 
 func TestAdminIndexUsesBackendPublicURLForDisplayCopyAndPreview(t *testing.T) {
 	for _, want := range []string{
-		"const proxyUrl = String(n.publicUrl || '');",
+		"const proxyUrl = String(publication.public_url || n.publicUrl || '');",
 		`data-copy="${attr(proxyUrl)}"`,
 		`data-public-url="${attr(proxyUrl)}"`,
 		"function openPublicMediaUrl(rawURL)",
 		"window.open(target.toString(), '_blank', 'noopener,noreferrer')",
+		"已发布公网反代入口",
+		"已保存上游，尚未发布公网反代入口",
 	} {
 		if !strings.Contains(indexHTML, want) {
 			t.Fatalf("Admin UI missing public URL contract %q", want)
@@ -121,7 +173,7 @@ func TestAdminIndexUsesBackendPublicURLForDisplayCopyAndPreview(t *testing.T) {
 	for _, forbidden := range []string{
 		"`${location.origin}/${n.name}",
 		"n.secret ? '/' + n.secret",
-		"owner-admin.149077530.xyz",
+		"owner-admin.example.invalid",
 	} {
 		if strings.Contains(indexHTML, forbidden) {
 			t.Fatalf("Admin UI still derives public URL from unsafe source %q", forbidden)
@@ -144,6 +196,15 @@ func TestAdminIndexIncludesSortableStats(t *testing.T) {
 	for _, want := range wants {
 		if !strings.Contains(indexHTML, want) {
 			t.Fatalf("indexHTML missing %q", want)
+		}
+	}
+	for _, want := range []string{
+		"stat?.inboundBytes ?? stat?.inbound_bytes",
+		"stat?.outboundBytes ?? stat?.outbound_bytes",
+		"stat?.lastActivityAt ?? stat?.last_activity_at",
+	} {
+		if !strings.Contains(indexHTML, want) {
+			t.Fatalf("indexHTML missing API field compatibility %q", want)
 		}
 	}
 }

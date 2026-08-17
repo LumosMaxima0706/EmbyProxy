@@ -1,0 +1,13 @@
+[Unit]
+Description=EmbyProxy NOSLA query-free playback stats collector
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/local/sbin/embyproxy-stats-collector --source-node nosla --log /var/log/nginx/stream-proxy-access.log --db /var/lib/embyproxy-stats/nosla.db --cursor /var/lib/embyproxy-stats/cursors/nosla.json --snapshot-file /var/lib/embyproxy-stats/nosla-snapshot.json
+ExecStartPost=/bin/chgrp embyproxy-meter /var/lib/embyproxy-stats/nosla-snapshot.json
+ExecStartPost=/bin/chmod 0640 /var/lib/embyproxy-stats/nosla-snapshot.json
+NoNewPrivileges=true
+PrivateTmp=true

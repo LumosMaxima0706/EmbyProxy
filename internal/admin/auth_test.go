@@ -73,6 +73,19 @@ func TestAuthRoutesLoginStatusAndLogout(t *testing.T) {
 	}
 }
 
+func TestAdminPageDisablesBrowserCaching(t *testing.T) {
+	handler := newAuthTestHandler(t, config.Config{AdminToken: "strong-admin-token"})
+	req := httptest.NewRequest(http.MethodGet, "https://proxy.example/admin", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("admin page status = %d", rec.Code)
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("admin page Cache-Control = %q, want no-store", got)
+	}
+}
+
 func TestBrowserSessionAuthenticatesAPIAdminAndKeepsOriginGuard(t *testing.T) {
 	handler := newAuthTestHandler(t, config.Config{AdminToken: "strong-admin-token"})
 	handler.SetFailoverController(failover.NewController(nil, failover.DefaultPolicyConfig(), nil))

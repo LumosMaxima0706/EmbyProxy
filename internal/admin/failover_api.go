@@ -20,6 +20,27 @@ func (h *Handler) handleFailoverAPI(w http.ResponseWriter, r *http.Request, path
 	switch {
 	case r.Method == http.MethodGet && path == "/api/admin/failover/status":
 		state, nodes, eligibility := h.failover.StatusWithEligibility()
+		stateView := map[string]any{
+			"active_node_id":       state.ActiveNodeID,
+			"desired_node_id":      state.DesiredNodeID,
+			"observed_dns_node_id": state.ObservedDNSNodeID,
+			"mode":                 state.Mode,
+		}
+		if external := h.readExternalFailoverState(); external != nil {
+			if target := normalizedFailoverTarget(external["active_target"]); target != "" {
+				stateView["active_node_id"] = strings.ToLower(target)
+				stateView["active_target"] = strings.ToLower(target)
+				stateView["activeTarget"] = target
+				stateView["effective_route"] = "stream_dns"
+				stateView["effectiveRoute"] = "stream_dns"
+				stateView["state_source"] = "policy_state_file"
+			}
+			for _, key := range []string{"mode", "manual_hold", "decision_reason", "last_switch_at", "last_healthcheck", "updated_at", "usage_state"} {
+				if value, ok := external[key]; ok {
+					stateView[key] = value
+				}
+			}
+		}
 		views := make([]map[string]any, 0, len(nodes))
 		for _, node := range nodes {
 			views = append(views, map[string]any{
@@ -36,7 +57,7 @@ func (h *Handler) handleFailoverAPI(w http.ResponseWriter, r *http.Request, path
 				"traffic":                      failoverTrafficView(node.Traffic),
 			})
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "state": state, "nodes": views})
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "state": stateView, "nodes": views})
 	case r.Method == http.MethodPost && path == "/api/admin/failover/check-now":
 		decision, err := h.failover.Evaluate()
 		if err != nil {
@@ -74,6 +95,10 @@ func (h *Handler) handleFailoverAPI(w http.ResponseWriter, r *http.Request, path
 		limit := 50
 		if value, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && value > 0 && value < 200 {
 			limit = value
+		}
+		if events := externalFailoverEvents(h.readExternalFailoverState(), limit); len(events) > 0 {
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "events": events})
+			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "events": h.failover.Events(limit)})
 	case r.Method == http.MethodGet && path == "/api/admin/traffic/status":
@@ -157,6 +182,53 @@ func (h *Handler) handleFailoverAPI(w http.ResponseWriter, r *http.Request, path
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+func normalizedFailoverTarget(value any) string {
+	target := strings.ToLower(strings.TrimSpace(asString(value)))
+	switch target {
+	case "nosla":
+		return "NOSLA"
+	case "bwg":
+		return "BWG"
+	default:
+		return ""
+	}
+}
+
+func externalFailoverEvents(state map[string]any, limit int) []map[string]any {
+	if state == nil || limit <= 0 {
+		return nil
+	}
+	history, ok := state["switch_history"].([]any)
+	if !ok || len(history) == 0 {
+		return nil
+	}
+	start := len(history) - limit
+	if start < 0 {
+		start = 0
+	}
+	events := make([]map[string]any, 0, len(history)-start)
+	for index := len(history) - 1; index >= start; index-- {
+		item, ok := history[index].(map[string]any)
+		if !ok {
+			continue
+		}
+		from := strings.ToLower(normalizedFailoverTarget(item["previous_target"]))
+		to := strings.ToLower(normalizedFailoverTarget(item["target"]))
+		if from == "" || to == "" {
+			continue
+		}
+		events = append(events, map[string]any{
+			"created_at":   item["at"],
+			"event_type":   "switch",
+			"from_node_id": from,
+			"to_node_id":   to,
+			"reason_code":  asString(item["result"]),
+			"success":      asString(item["result"]) == "verified",
+		})
+	}
+	return events
 }
 
 func writeDNSApplyError(w http.ResponseWriter, err error) {

@@ -25,6 +25,7 @@ type Defaults struct {
 type Config struct {
 	CWD                       string
 	DBPath                    string
+	GlobalStatsDBPath         string
 	Port                      int
 	ListenAddr                string
 	AdminListenAddr           string
@@ -34,11 +35,13 @@ type Config struct {
 	OwnerAdminHost            string
 	PublicMediaBaseURL        string
 	PublicMediaNodePaths      map[string]string
+	PublicationAgentSocket    string
 	MediaProxyRoutes          bool
 	FailoverDNSProviderMode   string
 	FailoverDNSAllowedRecords string
 	FailoverDNSRealApply      bool
 	FailoverMockFixture       bool
+	FailoverStateFile         string
 	Defaults                  Defaults
 }
 
@@ -89,6 +92,7 @@ func Load() (Config, error) {
 	cfg := Config{
 		CWD:                       cwd,
 		DBPath:                    envString("DB_PATH", filepath.Join(cwd, "data", "proxy.db")),
+		GlobalStatsDBPath:         envString("GLOBAL_STATS_DB_PATH", "/var/lib/embyproxy-gsy-sidecar/global-stats.db"),
 		Port:                      port,
 		ListenAddr:                listenAddr,
 		AdminListenAddr:           adminListenAddr,
@@ -98,11 +102,13 @@ func Load() (Config, error) {
 		OwnerAdminHost:            strings.ToLower(strings.TrimSpace(os.Getenv("OWNER_ADMIN_HOST"))),
 		PublicMediaBaseURL:        publicMediaBaseURL,
 		PublicMediaNodePaths:      publicMediaNodePaths,
+		PublicationAgentSocket:    strings.TrimSpace(os.Getenv("PUBLICATION_AGENT_SOCKET")),
 		MediaProxyRoutes:          envBool("MEDIAPROXY_ROUTES_ENABLED", false),
 		FailoverDNSProviderMode:   strings.ToLower(strings.TrimSpace(os.Getenv("FAILOVER_DNS_PROVIDER_MODE"))),
 		FailoverDNSAllowedRecords: strings.TrimSpace(os.Getenv("FAILOVER_DNS_ALLOWED_RECORDS")),
 		FailoverDNSRealApply:      envBool("FAILOVER_DNS_REAL_APPLY_ENABLED", false),
 		FailoverMockFixture:       envBool("FAILOVER_MOCK_FIXTURE_ENABLED", false),
+		FailoverStateFile:         envString("FAILOVER_STATE_FILE", "/var/lib/embyproxy-gsy-sidecar/failover-state.json"),
 		Defaults: Defaults{
 			CacheTTL:           10000,
 			ListCacheTTL:       180000,
@@ -125,6 +131,10 @@ func Load() (Config, error) {
 		if strings.EqualFold(publicURL.Hostname(), cfg.OwnerAdminHost) {
 			return Config{}, fmt.Errorf("PUBLIC_MEDIA_BASE_URL must not use OWNER_ADMIN_HOST")
 		}
+	}
+	if cfg.PublicationAgentSocket != "" &&
+		(!strings.HasPrefix(cfg.PublicationAgentSocket, "/run/") || strings.ContainsAny(cfg.PublicationAgentSocket, "\x00\r\n")) {
+		return Config{}, fmt.Errorf("PUBLICATION_AGENT_SOCKET must be an absolute path below /run")
 	}
 	return cfg, nil
 }
