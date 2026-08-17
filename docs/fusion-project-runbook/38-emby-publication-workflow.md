@@ -567,6 +567,18 @@ confirmed migration/data failure and only after stopping the writer.
 
 ## Release rollback
 
+Choose the rollback target explicitly; these refs have different meanings:
+
+- To return to the current verified playback and multi-upstream release, use
+  tag `embyproxy-playback-verified-20260816`.
+- To withdraw this merge and return to the `main` commit that preceded it, use
+  branch `backup/pre-playback-merge-20260816` or tag
+  `pre-playback-merge-20260816`.
+
+Do not describe the verified release tag as the pre-merge rollback point. The
+backup branch and backup tag both identify the old `main`; the verified release
+tag identifies the stable fixed release.
+
 1. Stop new publication operations and record the affected slug/state.
 2. Run only the operation-specific BWG/NOSLA rollback scripts created by the
    restricted helper, then run `nginx -t` and graceful reload on each edge.
