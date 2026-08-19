@@ -23,26 +23,30 @@ type Defaults struct {
 }
 
 type Config struct {
-	CWD                       string
-	DBPath                    string
-	GlobalStatsDBPath         string
-	Port                      int
-	ListenAddr                string
-	AdminListenAddr           string
-	AdminToken                string
-	Admin2FADisabled          bool
-	OwnerAdminAuthMode        string
-	OwnerAdminHost            string
-	PublicMediaBaseURL        string
-	PublicMediaNodePaths      map[string]string
-	PublicationAgentSocket    string
-	MediaProxyRoutes          bool
-	FailoverDNSProviderMode   string
-	FailoverDNSAllowedRecords string
-	FailoverDNSRealApply      bool
-	FailoverMockFixture       bool
-	FailoverStateFile         string
-	Defaults                  Defaults
+	CWD                          string
+	DBPath                       string
+	GlobalStatsDBPath            string
+	Port                         int
+	ListenAddr                   string
+	AdminListenAddr              string
+	AdminToken                   string
+	Admin2FADisabled             bool
+	OwnerAdminAuthMode           string
+	OwnerAdminHost               string
+	PublicMediaBaseURL           string
+	PublicMediaNodePaths         map[string]string
+	PublicationAgentSocket       string
+	MediaProxyRoutes             bool
+	FailoverDNSProviderMode      string
+	FailoverDNSAllowedRecords    string
+	FailoverDNSRealApply         bool
+	FailoverMockFixture          bool
+	FailoverStateFile            string
+	EmbykeeperIntegrationEnabled bool
+	EmbykeeperExternalURL        string
+	EmbykeeperStatusFile         string
+	EmbykeeperDisplayName        string
+	Defaults                     Defaults
 }
 
 type ProxyEnv struct {
@@ -89,26 +93,42 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	embykeeperExternalURL, err := normalizeEmbykeeperExternalURL(os.Getenv("EMBYKEEPER_EXTERNAL_URL"))
+	if err != nil {
+		return Config{}, err
+	}
+	embykeeperStatusFile, err := normalizeEmbykeeperStatusFile(os.Getenv("EMBYKEEPER_STATUS_FILE"))
+	if err != nil {
+		return Config{}, err
+	}
+	embykeeperDisplayName, err := normalizeEmbykeeperDisplayName(os.Getenv("EMBYKEEPER_DISPLAY_NAME"))
+	if err != nil {
+		return Config{}, err
+	}
 	cfg := Config{
-		CWD:                       cwd,
-		DBPath:                    envString("DB_PATH", filepath.Join(cwd, "data", "proxy.db")),
-		GlobalStatsDBPath:         envString("GLOBAL_STATS_DB_PATH", "/var/lib/embyproxy-gsy-sidecar/global-stats.db"),
-		Port:                      port,
-		ListenAddr:                listenAddr,
-		AdminListenAddr:           adminListenAddr,
-		AdminToken:                os.Getenv("ADMIN_TOKEN"),
-		Admin2FADisabled:          envBool("ADMIN_2FA_DISABLED", false),
-		OwnerAdminAuthMode:        strings.ToLower(strings.TrimSpace(os.Getenv("OWNER_ADMIN_AUTH_MODE"))),
-		OwnerAdminHost:            strings.ToLower(strings.TrimSpace(os.Getenv("OWNER_ADMIN_HOST"))),
-		PublicMediaBaseURL:        publicMediaBaseURL,
-		PublicMediaNodePaths:      publicMediaNodePaths,
-		PublicationAgentSocket:    strings.TrimSpace(os.Getenv("PUBLICATION_AGENT_SOCKET")),
-		MediaProxyRoutes:          envBool("MEDIAPROXY_ROUTES_ENABLED", false),
-		FailoverDNSProviderMode:   strings.ToLower(strings.TrimSpace(os.Getenv("FAILOVER_DNS_PROVIDER_MODE"))),
-		FailoverDNSAllowedRecords: strings.TrimSpace(os.Getenv("FAILOVER_DNS_ALLOWED_RECORDS")),
-		FailoverDNSRealApply:      envBool("FAILOVER_DNS_REAL_APPLY_ENABLED", false),
-		FailoverMockFixture:       envBool("FAILOVER_MOCK_FIXTURE_ENABLED", false),
-		FailoverStateFile:         envString("FAILOVER_STATE_FILE", "/var/lib/embyproxy-gsy-sidecar/failover-state.json"),
+		CWD:                          cwd,
+		DBPath:                       envString("DB_PATH", filepath.Join(cwd, "data", "proxy.db")),
+		GlobalStatsDBPath:            envString("GLOBAL_STATS_DB_PATH", "/var/lib/embyproxy-gsy-sidecar/global-stats.db"),
+		Port:                         port,
+		ListenAddr:                   listenAddr,
+		AdminListenAddr:              adminListenAddr,
+		AdminToken:                   os.Getenv("ADMIN_TOKEN"),
+		Admin2FADisabled:             envBool("ADMIN_2FA_DISABLED", false),
+		OwnerAdminAuthMode:           strings.ToLower(strings.TrimSpace(os.Getenv("OWNER_ADMIN_AUTH_MODE"))),
+		OwnerAdminHost:               strings.ToLower(strings.TrimSpace(os.Getenv("OWNER_ADMIN_HOST"))),
+		PublicMediaBaseURL:           publicMediaBaseURL,
+		PublicMediaNodePaths:         publicMediaNodePaths,
+		PublicationAgentSocket:       strings.TrimSpace(os.Getenv("PUBLICATION_AGENT_SOCKET")),
+		MediaProxyRoutes:             envBool("MEDIAPROXY_ROUTES_ENABLED", false),
+		FailoverDNSProviderMode:      strings.ToLower(strings.TrimSpace(os.Getenv("FAILOVER_DNS_PROVIDER_MODE"))),
+		FailoverDNSAllowedRecords:    strings.TrimSpace(os.Getenv("FAILOVER_DNS_ALLOWED_RECORDS")),
+		FailoverDNSRealApply:         envBool("FAILOVER_DNS_REAL_APPLY_ENABLED", false),
+		FailoverMockFixture:          envBool("FAILOVER_MOCK_FIXTURE_ENABLED", false),
+		FailoverStateFile:            envString("FAILOVER_STATE_FILE", "/var/lib/embyproxy-gsy-sidecar/failover-state.json"),
+		EmbykeeperIntegrationEnabled: envBool("EMBYKEEPER_INTEGRATION_ENABLED", false),
+		EmbykeeperExternalURL:        embykeeperExternalURL,
+		EmbykeeperStatusFile:         embykeeperStatusFile,
+		EmbykeeperDisplayName:        embykeeperDisplayName,
 		Defaults: Defaults{
 			CacheTTL:           10000,
 			ListCacheTTL:       180000,
@@ -137,6 +157,46 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("PUBLICATION_AGENT_SOCKET must be an absolute path below /run")
 	}
 	return cfg, nil
+}
+
+func normalizeEmbykeeperExternalURL(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", nil
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || !strings.EqualFold(parsed.Scheme, "https") || parsed.Host == "" || parsed.User != nil ||
+		parsed.RawQuery != "" || parsed.Fragment != "" || strings.ContainsAny(parsed.Host, "\x00\r\n") {
+		return "", fmt.Errorf("EMBYKEEPER_EXTERNAL_URL must be an HTTPS URL without credentials, query, or fragment")
+	}
+	parsed.Scheme = "https"
+	return parsed.String(), nil
+}
+
+func normalizeEmbykeeperStatusFile(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", nil
+	}
+	if strings.ContainsAny(raw, "\x00\r\n") || !filepath.IsAbs(raw) {
+		return "", fmt.Errorf("EMBYKEEPER_STATUS_FILE must be an absolute path to status.json")
+	}
+	clean := filepath.Clean(raw)
+	if !strings.EqualFold(filepath.Base(clean), "status.json") {
+		return "", fmt.Errorf("EMBYKEEPER_STATUS_FILE must point to a file named status.json")
+	}
+	return clean, nil
+}
+
+func normalizeEmbykeeperDisplayName(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "Embykeeper", nil
+	}
+	if len([]rune(raw)) > 64 || strings.ContainsAny(raw, "\x00\r\n\t") {
+		return "", fmt.Errorf("EMBYKEEPER_DISPLAY_NAME must be at most 64 characters without control characters")
+	}
+	return raw, nil
 }
 
 func normalizePublicMediaBaseURL(raw string) (string, error) {

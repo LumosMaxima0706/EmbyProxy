@@ -174,6 +174,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handlePublicationAPI(w, r, path)
 		return
 	}
+	if path == "/api/admin/embykeeper" || path == "/api/admin/embykeeper/template" {
+		h.handleEmbykeeperAPI(w, r, path)
+		return
+	}
 	if strings.HasPrefix(path, "/api/admin/failover/") || strings.HasPrefix(path, "/api/admin/traffic/") || strings.HasPrefix(path, "/api/admin/dns/") {
 		h.handleFailoverAPI(w, r, path)
 		return

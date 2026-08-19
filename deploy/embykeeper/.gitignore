@@ -1,0 +1,12 @@
+config.toml
+cache.json
+*.session
+*.sqlite
+*.sqlite3
+*.db
+logs/
+secrets/
+.env
+docker-compose.yml
+data/
+status.json

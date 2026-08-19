@@ -1,9 +1,78 @@
 package config
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestEmbykeeperIntegrationDefaultsDisabled(t *testing.T) {
+	t.Setenv("EMBYKEEPER_INTEGRATION_ENABLED", "")
+	t.Setenv("EMBYKEEPER_EXTERNAL_URL", "")
+	t.Setenv("EMBYKEEPER_STATUS_FILE", "")
+	t.Setenv("EMBYKEEPER_DISPLAY_NAME", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.EmbykeeperIntegrationEnabled || cfg.EmbykeeperExternalURL != "" || cfg.EmbykeeperStatusFile != "" || cfg.EmbykeeperDisplayName != "Embykeeper" {
+		t.Fatalf("unexpected defaults: %+v", cfg)
+	}
+}
+
+func TestLoadReadsSafeEmbykeeperIntegration(t *testing.T) {
+	statusPath := filepath.Join(t.TempDir(), "status.json")
+	t.Setenv("EMBYKEEPER_INTEGRATION_ENABLED", "true")
+	t.Setenv("EMBYKEEPER_EXTERNAL_URL", "https://keeper.example.invalid/console")
+	t.Setenv("EMBYKEEPER_STATUS_FILE", statusPath)
+	t.Setenv("EMBYKEEPER_DISPLAY_NAME", "Keeper status")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.EmbykeeperIntegrationEnabled || cfg.EmbykeeperExternalURL != "https://keeper.example.invalid/console" || cfg.EmbykeeperStatusFile != statusPath || cfg.EmbykeeperDisplayName != "Keeper status" {
+		t.Fatalf("unexpected integration config: %+v", cfg)
+	}
+}
+
+func TestEmbykeeperExternalURLFailsClosed(t *testing.T) {
+	for _, value := range []string{
+		"http://keeper.example.invalid",
+		"https://user@keeper.example.invalid",
+		"https://keeper.example.invalid?key=value",
+		"https://keeper.example.invalid/#fragment",
+		"javascript:alert(1)",
+	} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("EMBYKEEPER_EXTERNAL_URL", value)
+			if _, err := Load(); err == nil {
+				t.Fatalf("Load() accepted unsafe Embykeeper URL %q", value)
+			}
+		})
+	}
+}
+
+func TestEmbykeeperStatusFileFailsClosed(t *testing.T) {
+	for _, value := range []string{"status.json", filepath.Join(t.TempDir(), "config.toml"), filepath.Join(t.TempDir(), "other.json")} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("EMBYKEEPER_STATUS_FILE", value)
+			if _, err := Load(); err == nil {
+				t.Fatalf("Load() accepted unsafe status path %q", value)
+			}
+		})
+	}
+}
+
+func TestEmbykeeperDisplayNameValidation(t *testing.T) {
+	for _, value := range []string{"bad\nname", strings.Repeat("x", 65)} {
+		t.Run(value[:3], func(t *testing.T) {
+			t.Setenv("EMBYKEEPER_DISPLAY_NAME", value)
+			if _, err := Load(); err == nil {
+				t.Fatalf("Load() accepted unsafe display name %q", value)
+			}
+		})
+	}
+}
 
 func TestEnvBoolParsesAdmin2FADisabledValues(t *testing.T) {
 	for _, tt := range []struct {

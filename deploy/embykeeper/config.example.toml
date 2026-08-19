@@ -1,0 +1,18 @@
+# Copy to a standalone secrets directory as config.toml and set mode 0600.
+# This tracked file contains placeholders only and keeps the profile disabled.
+
+[emby]
+time_range = "03:00"
+interval_days = 7
+concurrency = 1
+retries = 2
+
+[[emby.account]]
+name = "example-profile"
+url = "https://emby.example.invalid"
+username = "REPLACE_IN_LOCAL_SECRET_FILE"
+password = "REPLACE_IN_LOCAL_SECRET_FILE"
+time = [120, 180]
+enabled = false
+use_proxy = false
+cf_challenge = false
