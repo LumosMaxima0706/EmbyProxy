@@ -5,8 +5,7 @@ Date: 2026-08-15 Asia/Shanghai
 ## Safety boundary
 
 - Keep production DNS, failover policy, UHD upstream, ACME and the working media path unchanged.
-- Do not publish feimu during this phase.
-- Publication accepts only an already-saved single HTTPS upstream. Credentials,
+- Publication accepts one to sixteen already-saved HTTPS upstream lines. Credentials,
   query strings, fragments, private targets, owner-admin and the public entry
   host are rejected.
 - Dry-run returns only redacted host/base-path shapes. It never returns the
@@ -48,7 +47,7 @@ Publication states:
 The public client address has no trailing slash. Its redacted shape is:
 
 ```text
-https://stream.149077530.xyz/https/<saved-host>/443
+https://<stream-host>/https/<saved-host>/443
 ```
 
 If the saved upstream has a base path, it is retained but redacted in dry-run
@@ -140,46 +139,19 @@ database, managed routes, sidecar environment, Nginx hashes and DNS. UHD must
 remain published and its address unchanged. Failover must remain auto/NOSLA
 with manual hold none. No cleanup is part of this phase.
 
-## 2026-08-15 production UI/API deployment
+## Deployment acceptance record
 
-- Deployed commit: `0c52667`.
-- Release: `/opt/embyproxy-gsy-sidecar/releases/0c52667-publication`.
-- Backup root: `/var/backups/embyproxy-publication/20260815T091800Z-bwg`.
-- Rollback script:
-  `/var/backups/embyproxy-publication/20260815T091800Z-bwg/rollback.sh`.
-- The backup checksum verification and rollback `bash -n` passed. The default
-  rollback preserves the live database; `--restore-db` is an explicit disaster
-  recovery option.
-- Sidecar is active/enabled with zero restarts after deployment and still has
-  exactly one `127.0.0.1:18082` listener and no non-loopback listener.
-- `emby_publications` exists and has zero rows. The existing managed route count
-  remains one; feimu has zero managed-route rows.
-- The live UI contains the publication/status/dry-run/unpublish workflow. UHD
-  is `published` with its prior public address. Feimu is
-  `saved_unpublished`, has no public address, and both edges are
-  `not_configured`.
-- The feimu dry-run shape is HTTPS on the stream hostname with a redacted saved
-  host and effective port 443. It declares managed route/line, public mapping,
-  BWG edge, NOSLA edge and redirect-host allowlist steps. It did not disclose
-  the saved host or upstream URL.
-- Pre/post dry-run fingerprints matched: managed/publication DB logical state,
-  sidecar environment and BWG stream Nginx configuration. No sidecar restart,
-  Nginx reload, DNS update or edge route mutation occurred for the dry-run.
-- Isolation checks: unauthenticated owner-admin `/admin` returned 401;
-  authenticated `/admin` returned 200; owner-admin `/uhd` and `/s/`, stream
-  `/admin`, and canary `/admin` returned 404. Stream health and the retained
-  canary public-info small endpoint returned 200.
-- Failover remains `auto`, active target `nosla`, manual hold `none`; the new
-  timer remains active/enabled and the legacy timer inactive/disabled.
-- Central playback statistics remain available with non-empty rows.
-- Bounded Admin access-log scans found no query marker, credential/header
-  marker or complete UUID. Sidecar journal scans found no panic/fatal or
-  502/503/504 marker.
-- Both edges still have no `proxy_cache_path`, enabled `proxy_cache`, background
-  update, slice, prefetch, preload or warmup directive. Streaming locations
-  retain buffering-off, request-buffering-off, Range and If-Range behavior.
-- No ACME request, cleanup, force push, DNS switch, failover change, UHD target
-  change or feimu publication was performed.
+For each deployment, store the commit/tag, release directory, root-only backup
+directory and rollback script in the operator's private change record, not in
+Git. The checked-in runbook records only the repeatable gate:
+
+- sidecar listens only on its configured loopback address;
+- publication schema and managed-route schema migrate additively;
+- dry-run changes no database row, fragment, DNS record or service state;
+- owner-admin and stream virtual-host isolation checks pass;
+- failover policy, active target and manual hold are unchanged;
+- both edges pass `nginx -t` and keep streaming buffering/cache disabled;
+- query-free logs contain no credential/header material or full identifiers.
 
 ## 2026-08-15 restricted adapter remediation
 
@@ -201,16 +173,11 @@ The adapter now has two privilege domains:
    atomically applies it, runs the host `nginx -t`, reloads gracefully, and
    rolls back on failure. No generic shell is exposed.
 
-The one-time empty include hooks were installed after backups and syntax
-checks. They do not contain a feimu fragment. Current backup/rollback paths:
-
-- BWG infrastructure: `/var/backups/embyproxy-publication/20260815T115500Z-bwg-agent`
-- NOSLA infrastructure: `/var/backups/embyproxy-publication/20260815T115500Z-nosla-agent`
-- BWG hook rollback: `/var/backups/embyproxy-publication-agent/20260815T114625Z-bwg-hook/rollback.sh`
-- NOSLA hook rollback: `/var/backups/embyproxy-publication-agent/20260815T114627Z-nosla-hook/rollback.sh`
-- BWG agent config: `/etc/embyproxy-publication-agent/config.json` (0600)
-- BWG socket: `/run/embyproxy-publication-agent/agent.sock` (0660,
-  root:embyproxy-gsy-sidecar)
+Install the empty include hooks only after a root-only backup and syntax check.
+The installer creates an operation-specific rollback directory below
+`/var/backups/embyproxy-publication-agent/`; retain its path in the private
+deployment record. The BWG agent config is root-only and its Unix socket is
+group-readable only by the sidecar service account.
 
 The dedicated NOSLA key is root-only on BWG and is authorized on NOSLA only
 with the fixed edge-helper command. Its known-host entry is pinned. No key
@@ -401,3 +368,263 @@ is idempotent: it adds the directive only to matching stream HTTP/HTTPS blocks,
 does not edit fragments for another slug, and creates a node-local rollback
 script before replacement. Afterward, verify the existing UHD small interface,
 Admin isolation, active failover target and no-cache directives unchanged.
+
+## Multi-line upstream publication
+
+`PUBLISH_REQUIRES_ONE_SAVED_UPSTREAM` was a historical planner/agent limitation,
+not a UI parsing rule. The current contract splits newline, semicolon, comma and
+pipe separated values, trims them, removes exact duplicates and preserves order.
+The first line is `main`; later lines are `backup-2`, `backup-3`, and so on.
+
+Publication stages every line in `managed_route_lines`. The privileged agent
+re-reads the saved node and staged lines from the central database and rejects
+any mismatch; the publish API cannot supply an arbitrary host. Edge fragments
+contain only saved hosts plus root-owned, slug-scoped redirect hosts. The public
+entry remains based on `main`, so adding or removing a backup does not change
+the Yamby address.
+
+For an already-published slug, saving a target list is an atomic single-slug
+configuration refresh. The first target must remain unchanged. The workflow
+writes the new route lines, replaces only the owned edge fragments, runs both
+Nginx tests and reloads, then commits the publication state. Failure restores
+the old node, route lines and fragments. A failed or unhealthy backup must not
+disable the existing main line. Changing the main line still requires an
+explicit migration or unpublish.
+
+The generated main location treats 403, 404, 416, 429 and 5xx as retryable for
+configured backups. Internal rewrites contain literal manifest-listed hosts;
+there is no arbitrary-host regex. Removing a backup rewrites the same slug
+fragment and must leave no orphan route line or host location.
+
+## Published but playback unavailable
+
+Do not use the home page, images or `System/Info` as playback acceptance. A
+published entry starts as `playback_status=unverified`. It becomes a playback
+success only after an authenticated client request demonstrates a VideoStream
+200/206 with growing bytes. The owner UI must show the unverified state instead
+of implying that edge synchronization proves playback.
+
+For a 302/307/308 response, record only the status and Location host hash. If a
+following stream request reaches the default 403 with no upstream response
+time, classify it as `redirect_host_unallowed`; add only the observed,
+operator-reviewed host to the slug-scoped root allowlist and refresh that
+publication. If direct edge-to-upstream and public proxy throughput are both
+slow, classify `upstream_slow` and do not alter proxy policy.
+
+### Multi-hop Redirect Refresh
+
+Some Emby media sources redirect more than once. For one slug, follow the
+authenticated Range request internally and record only hop status, scheme,
+port and host hash. Add an exact root-owned endpoint for each observed hop,
+then refresh that one published slug. A refresh must stage the publication
+state, replace only that slug's fragments on BWG and NOSLA, run candidate and
+host Nginx tests, reload gracefully, and restore the prior state on failure.
+
+For a CDN that demonstrably rotates only one short label under the same
+controlled suffix, use the restricted `redirect_patterns` configuration rather
+than opening a dynamic-host route. The pattern fixes scheme, port, suffix and
+label length and is unavailable to the owner API. It is not a substitute for
+an arbitrary upstream allowlist.
+
+### Playback Acceptance State
+
+`published` means edge synchronization completed; it does not prove a client
+can stream. Keep `playback_status=unverified` until an authenticated request
+shows `200`/`206` with growing bytes. Mark `range_failed` for no usable ranged
+body, `redirect_host_unallowed` for edge fall-through, and `upstream_slow`
+only when direct and stream measurements are similarly slow. Do not derive a
+successful state from `System/Info`, images, or an unauthenticated `401`.
+
+See `39-emby-playback-throughput-troubleshooting.md` for the full Range/206 and
+throughput procedure.
+
+### Redirect Rewriting Requirement
+
+An allowlisted redirect route is necessary but not sufficient. The legacy
+loopback media proxy may return the upstream `Location` unchanged. Every
+generated publication fragment therefore rewrites only these response forms
+back onto the current stream origin:
+
+- a saved primary or backup upstream;
+- a root-owned exact redirect endpoint; or
+- a root-owned fixed-length CDN-label pattern.
+
+Relative locations are returned beneath the current manifest route. Already
+encoded `/https/...` locations are left unchanged. The rewrite preserves a
+signed query only while forwarding the response; Nginx's query-free access log
+continues to record `$uri`, never the query. No owner API input can create a
+rewrite for an arbitrary host.
+
+On 2026-08-15 the BWG publication service was upgraded without its separate
+local edge helper, so a refresh reported `synced` while BWG regenerated an old
+fragment template. This is a deployment defect, not a browser defect. Both
+the agent and local helper must have the same binary hash before a refresh.
+The readiness check for this operation is: helper hash equality, candidate
+test, host `nginx -t`, graceful reload, and a count of manifest-scoped
+`proxy_redirect` rules on both edges.
+
+### Edge Admin Isolation
+
+The stream virtual host is never an owner-admin ingress. Both exact and
+slash-suffixed `/admin` and `/api/admin` locations must return `404` on NOSLA
+and BWG. A 301 from `/admin` that leads to a proxy response is not acceptable:
+it can become reachable after failover. Owner administration remains available
+only through the separate owner-admin virtual host, where Basic Auth injects
+the trusted loopback header for the sidecar. Keep legacy `/s/` routing separate
+from this rule unless it has an independently approved migration plan.
+
+### Multi-line production acceptance prerequisite
+
+A real two-line production test requires two HTTPS entry points belonging to
+the same isolated test Emby service. Both lines must be operator-controlled,
+saved on the test slug and safe to publish on both edges. Do not use UHD,
+feimu, yuchu, another production Emby, or an arbitrary public host as a test
+backup. Doing so tests cross-service routing rather than backup behavior and
+can expose an unintended upstream.
+
+When the prerequisite exists, record the test slug's public URL, managed-route
+line count and both fragment hashes. Publish `main + backup-2`, then add and
+remove one backup through the normal owner save workflow. After each change,
+verify both edges passed `nginx -t`, only the test slug's rows and fragments
+changed, and the public URL stayed byte-for-byte identical. Also verify the
+UHD, feimu and yuchu publication rows, fragment hashes and playback state did
+not change. If no controlled second line exists, mark only the production
+acceptance test blocked; the parser/planner/store/renderer unit tests may pass,
+but they are not a substitute for this gate.
+
+### Multi-line staging/mock acceptance
+
+The staging gate uses two controlled TLS mock upstreams and an isolated
+`staging-multiline` slug. The line checker must request both mocks independently
+and retain ordered results when main is reachable and backup returns an
+unhealthy status. This verifies that one bad backup does not turn a healthy
+main into an unreachable server.
+
+The workflow test then saves two HTTPS lines, runs publication dry-run,
+publishes two managed route lines, adds a third backup and removes it again.
+The publication public URL must remain unchanged, the final lines must remain
+`main` plus `backup-2`, and a pre-existing unrelated route must remain
+byte-for-byte unchanged. The generated multi-line edge candidate must pass the
+host's real `/usr/sbin/nginx -t`. This mock gate is allowed without DNS,
+production reload or a public test certificate; it does not replace a later
+controlled production failover exercise.
+
+### Production-safe multi-line owner gate
+
+Run `deploy/publication/production-multiline-safe-test.sh` only with an isolated
+slug, an explicit owner-admin HTTPS origin, a root-readable password file and
+`CONFIRM_SINGLE_SLUG_TEST=yes`. The script uses IANA-reserved `.invalid` HTTPS
+names, never accepts an arbitrary publish host from the API, and cleans only
+the named test slug. It must prove two-line save, per-line detection, dry-run,
+publish, add/remove backup, public-URL hash equality, unpublish and absence of
+an orphan managed route. The legacy `PUBLISH_REQUIRES_ONE_SAVED_UPSTREAM` error
+must not occur. Record unrelated publication/fragment hashes before and after.
+
+New publications use the same `renderNginxFragment` implementation as existing
+managed nodes: no buffering/cache, Range/If-Range forwarding, Content-Range
+pass-through, and manifest-scoped 302/307/308 Location rewriting. An unknown
+redirect host is still fail-closed and must never be auto-allowed. Such a node
+remains playback `unverified` until a real authenticated playback canary
+succeeds; edge synchronization alone must not claim playback success.
+
+### Mandatory playback canary gate
+
+Publication connectivity and playback readiness are separate states. A 200
+from `System/Info/Public` proves only `connectivity healthy`. A route remains
+`playback_status=unverified` until the authenticated canary completes this
+chain:
+
+1. Submit one known-playable item ID and an Emby access token through the
+   authenticated admin canary action. Both are used once in memory and sent
+   only over the peer-credential-protected publication-agent Unix socket.
+2. Require `PlaybackInfo=2xx`, then issue a bounded Range request to the
+   returned DirectStream URL through the public route.
+3. Follow at most eight 301/302/303/307/308 responses. Reduce each destination
+   to scheme, exact host, exact port and a safe first path prefix. Never retain
+   its query, token, cookie or full media path.
+4. Accept HTTP/80 and HTTPS/443 independently of the primary upstream. Reject
+   loopback/private/link-local destinations and any destination that does not
+   resolve exclusively to public addresses.
+5. Generate only slug-scoped exact/prefix routes, write the candidate through
+   the restricted agent, and require both BWG and NOSLA edge sync. Do not add a
+   generic `/http/*` or `/https/*` location.
+6. Retry the same bounded request and require media status 200 or 206, at least
+   16 KiB of byte growth, no redirect loop, and for 206 both `Content-Range`
+   and `Accept-Ranges: bytes`.
+7. Only then record `playback_status=healthy`. On failure, roll back endpoints
+   discovered by that attempt and record a classified failure without widening
+   the allowlist.
+
+The root-owned runtime endpoint store defaults to
+`/var/lib/embyproxy-publication-agent/redirect-endpoints.json`, must be mode
+0600, and must never enter Git. The publication-agent systemd unit must grant
+write access only to `/var/lib/embyproxy-publication-agent` in addition to its
+existing backup/include paths. Re-publishing or changing route lines resets
+playback readiness to `unverified` and requires a new canary.
+
+The old `playback-verify` endpoint is intentionally fail-closed and returns
+`PLAYBACK_CANARY_REQUIRED`; an operator click can no longer mark a route green
+without 200/206 and byte-growth evidence.
+
+Use the operation-specific rollback script created during deployment. Restore
+the prior release without restoring the database when possible because the
+new columns are backward-compatible. Restore a database snapshot only for a
+confirmed migration/data failure and only after stopping the writer.
+
+## Deploying this release on a new server
+
+1. Clone the repository or fetch tags, then check out the signed-off release
+   tag in detached-head state. Verify `git status --short` is empty.
+2. Run `go test ./...`, `go vet ./...`, the historical publication migration
+   test and the Nginx candidate-fragment test before building.
+3. Build `./cmd/embyproxy`, `./cmd/publication-agent`,
+   `./cmd/stats-collector`, and `./cmd/stats-sync` with `-trimpath`. Inject the
+   release tag, commit and UTC build time into `embyproxy/internal/buildinfo`
+   with `-ldflags`; never place credentials in build flags.
+4. Create service users, state directories and a root-only backup directory.
+   Copy `.env.example` files to paths outside Git and fill them locally. Never
+   commit these deployed environment files.
+5. Stop the sidecar writer, back up its SQLite file including WAL/SHM state,
+   install the new binary, and restart it. `storage.New` performs the additive
+   `emby_publications` playback columns and `managed_route_lines` migration on
+   startup. Verify the historical migration test first; do not run ad-hoc SQL.
+6. On BWG, render `agent-config.example.json` and `edge-bwg.example.json` into
+   root-owned configuration, install the same publication-agent build as both
+   agent and local helper, and enable the service. On NOSLA, install that exact
+   build as the forced-command edge helper and render `edge-nosla.example.json`.
+   Pin the NOSLA host key and keep the private key root-only.
+7. Run `install-edge-hook.sh NODE STREAM_CONFIG PUBLIC_MEDIA_HOST` as a dry-run
+   on each edge. After reviewing its scoped plan, rerun with `--apply`. Render
+   publication fragments only through the restricted agent; do not copy live
+   fragments between servers.
+8. Run `nginx -t` on BWG and NOSLA, then graceful reload. Set
+   `PUBLICATION_AGENT_SOCKET` in the sidecar's private environment, restart the
+   sidecar, and verify readiness/dry-run before publishing any slug.
+9. Verify owner-admin authentication/isolation, stream `/admin` denial,
+   loopback-only sidecar binding, unchanged failover state, and a real
+   authenticated Range/206 playback canary before marking playback verified.
+
+## Release rollback
+
+Choose the rollback target explicitly; these refs have different meanings:
+
+- To return to the current verified playback and multi-upstream release, use
+  tag `embyproxy-playback-verified-20260816`.
+- To withdraw this merge and return to the `main` commit that preceded it, use
+  branch `backup/pre-playback-merge-20260816` or tag
+  `pre-playback-merge-20260816`.
+
+Do not describe the verified release tag as the pre-merge rollback point. The
+backup branch and backup tag both identify the old `main`; the verified release
+tag identifies the stable fixed release.
+
+1. Stop new publication operations and record the affected slug/state.
+2. Run only the operation-specific BWG/NOSLA rollback scripts created by the
+   restricted helper, then run `nginx -t` and graceful reload on each edge.
+3. Repoint the sidecar release symlink to the previous tested tag and restart
+   the publication agent and sidecar. Keep the additive schema unless database
+   validation proves restoration is required.
+4. For a single failed publication, use its reconcile/cleanup API; never remove
+   global routes or another slug's fragment.
+5. Recheck UHD/existing route hashes, public URL, playback, isolation and
+   failover state. Store concrete backup paths in the private deployment record.

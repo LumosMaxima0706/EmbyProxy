@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"embyproxy/internal/proxyadapter"
 )
 
 type RemoteConfig struct {
@@ -18,14 +20,39 @@ type RemoteConfig struct {
 }
 
 type AgentConfig struct {
-	SocketPath      string       `json:"socket_path"`
-	DatabasePath    string       `json:"database_path"`
-	AllowedPeerUID  uint32       `json:"allowed_peer_uid"`
-	LocalHelperPath string       `json:"local_helper_path"`
-	BWGConfigPath   string       `json:"bwg_config_path"`
-	PublicMediaHost string       `json:"public_media_host"`
-	OwnerAdminHost  string       `json:"owner_admin_host"`
-	NOSLA           RemoteConfig `json:"nosla"`
+	SocketPath      string              `json:"socket_path"`
+	DatabasePath    string              `json:"database_path"`
+	AllowedPeerUID  uint32              `json:"allowed_peer_uid"`
+	LocalHelperPath string              `json:"local_helper_path"`
+	BWGConfigPath   string              `json:"bwg_config_path"`
+	PublicMediaHost string              `json:"public_media_host"`
+	OwnerAdminHost  string              `json:"owner_admin_host"`
+	RedirectHosts   map[string][]string `json:"redirect_hosts,omitempty"`
+	// RedirectEndpoints is root-owned because redirects are observed at the
+	// edge. It extends the legacy HTTPS/443 RedirectHosts form for controlled
+	// media origins that use a non-standard scheme or port.
+	RedirectEndpoints map[string][]RedirectEndpoint `json:"redirect_endpoints,omitempty"`
+	// RedirectPatterns is a narrow allowance for CDNs that rotate only the
+	// left-most short label below an observed root-owned suffix.
+	RedirectPatterns map[string][]RedirectPattern `json:"redirect_patterns,omitempty"`
+	// DiscoveredEndpointsPath is a root-owned runtime store populated only by
+	// a successful bounded playback canary. It must never be committed to Git.
+	DiscoveredEndpointsPath string       `json:"discovered_endpoints_path,omitempty"`
+	NOSLA                   RemoteConfig `json:"nosla"`
+}
+
+type RedirectEndpoint struct {
+	Scheme     string `json:"scheme"`
+	Host       string `json:"host"`
+	Port       int    `json:"port"`
+	PathPrefix string `json:"path_prefix,omitempty"`
+}
+
+type RedirectPattern struct {
+	Scheme      string `json:"scheme"`
+	Suffix      string `json:"suffix"`
+	Port        int    `json:"port"`
+	LabelLength int    `json:"label_length"`
 }
 
 type EdgeConfig struct {
@@ -49,10 +76,88 @@ func LoadAgentConfig(path string) (AgentConfig, error) {
 		!safeRemote(cfg.NOSLA) {
 		return cfg, errors.New("agent_config_invalid")
 	}
+	if cfg.DiscoveredEndpointsPath == "" {
+		cfg.DiscoveredEndpointsPath = "/var/lib/embyproxy-publication-agent/redirect-endpoints.json"
+	}
+	if !safeAbsoluteBelow(cfg.DiscoveredEndpointsPath, "/var/lib/embyproxy-publication-agent") {
+		return cfg, errors.New("agent_config_invalid")
+	}
+	for slug, hosts := range cfg.RedirectHosts {
+		if proxyadapter.ValidateManagedRouteSlug(slug) != nil || len(hosts) > 16 {
+			return cfg, errors.New("agent_config_invalid")
+		}
+		for _, host := range hosts {
+			if !safeHostname(host) || strings.EqualFold(host, cfg.PublicMediaHost) || strings.EqualFold(host, cfg.OwnerAdminHost) {
+				return cfg, errors.New("agent_config_invalid")
+			}
+		}
+	}
+	for slug, endpoints := range cfg.RedirectEndpoints {
+		if proxyadapter.ValidateManagedRouteSlug(slug) != nil || len(endpoints) > 16 || len(endpoints)+len(cfg.RedirectHosts[slug])+len(cfg.RedirectPatterns[slug]) > 16 {
+			return cfg, errors.New("agent_config_invalid")
+		}
+		for _, endpoint := range endpoints {
+			if !safeRedirectEndpoint(endpoint, cfg.PublicMediaHost, cfg.OwnerAdminHost) {
+				return cfg, errors.New("agent_config_invalid")
+			}
+		}
+	}
+	for slug, patterns := range cfg.RedirectPatterns {
+		if proxyadapter.ValidateManagedRouteSlug(slug) != nil || len(patterns) > 16 || len(patterns)+len(cfg.RedirectHosts[slug])+len(cfg.RedirectEndpoints[slug]) > 16 {
+			return cfg, errors.New("agent_config_invalid")
+		}
+		for _, pattern := range patterns {
+			if !safeRedirectPattern(pattern, cfg.PublicMediaHost, cfg.OwnerAdminHost) {
+				return cfg, errors.New("agent_config_invalid")
+			}
+		}
+	}
 	if cfg.NOSLA.TimeoutSeconds < 1 || cfg.NOSLA.TimeoutSeconds > 60 {
 		cfg.NOSLA.TimeoutSeconds = 10
 	}
 	return cfg, nil
+}
+
+func safeRedirectPattern(pattern RedirectPattern, publicMediaHost, ownerAdminHost string) bool {
+	scheme := strings.ToLower(strings.TrimSpace(pattern.Scheme))
+	suffix := strings.ToLower(strings.TrimSpace(pattern.Suffix))
+	return (scheme == "http" || scheme == "https") && pattern.Port >= 1 && pattern.Port <= 65535 &&
+		pattern.LabelLength >= 1 && pattern.LabelLength <= 16 && safeHostname(suffix) &&
+		!strings.EqualFold(suffix, publicMediaHost) && !strings.EqualFold(suffix, ownerAdminHost)
+}
+
+func safeRedirectEndpoint(endpoint RedirectEndpoint, publicMediaHost, ownerAdminHost string) bool {
+	scheme := strings.ToLower(strings.TrimSpace(endpoint.Scheme))
+	host := strings.ToLower(strings.TrimSpace(endpoint.Host))
+	return (scheme == "http" || scheme == "https") && endpoint.Port >= 1 && endpoint.Port <= 65535 &&
+		safeRedirectHost(host) && safeRedirectPathPrefix(endpoint.PathPrefix) &&
+		!strings.EqualFold(host, publicMediaHost) && !strings.EqualFold(host, ownerAdminHost)
+}
+
+func safeRedirectPathPrefix(value string) bool {
+	if value == "" {
+		return true
+	}
+	if len(value) > 64 || strings.ContainsAny(value, "/\\?#%\r\n\t ") || value == "." || value == ".." {
+		return false
+	}
+	for _, r := range value {
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && !strings.ContainsRune("._~-", r) {
+			return false
+		}
+	}
+	return true
+}
+
+// Redirect endpoints are root-owned observed media origins. They may be a
+// literal globally routable address because some Emby backends issue a signed
+// redirect to an IP:port. Saved upstreams remain DNS-only; this exception is
+// limited to exact redirect endpoint entries and never comes from the API.
+func safeRedirectHost(value string) bool {
+	if ip := net.ParseIP(strings.TrimSpace(value)); ip != nil {
+		return !ip.IsUnspecified() && !ip.IsLoopback() && !ip.IsMulticast() && !ip.IsLinkLocalUnicast() && !ip.IsPrivate()
+	}
+	return safeHostname(value)
 }
 
 func LoadEdgeConfig(path string) (EdgeConfig, error) {

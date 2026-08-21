@@ -36,7 +36,10 @@ func main() {
 		err = fmt.Errorf("invalid mode")
 	}
 	if err != nil {
-		_, _ = io.WriteString(os.Stderr, "publication agent failed\n")
+		// The agent only returns stable, non-sensitive error codes. Keeping the
+		// code in the journal makes configuration gates diagnosable without
+		// exposing route targets or request data.
+		_, _ = io.WriteString(os.Stderr, "publication agent failed: "+err.Error()+"\n")
 		os.Exit(1)
 	}
 }

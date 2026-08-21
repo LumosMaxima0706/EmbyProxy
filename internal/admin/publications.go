@@ -2,7 +2,9 @@ package admin
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -19,21 +21,32 @@ import (
 // PublicationPlan contains only safe, operator-facing metadata. TargetURL is
 // deliberately excluded from JSON because it is used internally by a syncer.
 type PublicationPlan struct {
-	OperationID       string   `json:"operation_id"`
-	NodeName          string   `json:"node_name"`
-	RouteSlug         string   `json:"route_slug"`
-	PublicPathShape   string   `json:"public_path"`
-	PublicURLShape    string   `json:"public_url"`
-	UpstreamScheme    string   `json:"upstream_scheme"`
-	UpstreamHostShape string   `json:"upstream_host"`
-	UpstreamPort      int      `json:"upstream_port"`
-	HasBasePath       bool     `json:"has_base_path"`
-	Changes           []string `json:"changes"`
-	PublicPath        string   `json:"-"`
-	PublicURL         string   `json:"-"`
-	UpstreamHost      string   `json:"-"`
-	BasePath          string   `json:"-"`
-	TargetURL         string   `json:"-"`
+	OperationID       string              `json:"operation_id"`
+	NodeName          string              `json:"node_name"`
+	RouteSlug         string              `json:"route_slug"`
+	PublicPathShape   string              `json:"public_path"`
+	PublicURLShape    string              `json:"public_url"`
+	UpstreamScheme    string              `json:"upstream_scheme"`
+	UpstreamHostShape string              `json:"upstream_host"`
+	UpstreamPort      int                 `json:"upstream_port"`
+	HasBasePath       bool                `json:"has_base_path"`
+	LineCount         int                 `json:"line_count"`
+	Changes           []string            `json:"changes"`
+	PublicPath        string              `json:"-"`
+	PublicURL         string              `json:"-"`
+	UpstreamHost      string              `json:"-"`
+	BasePath          string              `json:"-"`
+	TargetURL         string              `json:"-"`
+	TargetURLs        []string            `json:"-"`
+	Targets           []PublicationTarget `json:"-"`
+}
+
+type PublicationTarget struct {
+	LineID   string
+	URL      string
+	Host     string
+	Port     int
+	BasePath string
 }
 
 type PublicationEdgeResult struct {
@@ -62,18 +75,45 @@ type publicationReadinessChecker interface {
 	Readiness(context.Context, PublicationPlan) (PublicationSyncResult, error)
 }
 
+type publicationPlaybackCanary interface {
+	PlaybackCanary(context.Context, PublicationPlan, PlaybackCanaryInput) (PlaybackCanaryResult, error)
+}
+
+type PlaybackCanaryInput struct {
+	ItemID      string
+	AccessToken string
+}
+
+type PlaybackCanaryResult struct {
+	Status              string `json:"status"`
+	FailureClass        string `json:"failure_class,omitempty"`
+	ConnectivityStatus  int    `json:"connectivity_status"`
+	PlaybackInfoStatus  int    `json:"playbackinfo_status"`
+	VideoStreamStatus   int    `json:"videostream_status"`
+	MediaStatus         int    `json:"media_status"`
+	RedirectsFollowed   int    `json:"redirects_followed"`
+	EndpointsDiscovered int    `json:"endpoints_discovered"`
+	BytesRead           int64  `json:"bytes_read"`
+	ByteGrowth          bool   `json:"byte_growth"`
+	ContentRange        bool   `json:"content_range"`
+	AcceptRanges        bool   `json:"accept_ranges"`
+}
+
 type publicationStatusView struct {
-	Status            string           `json:"status"`
-	WorkflowState     string           `json:"workflow_state"`
-	Reason            string           `json:"reason,omitempty"`
-	FailedStep        string           `json:"failed_step,omitempty"`
-	PublicURL         string           `json:"public_url,omitempty"`
-	RouteSlug         string           `json:"route_slug,omitempty"`
-	NOSLAStatus       string           `json:"nosla_status"`
-	BWGStatus         string           `json:"bwg_status"`
-	Managed           bool             `json:"managed"`
-	AdapterRegistered bool             `json:"adapter_registered"`
-	Plan              *PublicationPlan `json:"plan,omitempty"`
+	Status               string           `json:"status"`
+	WorkflowState        string           `json:"workflow_state"`
+	Reason               string           `json:"reason,omitempty"`
+	FailedStep           string           `json:"failed_step,omitempty"`
+	PublicURL            string           `json:"public_url,omitempty"`
+	RouteSlug            string           `json:"route_slug,omitempty"`
+	NOSLAStatus          string           `json:"nosla_status"`
+	BWGStatus            string           `json:"bwg_status"`
+	Managed              bool             `json:"managed"`
+	AdapterRegistered    bool             `json:"adapter_registered"`
+	PlaybackStatus       string           `json:"playback_status"`
+	PlaybackFailureClass string           `json:"playback_failure_class,omitempty"`
+	PlaybackVerifiedAt   int64            `json:"playback_verified_at,omitempty"`
+	Plan                 *PublicationPlan `json:"plan,omitempty"`
 }
 
 type publicationArtifacts struct {
@@ -102,61 +142,169 @@ func (h *Handler) buildPublicationPlan(ctx context.Context, uid, name string) (P
 		return PublicationPlan{}, errors.New("EMBY_SERVER_NOT_FOUND")
 	}
 	targets := storage.SplitTargets(node.Target)
-	if len(targets) != 1 {
-		return PublicationPlan{}, errors.New("PUBLISH_REQUIRES_ONE_SAVED_UPSTREAM")
-	}
-	target := strings.TrimSpace(targets[0])
-	u, err := url.Parse(target)
-	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return PublicationPlan{}, errors.New("PUBLISH_TARGET_MUST_BE_A_SINGLE_HTTPS_URL_WITHOUT_CREDENTIALS")
-	}
-	if strings.EqualFold(u.Hostname(), h.cfg.OwnerAdminHost) || strings.EqualFold(u.Hostname(), "owner-admin.149077530.xyz") {
-		return PublicationPlan{}, errors.New("PUBLISH_TARGET_CANNOT_BE_OWNER_ADMIN")
-	}
-	if strings.EqualFold(u.Hostname(), "localhost") {
-		return PublicationPlan{}, errors.New("PUBLISH_TARGET_MUST_BE_PUBLIC")
-	}
-	if ip := net.ParseIP(u.Hostname()); ip != nil && (ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsMulticast()) {
-		return PublicationPlan{}, errors.New("PUBLISH_TARGET_MUST_BE_PUBLIC")
+	if len(targets) == 0 || len(targets) > 16 {
+		return PublicationPlan{}, errors.New("PUBLISH_REQUIRES_SAVED_UPSTREAM")
 	}
 	if err := proxyadapter.ValidateManagedRouteSlug(name); err != nil {
 		return PublicationPlan{}, errors.New("INVALID_ROUTE_SLUG")
-	}
-	port := 443
-	if u.Port() != "" {
-		parsedPort, err := strconv.Atoi(u.Port())
-		if err != nil || parsedPort < 1 || parsedPort > 65535 {
-			return PublicationPlan{}, errors.New("INVALID_UPSTREAM_PORT")
-		}
-		port = parsedPort
 	}
 	baseURL := strings.TrimSuffix(h.cfg.PublicMediaBaseURL, "/")
 	if baseURL == "" {
 		return PublicationPlan{}, errors.New("PUBLIC_MEDIA_BASE_URL_NOT_CONFIGURED")
 	}
 	publicBase, _ := url.Parse(baseURL)
-	if strings.EqualFold(u.Hostname(), publicBase.Hostname()) {
-		return PublicationPlan{}, errors.New("PUBLISH_TARGET_CANNOT_BE_PUBLIC_ENTRY")
+	parsedTargets := make([]PublicationTarget, 0, len(targets))
+	for index, target := range targets {
+		u, parseErr := url.Parse(strings.TrimSpace(target))
+		if parseErr != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+			return PublicationPlan{}, errors.New("PUBLISH_TARGETS_MUST_BE_HTTPS_URLS_WITHOUT_CREDENTIALS")
+		}
+		if strings.EqualFold(u.Hostname(), h.cfg.OwnerAdminHost) {
+			return PublicationPlan{}, errors.New("PUBLISH_TARGET_CANNOT_BE_OWNER_ADMIN")
+		}
+		if strings.EqualFold(u.Hostname(), publicBase.Hostname()) {
+			return PublicationPlan{}, errors.New("PUBLISH_TARGET_CANNOT_BE_PUBLIC_ENTRY")
+		}
+		if strings.EqualFold(u.Hostname(), "localhost") {
+			return PublicationPlan{}, errors.New("PUBLISH_TARGET_MUST_BE_PUBLIC")
+		}
+		if ip := net.ParseIP(u.Hostname()); ip != nil && (ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsMulticast()) {
+			return PublicationPlan{}, errors.New("PUBLISH_TARGET_MUST_BE_PUBLIC")
+		}
+		port := 443
+		if u.Port() != "" {
+			parsedPort, portErr := strconv.Atoi(u.Port())
+			if portErr != nil || parsedPort < 1 || parsedPort > 65535 {
+				return PublicationPlan{}, errors.New("INVALID_UPSTREAM_PORT")
+			}
+			port = parsedPort
+		}
+		parsedTargets = append(parsedTargets, PublicationTarget{
+			LineID: publicationPlanLineID(index), URL: strings.TrimRight(strings.TrimSpace(target), "/"),
+			Host: strings.ToLower(u.Hostname()), Port: port,
+			BasePath: strings.Trim(path.Clean(u.EscapedPath()), "/."),
+		})
 	}
-	upstreamHost := strings.ToLower(u.Hostname())
-	basePath := strings.Trim(path.Clean(u.EscapedPath()), "/.")
-	publicPath := "/https/" + upstreamHost + "/" + formatPort(port)
-	publicPathShape := "/https/<saved-host>/" + formatPort(port)
-	if basePath != "" {
-		publicPath += "/" + basePath
+	primary := parsedTargets[0]
+	publicPath := "/https/" + primary.Host + "/" + formatPort(primary.Port)
+	publicPathShape := "/https/<saved-host>/" + formatPort(primary.Port)
+	if primary.BasePath != "" {
+		publicPath += "/" + primary.BasePath
 		publicPathShape += "/<saved-base-path>"
 	}
 	return PublicationPlan{
 		NodeName: name, RouteSlug: name,
 		PublicPathShape: publicPathShape,
 		PublicURLShape:  baseURL + publicPathShape,
-		UpstreamScheme:  "https", UpstreamHostShape: "<saved-host>", UpstreamPort: port,
-		HasBasePath: basePath != "", PublicPath: publicPath, PublicURL: baseURL + publicPath,
-		UpstreamHost: upstreamHost, BasePath: basePath, Changes: []string{
+		UpstreamScheme:  "https", UpstreamHostShape: "<saved-host>", UpstreamPort: primary.Port,
+		HasBasePath: primary.BasePath != "", LineCount: len(parsedTargets), PublicPath: publicPath, PublicURL: baseURL + publicPath,
+		UpstreamHost: primary.Host, BasePath: primary.BasePath, Changes: []string{
 			"managed_route", "managed_route_line", "public_media_mapping",
 			"bwg_edge_route", "nosla_edge_route", "redirect_host_allowlist",
-		}, TargetURL: target,
+		}, TargetURL: primary.URL, TargetURLs: append([]string(nil), targets...), Targets: parsedTargets,
 	}, nil
+}
+
+func publicationPlanLineID(index int) string {
+	if index == 0 {
+		return "main"
+	}
+	return "backup-" + strconv.Itoa(index+1)
+}
+
+func publicationManagedLines(plan PublicationPlan) []storage.ManagedRouteLine {
+	lines := make([]storage.ManagedRouteLine, 0, len(plan.Targets))
+	for index, target := range plan.Targets {
+		lines = append(lines, storage.ManagedRouteLine{
+			RouteSlug: plan.RouteSlug, LineSlug: target.LineID, Target: target.URL,
+			Enabled: true, Position: index + 1,
+		})
+	}
+	return lines
+}
+
+func (h *Handler) syncPublishedNodeTargets(ctx context.Context, uid string, previous, next storage.Node) error {
+	h.publicationMu.Lock()
+	defer h.publicationMu.Unlock()
+	if h.publicationSyncer == nil {
+		return errors.New("edge_sync_unavailable")
+	}
+	previousPlan, err := h.buildPublicationPlan(ctx, uid, previous.Name)
+	if err != nil {
+		return err
+	}
+	operationID := "route-update-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	previousPlan.OperationID = operationID + "-rollback"
+	publication, err := h.store.GetPublication(ctx, uid, previous.Name)
+	if err != nil || publication == nil || publication.Status != storage.PublicationPublished {
+		return errors.New("PUBLICATION_STATUS_INVALID")
+	}
+	previousRoute, err := h.store.GetManagedRoute(ctx, previousPlan.RouteSlug)
+	if err != nil || previousRoute == nil {
+		return errors.New("MANAGED_ROUTE_LOOKUP_FAILED")
+	}
+	previousLines, err := h.store.ListManagedRouteLines(ctx, previousPlan.RouteSlug)
+	if err != nil {
+		return errors.New("MANAGED_ROUTE_LOOKUP_FAILED")
+	}
+	if err := h.store.SaveNode(ctx, uid, next); err != nil {
+		return err
+	}
+	nextPlan, err := h.buildPublicationPlan(ctx, uid, next.Name)
+	if err != nil {
+		_ = h.store.SaveNode(ctx, uid, previous)
+		return err
+	}
+	nextPlan.OperationID = operationID
+	pending := *publication
+	pending.Status = storage.PublicationPublishing
+	pending.Reason = "route_lines_sync_in_progress"
+	pending.FailedStep = ""
+	pending.NOSLAStatus, pending.BWGStatus = "pending", "pending"
+	pending.UpdatedAt = time.Now().Unix()
+	if err := h.store.SavePublication(ctx, pending); err != nil {
+		_ = h.store.SaveNode(ctx, uid, previous)
+		return errors.New("PUBLICATION_STATE_WRITE_FAILED")
+	}
+	if err := h.store.SaveManagedRoute(ctx, *previousRoute, publicationManagedLines(nextPlan)); err != nil {
+		_ = h.store.SaveNode(ctx, uid, previous)
+		_ = h.store.SavePublication(ctx, *publication)
+		return errors.New("managed_route_write_failed")
+	}
+	result, syncErr := h.publicationSyncer.Publish(ctx, nextPlan)
+	if syncErr == nil && result.NOSLA.Status == "synced" && result.BWG.Status == "synced" {
+		completed := *publication
+		completed.Status = storage.PublicationPublished
+		completed.Reason = "public_entry_configured"
+		completed.FailedStep = ""
+		completed.NOSLAStatus, completed.BWGStatus = "synced", "synced"
+		completed.PlaybackStatus, completed.PlaybackFailureClass, completed.PlaybackVerifiedAt = "unverified", "", 0
+		completed.UpdatedAt = time.Now().Unix()
+		if err := h.store.SavePublication(ctx, completed); err == nil {
+			return nil
+		}
+	}
+
+	// Restore the old database view first. The restricted adapter rebuilds the
+	// prior manifest from that view and atomically restores both slug fragments.
+	_ = h.store.SaveNode(ctx, uid, previous)
+	_ = h.store.SaveManagedRoute(ctx, *previousRoute, previousLines)
+	rollbackPending := *publication
+	rollbackPending.Status = storage.PublicationPublishing
+	rollbackPending.Reason = "route_lines_rollback_in_progress"
+	rollbackPending.FailedStep = ""
+	rollbackPending.NOSLAStatus, rollbackPending.BWGStatus = "pending", "pending"
+	rollbackPending.UpdatedAt = time.Now().Unix()
+	_ = h.store.SavePublication(ctx, rollbackPending)
+	rollback, rollbackErr := h.publicationSyncer.Publish(ctx, previousPlan)
+	_ = h.store.SavePublication(ctx, *publication)
+	if rollbackErr != nil || rollback.NOSLA.Status != "synced" || rollback.BWG.Status != "synced" {
+		return errors.New("PUBLISHED_ROUTE_UPDATE_ROLLBACK_FAILED")
+	}
+	if result.Reason != "" {
+		return errors.New(result.Reason)
+	}
+	return errors.New("PUBLISHED_ROUTE_UPDATE_FAILED")
 }
 
 func formatPort(port int) string {
@@ -173,11 +321,18 @@ func (h *Handler) publicationStatus(ctx context.Context, uid, name string) (publ
 		return publicationStatusView{}, err
 	}
 	if p != nil {
+		playbackStatus := strings.TrimSpace(p.PlaybackStatus)
+		if playbackStatus == "" {
+			playbackStatus = playbackPublicationStatus(p.Status)
+		}
 		return publicationStatusView{
 			Status: p.Status, WorkflowState: publicationWorkflowState(p.Status, p.Reason), Reason: p.Reason, FailedStep: p.FailedStep,
 			PublicURL: p.PublicURL, RouteSlug: p.RouteSlug,
 			NOSLAStatus: p.NOSLAStatus, BWGStatus: p.BWGStatus, Managed: true,
-			AdapterRegistered: h.publicationSyncer != nil,
+			AdapterRegistered:    h.publicationSyncer != nil,
+			PlaybackStatus:       playbackStatus,
+			PlaybackFailureClass: p.PlaybackFailureClass,
+			PlaybackVerifiedAt:   p.PlaybackVerifiedAt,
 		}, nil
 	}
 	legacy := h.publicNodeURLs()[name]
@@ -186,13 +341,22 @@ func (h *Handler) publicationStatus(ctx context.Context, uid, name string) (publ
 			Status: storage.PublicationPublished, WorkflowState: storage.PublicationPublished, Reason: "public_entry_configured",
 			PublicURL: legacy, NOSLAStatus: "synced", BWGStatus: "synced",
 			AdapterRegistered: h.publicationSyncer != nil,
+			PlaybackStatus:    "unverified",
 		}, nil
 	}
 	return publicationStatusView{
 		Status: storage.PublicationSavedUnpublished, WorkflowState: storage.PublicationSavedUnpublished, Reason: "no_edge_route_configured",
 		NOSLAStatus: "not_configured", BWGStatus: "not_configured",
 		AdapterRegistered: h.publicationSyncer != nil,
+		PlaybackStatus:    "not_published",
 	}, nil
+}
+
+func playbackPublicationStatus(status string) string {
+	if status == storage.PublicationPublished {
+		return "unverified"
+	}
+	return "not_published"
 }
 
 func publicationWorkflowState(status, reason string) string {
@@ -218,10 +382,15 @@ func publicationRecord(uid string, plan PublicationPlan, status, reason, step st
 	if sync.BWG.Status == "" {
 		sync.BWG.Status = "unknown"
 	}
+	playbackStatus := "not_published"
+	if status == storage.PublicationPublished {
+		playbackStatus = "unverified"
+	}
 	return storage.Publication{
 		UID: uid, NodeName: plan.NodeName, RouteSlug: plan.RouteSlug, PublicURL: "",
 		Status: status, Reason: reason, FailedStep: step,
-		NOSLAStatus: sync.NOSLA.Status, BWGStatus: sync.BWG.Status, UpdatedAt: time.Now().Unix(),
+		NOSLAStatus: sync.NOSLA.Status, BWGStatus: sync.BWG.Status,
+		PlaybackStatus: playbackStatus, UpdatedAt: time.Now().Unix(),
 	}
 }
 
@@ -368,14 +537,62 @@ func (h *Handler) handlePublicationAPI(w http.ResponseWriter, r *http.Request, p
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "publication": status})
 		return
 	}
-	if r.Method != http.MethodPost || (action != "publish" && action != "unpublish" && action != "publish/dry-run" && action != "publish/reconcile" && action != "publish/cleanup" && action != "verify-proxy") {
+	if r.Method != http.MethodPost || (action != "publish" && action != "unpublish" && action != "publish/dry-run" && action != "publish/reconcile" && action != "publish/cleanup" && action != "verify-proxy" && action != "playback-verify" && action != "playback-canary") {
 		w.Header().Set("Allow", "GET, POST")
 		http.NotFound(w, r)
 		return
 	}
-	if action == "publish" || action == "unpublish" || action == "publish/reconcile" || action == "publish/cleanup" {
+	if action == "publish" || action == "unpublish" || action == "publish/reconcile" || action == "publish/cleanup" || action == "playback-verify" || action == "playback-canary" {
 		h.publicationMu.Lock()
 		defer h.publicationMu.Unlock()
+	}
+	if action == "playback-verify" {
+		writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "reason": "PLAYBACK_CANARY_REQUIRED", "failed_step": "playback_canary"})
+		return
+	}
+	if action == "playback-canary" {
+		if planErr != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "reason": planErr.Error(), "failed_step": "plan"})
+			return
+		}
+		status, statusErr := h.publicationStatus(ctx, uid, name)
+		if statusErr != nil || status.Status != storage.PublicationPublished || status.NOSLAStatus != "synced" || status.BWGStatus != "synced" {
+			writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "reason": "PLAYBACK_CANARY_REQUIRES_SYNCED_PUBLICATION", "failed_step": "state_guard"})
+			return
+		}
+		canary, ok := h.publicationSyncer.(publicationPlaybackCanary)
+		if !ok {
+			writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "reason": "PLAYBACK_CANARY_UNAVAILABLE", "failed_step": "edge_adapter"})
+			return
+		}
+		var body struct {
+			ItemID      string `json:"item_id"`
+			AccessToken string `json:"access_token"`
+		}
+		decoder := json.NewDecoder(io.LimitReader(r.Body, 16<<10))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&body); err != nil || strings.TrimSpace(body.ItemID) == "" || strings.TrimSpace(body.AccessToken) == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "reason": "PLAYBACK_CANARY_INPUT_INVALID", "failed_step": "input"})
+			return
+		}
+		result, canaryErr := canary.PlaybackCanary(ctx, plan, PlaybackCanaryInput{ItemID: body.ItemID, AccessToken: body.AccessToken})
+		body.AccessToken = ""
+		if canaryErr != nil || result.Status != "healthy" {
+			failureClass := result.FailureClass
+			if failureClass == "" {
+				failureClass = "transport_failure"
+			}
+			_ = h.store.SetPublicationPlaybackFailed(ctx, uid, name, failureClass, time.Now().Unix())
+			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "playback_status": "failed", "canary": result})
+			return
+		}
+		verifiedAt := time.Now().Unix()
+		if err := h.store.SetPublicationPlaybackVerified(ctx, uid, name, verifiedAt); err != nil {
+			writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "reason": "PLAYBACK_VERIFICATION_REQUIRES_SYNCED_PUBLICATION", "failed_step": "state_guard"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "playback_status": "healthy", "playback_verified_at": verifiedAt, "canary": result})
+		return
 	}
 	if action == "publish/reconcile" || action == "publish/cleanup" {
 		if planErr != nil {
@@ -459,7 +676,49 @@ func (h *Handler) handlePublicationAPI(w http.ResponseWriter, r *http.Request, p
 			return
 		}
 		if current.Status == storage.PublicationPublished {
-			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "status": current.Status, "publication": current})
+			stored, readErr := h.store.GetPublication(ctx, uid, name)
+			if readErr != nil || stored == nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "status": storage.PublicationFailed, "reason": "PUBLICATION_STATUS_FAILED", "failed_step": "state_read"})
+				return
+			}
+			if h.publicationSyncer == nil {
+				writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "status": current.Status, "reason": "edge_sync_unavailable", "failed_step": "edge_sync"})
+				return
+			}
+			pending := *stored
+			pending.Status = storage.PublicationPublishing
+			pending.Reason = "configuration_refresh_in_progress"
+			pending.FailedStep = ""
+			pending.NOSLAStatus, pending.BWGStatus = "pending", "pending"
+			pending.UpdatedAt = time.Now().Unix()
+			if err := h.store.SavePublication(ctx, pending); err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "status": current.Status, "reason": "PUBLICATION_STATE_WRITE_FAILED", "failed_step": "db_write"})
+				return
+			}
+			result, syncErr := h.publicationSyncer.Publish(ctx, plan)
+			if syncErr != nil || result.NOSLA.Status != "synced" || result.BWG.Status != "synced" {
+				failed := *stored
+				failed.Reason = result.Reason
+				if failed.Reason == "" {
+					failed.Reason = "configuration_refresh_failed"
+				}
+				failed.FailedStep = result.FailedStep
+				failed.UpdatedAt = time.Now().Unix()
+				_ = h.store.SavePublication(ctx, failed)
+				writeJSON(w, http.StatusOK, map[string]any{"ok": false, "status": failed.Status, "reason": failed.Reason, "failed_step": failed.FailedStep, "publication": failed})
+				return
+			}
+			refreshed := *stored
+			refreshed.Reason = "public_entry_configured"
+			refreshed.FailedStep = ""
+			refreshed.NOSLAStatus, refreshed.BWGStatus = "synced", "synced"
+			refreshed.PlaybackStatus, refreshed.PlaybackFailureClass, refreshed.PlaybackVerifiedAt = "unverified", "", 0
+			refreshed.UpdatedAt = time.Now().Unix()
+			if err := h.store.SavePublication(ctx, refreshed); err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "status": current.Status, "reason": "PUBLICATION_STATE_WRITE_FAILED", "failed_step": "db_write"})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "status": refreshed.Status, "reason": "configuration_refreshed", "publication": refreshed})
 			return
 		}
 		rawPublication, rawErr := h.store.GetPublication(ctx, uid, name)
@@ -509,7 +768,7 @@ func (h *Handler) handlePublicationAPI(w http.ResponseWriter, r *http.Request, p
 			return
 		}
 		stagedRoute := storage.ManagedRoute{Slug: plan.RouteSlug, NodeName: plan.NodeName, Enabled: false, Public: false, DefaultLine: "main"}
-		stagedLines := []storage.ManagedRouteLine{{RouteSlug: plan.RouteSlug, LineSlug: "main", Target: plan.TargetURL, Enabled: true, Position: 1}}
+		stagedLines := publicationManagedLines(plan)
 		if err := h.store.SaveManagedRoute(ctx, stagedRoute, stagedLines); err != nil {
 			failed := publicationRecord(uid, plan, storage.PublicationFailed, "managed_route_write_failed", "db_write", PublicationSyncResult{NOSLA: PublicationEdgeResult{Status: "pending"}, BWG: PublicationEdgeResult{Status: "pending"}})
 			_ = h.store.SavePublication(ctx, failed)

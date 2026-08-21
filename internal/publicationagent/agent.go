@@ -107,6 +107,8 @@ func (a *Agent) Handle(ctx context.Context, request publicationprotocol.Request)
 		return a.publish(ctx, manifest)
 	case publicationprotocol.ActionUnpublish:
 		return a.unpublish(ctx, manifest)
+	case publicationprotocol.ActionPlaybackCanary:
+		return a.runPlaybackCanary(ctx, request, manifest)
 	default:
 		return protocolFailure("edge_adapter_request_invalid", "request_validation")
 	}
@@ -117,7 +119,14 @@ func validateRequest(request publicationprotocol.Request) error {
 		proxyadapter.ValidateManagedRouteSlug(request.NodeName) != nil {
 		return errors.New("edge_adapter_request_invalid")
 	}
-	if request.Action != publicationprotocol.ActionCheck && request.Action != publicationprotocol.ActionPublish && request.Action != publicationprotocol.ActionUnpublish {
+	if request.Action != publicationprotocol.ActionCheck && request.Action != publicationprotocol.ActionPublish && request.Action != publicationprotocol.ActionUnpublish && request.Action != publicationprotocol.ActionPlaybackCanary {
+		return errors.New("edge_adapter_request_invalid")
+	}
+	if request.Action == publicationprotocol.ActionPlaybackCanary {
+		if request.PlaybackCanary == nil {
+			return errors.New("edge_adapter_request_invalid")
+		}
+	} else if request.PlaybackCanary != nil {
 		return errors.New("edge_adapter_request_invalid")
 	}
 	if request.OperationID == "" || len(request.OperationID) > 64 {
@@ -147,52 +156,129 @@ func (a *Agent) manifestFromDatabase(ctx context.Context, request publicationpro
 		return publicationprotocol.EdgeManifest{}, errors.New("upstream_invalid")
 	}
 	targets := storage.SplitTargets(node.Target)
-	if len(targets) != 1 {
+	if len(targets) == 0 || len(targets) > 16 {
 		return publicationprotocol.EdgeManifest{}, errors.New("upstream_invalid")
 	}
-	parsed, err := url.Parse(targets[0])
-	if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return publicationprotocol.EdgeManifest{}, errors.New("upstream_invalid")
-	}
-	host := strings.ToLower(parsed.Hostname())
-	if !safeHostname(host) || host == a.config.PublicMediaHost || host == a.config.OwnerAdminHost {
-		return publicationprotocol.EdgeManifest{}, errors.New("upstream_invalid")
-	}
-	port := 443
-	if parsed.Port() != "" {
-		port, err = strconv.Atoi(parsed.Port())
-		if err != nil || port < 1 || port > 65535 {
+	routes := make([]publicationprotocol.EdgeRoute, 0, len(targets)+len(a.config.RedirectHosts[request.RouteSlug])+len(a.config.RedirectEndpoints[request.RouteSlug])+len(a.config.RedirectPatterns[request.RouteSlug]))
+	seenHosts := map[string]bool{}
+	for index, target := range targets {
+		parsed, parseErr := url.Parse(target)
+		if parseErr != nil || parsed.Scheme != "https" || parsed.Hostname() == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
 			return publicationprotocol.EdgeManifest{}, errors.New("upstream_invalid")
 		}
+		host := strings.ToLower(parsed.Hostname())
+		if !safeHostname(host) || host == a.config.PublicMediaHost || host == a.config.OwnerAdminHost {
+			return publicationprotocol.EdgeManifest{}, errors.New("upstream_invalid")
+		}
+		port := 443
+		if parsed.Port() != "" {
+			port, err = strconv.Atoi(parsed.Port())
+			if err != nil || port < 1 || port > 65535 {
+				return publicationprotocol.EdgeManifest{}, errors.New("upstream_invalid")
+			}
+		}
+		basePath := strings.Trim(path.Clean(parsed.EscapedPath()), "/.")
+		routes = append(routes, publicationprotocol.EdgeRoute{
+			LineID: publicationLineID(index), Scheme: "https", Host: host, Port: port, BasePath: basePath,
+			Kind: "upstream", Position: index + 1,
+		})
+		seenHosts["https://"+host+":"+strconv.Itoa(port)+"/"+basePath] = true
 	}
-	basePath := strings.Trim(path.Clean(parsed.EscapedPath()), "/.")
+	redirectIndex := 0
+	appendRedirect := func(endpoint RedirectEndpoint) {
+		scheme := strings.ToLower(strings.TrimSpace(endpoint.Scheme))
+		host := strings.ToLower(strings.TrimSpace(endpoint.Host))
+		basePath := strings.TrimSpace(endpoint.PathPrefix)
+		key := scheme + "://" + host + ":" + strconv.Itoa(endpoint.Port) + "/" + basePath
+		if seenHosts[key] {
+			return
+		}
+		seenHosts[key] = true
+		redirectIndex++
+		routes = append(routes, publicationprotocol.EdgeRoute{
+			LineID: fmt.Sprintf("redirect-%d", redirectIndex), Scheme: scheme, Host: host, Port: endpoint.Port,
+			BasePath: basePath, Kind: "redirect", Position: len(targets) + redirectIndex,
+		})
+	}
+	for _, rawHost := range a.config.RedirectHosts[request.RouteSlug] {
+		host := strings.ToLower(strings.TrimSpace(rawHost))
+		appendRedirect(RedirectEndpoint{Scheme: "https", Host: host, Port: 443})
+	}
+	for _, endpoint := range a.config.RedirectEndpoints[request.RouteSlug] {
+		appendRedirect(endpoint)
+	}
+	if discovered, loadErr := a.loadDiscoveredEndpoints(); loadErr != nil {
+		return publicationprotocol.EdgeManifest{}, errors.New("redirect_store_invalid")
+	} else {
+		for _, endpoint := range discovered[request.RouteSlug] {
+			appendRedirect(endpoint)
+		}
+	}
+	patternIndex := 0
+	for _, pattern := range a.config.RedirectPatterns[request.RouteSlug] {
+		patternIndex++
+		routes = append(routes, publicationprotocol.EdgeRoute{
+			LineID: fmt.Sprintf("redirect-pattern-%d", patternIndex), Scheme: strings.ToLower(strings.TrimSpace(pattern.Scheme)),
+			HostSuffix: strings.ToLower(strings.TrimSpace(pattern.Suffix)), LabelLength: pattern.LabelLength, Port: pattern.Port,
+			Kind: "redirect_pattern", Position: len(targets) + redirectIndex + patternIndex,
+		})
+	}
+	primary := routes[0]
 	manifest := publicationprotocol.EdgeManifest{
 		Version: publicationprotocol.Version, Action: request.Action, OperationID: request.OperationID,
-		Slug: request.RouteSlug, UpstreamHost: host, UpstreamPort: port, BasePath: basePath,
+		Slug: request.RouteSlug, UpstreamHost: primary.Host, UpstreamPort: primary.Port, BasePath: primary.BasePath,
+		Routes: routes,
 	}
 	if request.Action == publicationprotocol.ActionPublish {
-		if err := validateStagedRoute(ctx, database, request.RouteSlug, targets[0]); err != nil {
+		if err := validateStagedRoute(ctx, database, request.RouteSlug, targets); err != nil {
 			return publicationprotocol.EdgeManifest{}, err
 		}
 	}
 	return manifest, nil
 }
 
-func validateStagedRoute(ctx context.Context, database *sql.DB, slug, target string) error {
-	var nodeName, lineTarget string
-	var enabled, public, lineEnabled, position int
+func validateStagedRoute(ctx context.Context, database *sql.DB, slug string, targets []string) error {
+	var nodeName, defaultLine string
+	var enabled, public int
 	err := database.QueryRowContext(ctx, `
-SELECT r.node_name, r.enabled, r.public, l.target, l.enabled, l.position
-FROM managed_routes r JOIN managed_route_lines l ON l.route_slug = r.slug
-WHERE r.slug = ? AND l.line_slug = 'main'`, slug).Scan(&nodeName, &enabled, &public, &lineTarget, &lineEnabled, &position)
-	if err != nil || nodeName != slug || enabled != 0 || public != 0 || lineEnabled != 1 || position != 1 || lineTarget != target {
+SELECT node_name, enabled, public, default_line FROM managed_routes WHERE slug = ?`, slug).
+		Scan(&nodeName, &enabled, &public, &defaultLine)
+	if err != nil || nodeName != slug || defaultLine != "main" || !((enabled == 0 && public == 0) || (enabled == 1 && public == 1)) {
+		return errors.New("managed_route_stage_invalid")
+	}
+	rows, err := database.QueryContext(ctx, `
+SELECT line_slug, target, enabled, position FROM managed_route_lines
+WHERE route_slug = ? ORDER BY position, line_slug`, slug)
+	if err != nil {
+		return errors.New("managed_route_stage_invalid")
+	}
+	defer rows.Close()
+	index := 0
+	for rows.Next() {
+		var lineID, target string
+		var lineEnabled, position int
+		if rows.Scan(&lineID, &target, &lineEnabled, &position) != nil || index >= len(targets) ||
+			lineID != publicationLineID(index) || target != targets[index] || lineEnabled != 1 || position != index+1 {
+			return errors.New("managed_route_stage_invalid")
+		}
+		index++
+	}
+	if rows.Err() != nil || index != len(targets) {
 		return errors.New("managed_route_stage_invalid")
 	}
 	var publicationStatus string
-	if err := database.QueryRowContext(ctx, `SELECT status FROM emby_publications WHERE uid='admin' AND node_name=?`, slug).Scan(&publicationStatus); err != nil || publicationStatus != storage.PublicationPublishing {
+	if err := database.QueryRowContext(ctx, `SELECT status FROM emby_publications WHERE uid='admin' AND node_name=?`, slug).Scan(&publicationStatus); err != nil ||
+		(publicationStatus != storage.PublicationPublishing && publicationStatus != storage.PublicationPublished) {
 		return errors.New("publication_state_invalid")
 	}
 	return nil
+}
+
+func publicationLineID(index int) string {
+	if index == 0 {
+		return "main"
+	}
+	return fmt.Sprintf("backup-%d", index+1)
 }
 
 func (a *Agent) check(ctx context.Context, manifest publicationprotocol.EdgeManifest) publicationprotocol.Response {

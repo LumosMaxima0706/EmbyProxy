@@ -4,8 +4,9 @@
   "allowed_peer_uid": 0,
   "local_helper_path": "/usr/local/sbin/embyproxy-publication-edge",
   "bwg_config_path": "/etc/embyproxy-publication-agent/edge-bwg.json",
-  "public_media_host": "stream.149077530.xyz",
-  "owner_admin_host": "owner-admin.149077530.xyz",
+  "public_media_host": "stream.example.invalid",
+  "owner_admin_host": "owner-admin.example.invalid",
+  "discovered_endpoints_path": "/var/lib/embyproxy-publication-agent/redirect-endpoints.json",
   "nosla": {
     "user": "publication-agent",
     "host": "nosla.example.invalid",

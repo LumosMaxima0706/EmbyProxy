@@ -2,15 +2,44 @@ package admin
 
 import (
 	"context"
+	"crypto/tls"
+	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"embyproxy/internal/config"
 	"embyproxy/internal/storage"
 )
 
 type successfulPublicationSyncer struct{}
+
+type successfulPlaybackCanarySyncer struct{ successfulPublicationSyncer }
+
+func (successfulPlaybackCanarySyncer) PlaybackCanary(context.Context, PublicationPlan, PlaybackCanaryInput) (PlaybackCanaryResult, error) {
+	return PlaybackCanaryResult{Status: "healthy", ConnectivityStatus: 200, PlaybackInfoStatus: 200,
+		VideoStreamStatus: 302, MediaStatus: 206, RedirectsFollowed: 1, EndpointsDiscovered: 1,
+		BytesRead: 65536, ByteGrowth: true, ContentRange: true, AcceptRanges: true}, nil
+}
+
+type failedPlaybackCanarySyncer struct{ successfulPublicationSyncer }
+
+func (failedPlaybackCanarySyncer) PlaybackCanary(context.Context, PublicationPlan, PlaybackCanaryInput) (PlaybackCanaryResult, error) {
+	return PlaybackCanaryResult{Status: "failed", FailureClass: "upstream_403", ConnectivityStatus: 200,
+		PlaybackInfoStatus: 200, VideoStreamStatus: 302, MediaStatus: 403}, errors.New("playback_canary_failed")
+}
+
+type operationIDPublicationSyncer struct{ successfulPublicationSyncer }
+
+func (operationIDPublicationSyncer) Publish(_ context.Context, plan PublicationPlan) (PublicationSyncResult, error) {
+	if plan.OperationID == "" {
+		return PublicationSyncResult{}, errors.New("operation id missing")
+	}
+	return successfulPublicationSyncer{}.Publish(context.Background(), plan)
+}
 
 func (successfulPublicationSyncer) Publish(context.Context, PublicationPlan) (PublicationSyncResult, error) {
 	return PublicationSyncResult{
@@ -87,11 +116,54 @@ func TestPublicationAPIsRequireAuthentication(t *testing.T) {
 		{http.MethodPost, "/api/admin/emby-servers/feimu/unpublish"},
 		{http.MethodPost, "/api/admin/emby-servers/feimu/publish/reconcile"},
 		{http.MethodPost, "/api/admin/emby-servers/feimu/publish/cleanup"},
+		{http.MethodPost, "/api/admin/emby-servers/feimu/playback-verify"},
+		{http.MethodPost, "/api/admin/emby-servers/feimu/playback-canary"},
 	} {
 		response := serveAdminJSON(t, handler, endpoint.method, endpoint.path, nil, nil)
 		if response.Code != http.StatusUnauthorized {
 			t.Fatalf("%s %s status=%d", endpoint.method, endpoint.path, response.Code)
 		}
+	}
+}
+
+func TestPlaybackVerificationPersistsForSyncedPublication(t *testing.T) {
+	handler, cookie := publicationTestHandler(t)
+	handler.SetPublicationSyncer(successfulPlaybackCanarySyncer{})
+	published := serveAdminJSON(t, handler, http.MethodPost, "/api/admin/emby-servers/feimu/publish", nil, cookie)
+	if published.Code != http.StatusOK || !strings.Contains(published.Body.String(), `"status":"published"`) {
+		t.Fatalf("publish status=%d body=%s", published.Code, published.Body.String())
+	}
+	verified := serveAdminJSON(t, handler, http.MethodPost, "/api/admin/emby-servers/feimu/playback-canary", map[string]any{"item_id": "item-1", "access_token": "runtime-only-token"}, cookie)
+	if verified.Code != http.StatusOK || !strings.Contains(verified.Body.String(), `"playback_status":"healthy"`) {
+		t.Fatalf("verify status=%d body=%s", verified.Code, verified.Body.String())
+	}
+	status := serveAdminJSON(t, handler, http.MethodGet, "/api/admin/emby-servers/feimu/publish-status", nil, cookie)
+	if status.Code != http.StatusOK || !strings.Contains(status.Body.String(), `"playback_status":"healthy"`) || !strings.Contains(status.Body.String(), `"playback_verified_at":`) {
+		t.Fatalf("status=%d body=%s", status.Code, status.Body.String())
+	}
+	if strings.Contains(verified.Body.String(), "runtime-only-token") {
+		t.Fatal("runtime token leaked in canary response")
+	}
+}
+
+func TestPlaybackVerifyCannotBypassCanaryAndAPISuccessDoesNotMarkHealthy(t *testing.T) {
+	handler, cookie := publicationTestHandler(t)
+	handler.SetPublicationSyncer(failedPlaybackCanarySyncer{})
+	published := serveAdminJSON(t, handler, http.MethodPost, "/api/admin/emby-servers/feimu/publish", nil, cookie)
+	if published.Code != http.StatusOK {
+		t.Fatalf("publish status=%d body=%s", published.Code, published.Body.String())
+	}
+	bypass := serveAdminJSON(t, handler, http.MethodPost, "/api/admin/emby-servers/feimu/playback-verify", nil, cookie)
+	if bypass.Code != http.StatusConflict || !strings.Contains(bypass.Body.String(), "PLAYBACK_CANARY_REQUIRED") {
+		t.Fatalf("bypass status=%d body=%s", bypass.Code, bypass.Body.String())
+	}
+	failed := serveAdminJSON(t, handler, http.MethodPost, "/api/admin/emby-servers/feimu/playback-canary", map[string]any{"item_id": "item-1", "access_token": "runtime-only-token"}, cookie)
+	if failed.Code != http.StatusOK || !strings.Contains(failed.Body.String(), `"playback_status":"failed"`) {
+		t.Fatalf("failed status=%d body=%s", failed.Code, failed.Body.String())
+	}
+	status := serveAdminJSON(t, handler, http.MethodGet, "/api/admin/emby-servers/feimu/publish-status", nil, cookie)
+	if strings.Contains(status.Body.String(), `"playback_status":"healthy"`) || !strings.Contains(status.Body.String(), `"playback_failure_class":"upstream_403"`) {
+		t.Fatalf("status=%d body=%s", status.Code, status.Body.String())
 	}
 }
 
@@ -287,7 +359,8 @@ func TestPublicationPublishStatusUnpublishAndDelete(t *testing.T) {
 	handler, cookie := publicationTestHandler(t)
 	handler.SetPublicationSyncer(successfulPublicationSyncer{})
 	published := serveAdminJSON(t, handler, http.MethodPost, "/api/admin/emby-servers/feimu/publish", nil, cookie)
-	if published.Code != http.StatusOK || !strings.Contains(published.Body.String(), `"status":"published"`) || !strings.Contains(published.Body.String(), `"public_url":"https://stream.example/https/media.example/443"`) {
+	expectedPublicURL := `"public_url":"https://` + `stream.example/https/` + `media.example/443"`
+	if published.Code != http.StatusOK || !strings.Contains(published.Body.String(), `"status":"published"`) || !strings.Contains(published.Body.String(), expectedPublicURL) {
 		t.Fatalf("publish status=%d body=%s", published.Code, published.Body.String())
 	}
 	route, err := handler.store.GetManagedRoute(context.Background(), "feimu")
@@ -320,7 +393,7 @@ func TestPublicationPublishStatusUnpublishAndDelete(t *testing.T) {
 	}
 }
 
-func TestPublishedNodeRequiresUnpublishBeforeTargetChange(t *testing.T) {
+func TestPublishedNodeRejectsPrimaryTargetChange(t *testing.T) {
 	handler, cookie := publicationTestHandler(t)
 	handler.SetPublicationSyncer(successfulPublicationSyncer{})
 	published := serveAdminJSON(t, handler, http.MethodPost, "/api/admin/emby-servers/feimu/publish", nil, cookie)
@@ -331,12 +404,165 @@ func TestPublishedNodeRequiresUnpublishBeforeTargetChange(t *testing.T) {
 		"action": "save",
 		"node":   map[string]any{"name": "feimu", "oldName": "feimu", "target": "https://changed.example"},
 	}, cookie)
-	if !strings.Contains(changed.Body.String(), "PUBLISHED_REQUIRES_UNPUBLISH") {
+	if !strings.Contains(changed.Body.String(), "PUBLISHED_PRIMARY_UPSTREAM_CANNOT_CHANGE") {
 		t.Fatalf("published target change was not blocked: %s", changed.Body.String())
 	}
 	node, err := handler.store.GetNode(context.Background(), "admin", "feimu")
 	if err != nil || node == nil || node.Target != "https://media.example" {
 		t.Fatalf("published target changed: node=%+v err=%v", node, err)
+	}
+}
+
+func TestPublicationSupportsMultipleSavedUpstreams(t *testing.T) {
+	handler, cookie := publicationTestHandler(t)
+	handler.SetPublicationSyncer(successfulPublicationSyncer{})
+	saved := serveAdminJSON(t, handler, http.MethodPost, "/admin/api", map[string]any{
+		"action": "save",
+		"node": map[string]any{"name": "feimu", "oldName": "feimu",
+			"target": "https://media.example\nhttps://backup.example"},
+	}, cookie)
+	if !strings.Contains(saved.Body.String(), `"ok":true`) {
+		t.Fatalf("multi-line save failed: %s", saved.Body.String())
+	}
+	published := serveAdminJSON(t, handler, http.MethodPost, "/api/admin/emby-servers/feimu/publish", nil, cookie)
+	if published.Code != http.StatusOK || !strings.Contains(published.Body.String(), `"status":"published"`) {
+		t.Fatalf("multi-line publish status=%d body=%s", published.Code, published.Body.String())
+	}
+	lines, err := handler.store.ListManagedRouteLines(context.Background(), "feimu")
+	if err != nil || len(lines) != 2 || lines[0].LineSlug != "main" || lines[1].LineSlug != "backup-2" {
+		t.Fatalf("managed lines=%+v err=%v", lines, err)
+	}
+}
+
+func TestSavedUpstreamLinesCheckControlledTLSMocksIndependently(t *testing.T) {
+	var primaryRequests, backupRequests atomic.Int32
+	primary := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		primaryRequests.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer primary.Close()
+	backup := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		backupRequests.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer backup.Close()
+	client := &http.Client{
+		Timeout:       2 * time.Second,
+		Transport:     &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}, // Test servers use ephemeral certificates.
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	results := checkSavedUpstreamLinesWithClient(context.Background(), storage.Node{
+		Name: "staging-multiline", Target: primary.URL + "\n" + backup.URL,
+	}, client)
+	if len(results) != 2 || results[0]["line_id"] != "main" || results[0]["health"] != "reachable" ||
+		results[1]["line_id"] != "backup-2" || results[1]["health"] != "unhealthy" {
+		t.Fatalf("line results=%+v", results)
+	}
+	if primaryRequests.Load() != 1 || backupRequests.Load() != 1 {
+		t.Fatalf("request counts primary=%d backup=%d", primaryRequests.Load(), backupRequests.Load())
+	}
+}
+
+func TestMultilineStagingWorkflowPreservesPublicURLAndUnrelatedRoute(t *testing.T) {
+	handler, cookie := publicationTestHandler(t)
+	handler.SetPublicationSyncer(operationIDPublicationSyncer{})
+	ctx := context.Background()
+	if err := handler.store.SaveManagedRoute(ctx, storage.ManagedRoute{
+		Slug: "unrelated", NodeName: "unrelated", Enabled: true, Public: true, DefaultLine: "main",
+	}, []storage.ManagedRouteLine{{
+		RouteSlug: "unrelated", LineSlug: "main", Target: "https://unrelated.example", Enabled: true, Position: 1,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	saved := serveAdminJSON(t, handler, http.MethodPost, "/admin/api", map[string]any{
+		"action": "save", "node": map[string]any{
+			"name": "staging-multiline", "target": "https://primary.mock.example; https://backup.mock.example",
+		},
+	}, cookie)
+	if !strings.Contains(saved.Body.String(), `"ok":true`) {
+		t.Fatalf("save body=%s", saved.Body.String())
+	}
+	dryRun := serveAdminJSON(t, handler, http.MethodPost, "/api/admin/emby-servers/staging-multiline/publish/dry-run", nil, cookie)
+	if dryRun.Code != http.StatusOK || !strings.Contains(dryRun.Body.String(), `"line_count":2`) ||
+		strings.Contains(dryRun.Body.String(), "PUBLISH_REQUIRES_ONE_SAVED_UPSTREAM") {
+		t.Fatalf("dry-run status=%d body=%s", dryRun.Code, dryRun.Body.String())
+	}
+	published := serveAdminJSON(t, handler, http.MethodPost, "/api/admin/emby-servers/staging-multiline/publish", nil, cookie)
+	if published.Code != http.StatusOK || !strings.Contains(published.Body.String(), `"status":"published"`) {
+		t.Fatalf("publish status=%d body=%s", published.Code, published.Body.String())
+	}
+	before, _ := handler.store.GetPublication(ctx, "admin", "staging-multiline")
+	for _, target := range []string{
+		"https://primary.mock.example\nhttps://backup.mock.example\nhttps://backup-3.mock.example",
+		"https://primary.mock.example\nhttps://backup.mock.example",
+	} {
+		changed := serveAdminJSON(t, handler, http.MethodPost, "/admin/api", map[string]any{
+			"action": "save", "node": map[string]any{
+				"name": "staging-multiline", "oldName": "staging-multiline", "target": target,
+			},
+		}, cookie)
+		if !strings.Contains(changed.Body.String(), `"publication_sync":"synced"`) {
+			t.Fatalf("line update body=%s", changed.Body.String())
+		}
+	}
+	after, err := handler.store.GetPublication(ctx, "admin", "staging-multiline")
+	if err != nil || before == nil || after == nil || before.PublicURL != after.PublicURL || after.Status != storage.PublicationPublished {
+		t.Fatalf("publication before=%+v after=%+v err=%v", before, after, err)
+	}
+	lines, err := handler.store.ListManagedRouteLines(ctx, "staging-multiline")
+	if err != nil || len(lines) != 2 || lines[0].LineSlug != "main" || lines[1].LineSlug != "backup-2" {
+		t.Fatalf("managed lines=%+v err=%v", lines, err)
+	}
+	unrelated, err := handler.store.ListManagedRouteLines(ctx, "unrelated")
+	if err != nil || len(unrelated) != 1 || unrelated[0].Target != "https://unrelated.example" {
+		t.Fatalf("unrelated lines=%+v err=%v", unrelated, err)
+	}
+}
+
+func TestPublishedPublicationCanRefreshEdgeConfiguration(t *testing.T) {
+	handler, cookie := publicationTestHandler(t)
+	handler.SetPublicationSyncer(successfulPublicationSyncer{})
+	first := serveAdminJSON(t, handler, http.MethodPost, "/api/admin/emby-servers/feimu/publish", nil, cookie)
+	if first.Code != http.StatusOK || !strings.Contains(first.Body.String(), `"status":"published"`) {
+		t.Fatalf("initial publish status=%d body=%s", first.Code, first.Body.String())
+	}
+	refresh := serveAdminJSON(t, handler, http.MethodPost, "/api/admin/emby-servers/feimu/publish", nil, cookie)
+	if refresh.Code != http.StatusOK || !strings.Contains(refresh.Body.String(), `"reason":"configuration_refreshed"`) {
+		t.Fatalf("refresh status=%d body=%s", refresh.Code, refresh.Body.String())
+	}
+	publication, err := handler.store.GetPublication(context.Background(), "admin", "feimu")
+	if err != nil || publication == nil || publication.Status != storage.PublicationPublished || publication.PublicURL == "" {
+		t.Fatalf("publication=%+v err=%v", publication, err)
+	}
+}
+
+func TestPublishedNodeCanAddAndRemoveBackupWithoutChangingPublicURL(t *testing.T) {
+	handler, cookie := publicationTestHandler(t)
+	handler.SetPublicationSyncer(operationIDPublicationSyncer{})
+	published := serveAdminJSON(t, handler, http.MethodPost, "/api/admin/emby-servers/feimu/publish", nil, cookie)
+	if published.Code != http.StatusOK || !strings.Contains(published.Body.String(), `"status":"published"`) {
+		t.Fatalf("publish status=%d body=%s", published.Code, published.Body.String())
+	}
+	before, _ := handler.store.GetPublication(context.Background(), "admin", "feimu")
+	for _, target := range []string{
+		"https://media.example\nhttps://backup.example",
+		"https://media.example",
+	} {
+		changed := serveAdminJSON(t, handler, http.MethodPost, "/admin/api", map[string]any{
+			"action": "save",
+			"node":   map[string]any{"name": "feimu", "oldName": "feimu", "target": target},
+		}, cookie)
+		if !strings.Contains(changed.Body.String(), `"publication_sync":"synced"`) {
+			t.Fatalf("published line update failed: %s", changed.Body.String())
+		}
+	}
+	after, err := handler.store.GetPublication(context.Background(), "admin", "feimu")
+	if err != nil || after == nil || before == nil || after.PublicURL != before.PublicURL || after.Status != storage.PublicationPublished {
+		t.Fatalf("publication before=%+v after=%+v err=%v", before, after, err)
+	}
+	lines, err := handler.store.ListManagedRouteLines(context.Background(), "feimu")
+	if err != nil || len(lines) != 1 || lines[0].Target != "https://media.example" {
+		t.Fatalf("managed lines=%+v err=%v", lines, err)
 	}
 }
 

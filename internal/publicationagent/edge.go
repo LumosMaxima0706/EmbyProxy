@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -67,6 +68,7 @@ func createOperationBackupDir(cfg EdgeConfig, manifest publicationprotocol.EdgeM
 
 func publishEdge(ctx context.Context, cfg EdgeConfig, manifest publicationprotocol.EdgeManifest, target, backupDir string) publicationprotocol.EdgeResult {
 	fragment := renderNginxFragment(cfg, manifest)
+	var previous []byte
 	if current, err := os.ReadFile(target); err == nil {
 		if bytes.Equal(current, fragment) {
 			if err := nginxTest(ctx, "/etc/nginx/nginx.conf"); err != nil {
@@ -74,7 +76,13 @@ func publishEdge(ctx context.Context, cfg EdgeConfig, manifest publicationprotoc
 			}
 			return publicationprotocol.EdgeResult{Status: "synced", BackupPath: backupDir}
 		}
-		return edgeFailure("route_conflict", "edge_route", backupDir)
+		if !bytes.HasPrefix(current, []byte("# embyproxy-publication slug="+manifest.Slug+"\n")) {
+			return edgeFailure("route_conflict", "edge_route", backupDir)
+		}
+		previous = current
+		if err := os.WriteFile(filepath.Join(backupDir, manifest.Slug+".conf"), current, 0600); err != nil {
+			return edgeFailure("backup_failed", "backup_write", backupDir)
+		}
 	} else if !os.IsNotExist(err) {
 		return edgeFailure("edge_config_read_failed", "edge_route", backupDir)
 	}
@@ -94,16 +102,25 @@ func publishEdge(ctx context.Context, cfg EdgeConfig, manifest publicationprotoc
 		return edgeFailure("edge_config_write_failed", "atomic_replace", backupDir)
 	}
 	if err := nginxTest(ctx, "/etc/nginx/nginx.conf"); err != nil {
-		_ = os.Remove(target)
+		restoreFragment(target, previous)
 		return edgeFailure("nginx_test_failed", "nginx_test", backupDir)
 	}
 	if err := reloadNginx(ctx); err != nil {
-		if rollbackErr := removeAndReload(ctx, target); rollbackErr != nil {
+		restoreFragment(target, previous)
+		if rollbackErr := nginxTest(ctx, "/etc/nginx/nginx.conf"); rollbackErr != nil || reloadNginx(ctx) != nil {
 			return edgeFailure("rollback_failed", "reload_rollback", backupDir)
 		}
 		return edgeFailure("reload_failed", "nginx_reload", backupDir)
 	}
 	return publicationprotocol.EdgeResult{Status: "synced", BackupPath: backupDir}
+}
+
+func restoreFragment(target string, previous []byte) {
+	if len(previous) == 0 {
+		_ = os.Remove(target)
+		return
+	}
+	_ = os.WriteFile(target, previous, 0640)
 }
 
 func unpublishEdge(ctx context.Context, cfg EdgeConfig, manifest publicationprotocol.EdgeManifest, target, backupDir string) publicationprotocol.EdgeResult {
@@ -155,6 +172,38 @@ func validateManifest(manifest publicationprotocol.EdgeManifest) error {
 	if manifest.BasePath != "" && (strings.HasPrefix(manifest.BasePath, "/") || strings.ContainsAny(manifest.BasePath, "?#\r\n") || strings.Contains(manifest.BasePath, "..")) {
 		return errors.New("edge_manifest_invalid")
 	}
+	routes := manifestRoutes(manifest)
+	if len(routes) == 0 || len(routes) > 32 {
+		return errors.New("edge_manifest_invalid")
+	}
+	seenPaths, seenLines := map[string]bool{}, map[string]bool{}
+	for index, route := range routes {
+		hostValid := safeHostname(route.Host)
+		if route.Kind == "redirect" {
+			hostValid = safeRedirectHost(route.Host)
+		}
+		patternValid := route.Kind == "redirect_pattern" && route.Host == "" && safeHostname(route.HostSuffix) && route.LabelLength >= 1 && route.LabelLength <= 16 && route.BasePath == ""
+		if (route.Scheme != "http" && route.Scheme != "https") || (!hostValid && !patternValid) || route.Port < 1 || route.Port > 65535 ||
+			(route.Kind != "upstream" && route.Kind != "redirect" && route.Kind != "redirect_pattern") ||
+			route.LineID == "" || len(route.LineID) > 64 || strings.ContainsAny(route.LineID, " /\\.\t\r\n") ||
+			route.Position < 1 || route.Position > 64 || seenLines[route.LineID] {
+			return errors.New("edge_manifest_invalid")
+		}
+		if route.BasePath != "" && (strings.HasPrefix(route.BasePath, "/") || strings.ContainsAny(route.BasePath, "?#\r\n") || strings.Contains(route.BasePath, "..")) {
+			return errors.New("edge_manifest_invalid")
+		}
+		key := route.Scheme + "://" + route.Host + ":" + strconv.Itoa(route.Port) + "/" + route.BasePath
+		if route.Kind == "redirect_pattern" {
+			key = route.Scheme + "://pattern/" + route.HostSuffix + ":" + strconv.Itoa(route.Port) + "/" + strconv.Itoa(route.LabelLength)
+		}
+		if seenPaths[key] {
+			return errors.New("edge_manifest_invalid")
+		}
+		seenPaths[key], seenLines[route.LineID] = true, true
+		if index == 0 && (route.Scheme != "https" || route.Host != manifest.UpstreamHost || route.Port != manifest.UpstreamPort || route.BasePath != manifest.BasePath || route.Kind != "upstream") {
+			return errors.New("edge_manifest_invalid")
+		}
+	}
 	return nil
 }
 
@@ -174,15 +223,23 @@ func verifyIncludeHook(cfg EdgeConfig) error {
 }
 
 func renderNginxFragment(cfg EdgeConfig, manifest publicationprotocol.EdgeManifest) []byte {
-	publicPath := "/https/" + manifest.UpstreamHost + "/" + strconv.Itoa(manifest.UpstreamPort)
-	if manifest.BasePath != "" {
-		publicPath += "/" + manifest.BasePath
-	}
+	routes := manifestRoutes(manifest)
 	connectionUpgrade := "$stream_connection_upgrade"
 	if cfg.NodeName == "bwg" {
 		connectionUpgrade = "$stream_bwg_connection_upgrade"
 	}
-	block := func(location string) string {
+	absRedirects := renderAbsoluteRedirects(routes)
+	block := func(location, fallback, relativePath string) string {
+		fallbackDirectives := ""
+		if fallback != "" {
+			fallbackDirectives = "        proxy_intercept_errors on;\n        recursive_error_pages on;\n        error_page 403 404 416 429 500 502 503 504 = " + fallback + ";\n"
+		}
+		redirectDirectives := absRedirects
+		if relativePath != "" {
+			// Relative media redirects belong to the current allowlisted route.
+			// Already encoded /https/... locations are deliberately left intact.
+			redirectDirectives = "        proxy_redirect ~^/(?!https/)(.*)$ $scheme://$host" + relativePath + "/$1;\n" + redirectDirectives
+		}
 		return fmt.Sprintf(`    location %s {
         proxy_pass http://127.0.0.1:18080;
         proxy_http_version 1.1;
@@ -216,11 +273,104 @@ func renderNginxFragment(cfg EdgeConfig, manifest publicationprotocol.EdgeManife
         proxy_connect_timeout 15s;
         proxy_send_timeout 3600s;
         proxy_read_timeout 3600s;
+	%s%s
     }
-`, location, connectionUpgrade)
+	`, location, connectionUpgrade, fallbackDirectives, redirectDirectives)
 	}
-	return []byte("# embyproxy-publication slug=" + manifest.Slug + "\n" +
-		block("= "+publicPath) + block("^~ "+publicPath+"/"))
+	publicPath := func(route publicationprotocol.EdgeRoute) string {
+		value := "/" + route.Scheme + "/" + route.Host + "/" + strconv.Itoa(route.Port)
+		if route.BasePath != "" {
+			value += "/" + route.BasePath
+		}
+		return value
+	}
+	upstreams := make([]publicationprotocol.EdgeRoute, 0, len(routes))
+	for _, route := range routes {
+		if route.Kind == "upstream" {
+			upstreams = append(upstreams, route)
+		}
+	}
+	var result strings.Builder
+	result.WriteString("# embyproxy-publication slug=" + manifest.Slug + "\n")
+	for index, route := range routes {
+		if route.Kind == "redirect_pattern" {
+			// Nginx tokenizes an unquoted location regex before it sees `{n}`.
+			// Repeating the fixed class keeps the generated pattern literal and
+			// avoids introducing a regex string from configuration.
+			pattern := "^/" + route.Scheme + "/" + strings.Repeat("[a-z0-9]", route.LabelLength) + "\\." + regexp.QuoteMeta(route.HostSuffix) + "/" + strconv.Itoa(route.Port) + "(?:/|$)"
+			result.WriteString(block("~ "+pattern, "", ""))
+			continue
+		}
+		fallback := ""
+		if route.Kind == "upstream" && index == 0 && len(upstreams) > 1 {
+			fallback = "@embyproxy_" + manifest.Slug + "_backup_2"
+		}
+		path := publicPath(route)
+		result.WriteString(block("= "+path, fallback, path))
+		result.WriteString(block("^~ "+path+"/", fallback, path))
+	}
+	primaryPath := publicPath(upstreams[0])
+	for index := 1; index < len(upstreams); index++ {
+		next := ""
+		if index+1 < len(upstreams) {
+			next = "@embyproxy_" + manifest.Slug + "_backup_" + strconv.Itoa(index+2)
+		}
+		rewrite := "        rewrite ^" + regexp.QuoteMeta(primaryPath) + "(.*)$ " + publicPath(upstreams[index]) + "$1 break;\n"
+		// Named fallback locations rewrite only to a manifest-listed target,
+		// then use the same streaming proxy settings as normal locations.
+		named := block("@embyproxy_"+manifest.Slug+"_backup_"+strconv.Itoa(index+1), next, publicPath(upstreams[index]))
+		named = strings.Replace(named, "        proxy_pass http://127.0.0.1:18080;\n", rewrite+"        proxy_pass http://127.0.0.1:18080;\n", 1)
+		result.WriteString(named)
+	}
+	return []byte(result.String())
+}
+
+// renderAbsoluteRedirects rewrites only destinations that came from the
+// manifest. Manifest routes are assembled from saved upstreams and root-owned
+// redirect rules, so a response cannot create an arbitrary stream proxy path.
+// The replacement intentionally retains the upstream query in transit; access
+// logs use $uri and never record it.
+func renderAbsoluteRedirects(routes []publicationprotocol.EdgeRoute) string {
+	var result strings.Builder
+	publicPath := func(route publicationprotocol.EdgeRoute) string {
+		value := "/" + route.Scheme + "/" + route.Host + "/" + strconv.Itoa(route.Port)
+		if route.BasePath != "" {
+			value += "/" + route.BasePath
+		}
+		return value
+	}
+	portPattern := func(route publicationprotocol.EdgeRoute) string {
+		if (route.Scheme == "https" && route.Port == 443) || (route.Scheme == "http" && route.Port == 80) {
+			return "(?::" + strconv.Itoa(route.Port) + ")?"
+		}
+		return ":" + strconv.Itoa(route.Port)
+	}
+	for _, route := range routes {
+		switch route.Kind {
+		case "upstream", "redirect":
+			pathPrefix := ""
+			if route.BasePath != "" {
+				pathPrefix = "/" + regexp.QuoteMeta(route.BasePath)
+			}
+			pattern := "^" + route.Scheme + "://" + regexp.QuoteMeta(route.Host) + portPattern(route) + pathPrefix + "(.*)$"
+			result.WriteString("        proxy_redirect ~" + pattern + " $scheme://$host" + publicPath(route) + "$1;\n")
+		case "redirect_pattern":
+			label := "(" + strings.Repeat("[a-z0-9]", route.LabelLength) + ")"
+			pattern := "^" + route.Scheme + "://" + label + "\\." + regexp.QuoteMeta(route.HostSuffix) + portPattern(route) + "(.*)$"
+			result.WriteString("        proxy_redirect ~" + pattern + " $scheme://$host/" + route.Scheme + "/$1." + route.HostSuffix + "/" + strconv.Itoa(route.Port) + "$2;\n")
+		}
+	}
+	return result.String()
+}
+
+func manifestRoutes(manifest publicationprotocol.EdgeManifest) []publicationprotocol.EdgeRoute {
+	if len(manifest.Routes) > 0 {
+		return manifest.Routes
+	}
+	return []publicationprotocol.EdgeRoute{{
+		LineID: "main", Scheme: "https", Host: manifest.UpstreamHost, Port: manifest.UpstreamPort,
+		BasePath: manifest.BasePath, Kind: "upstream", Position: 1,
+	}}
 }
 
 func testCandidate(ctx context.Context, fragment, directory string) error {
