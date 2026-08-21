@@ -431,13 +431,21 @@ Re-run the isolated full Go test/vet/build gate, then deploy only the resulting 
   backups remain present on both hosts. No fragment changed in this binary-only
   rollout, so no Nginx reload was required for the permanent code deployment.
 
-### Remaining gate and risk
+### Final gate and residual risk
 
 - The new authenticated canary intentionally requires a runtime token and an item
   identifier. They are not recorded in this repository, logs, or this runbook.
   The existing real Yamby recovery validates the repaired route; a future operator
   can use the admin `playback-canary` action to mark this publication `healthy`
   using a bounded authenticated request.
-- Before commit, run the full isolated Go test/vet gate again, scan only the
-  publication diff for accidental sensitive data, and verify that staging contains
-  only the permanent publication change. Do not stage unrelated local work.
+- The bounded isolated `go test ./...`, `go vet ./...`, formatting, diff, and
+  regression gates passed before rollout. The permanent change was committed as
+  `00d1610b33ff84aeadb09031482e34e31be13382` and pushed to
+  `origin/feature/failover-phase2-local`; the remote ref was re-read after push.
+- The bundle `embyproxy-playback-fix-00d1610.bundle` is retained locally with
+  SHA-256 `F7BC4F03A661F1B1F07C438E3018615CFCF1B14011B1FF3504C93DD1BFE83A24`.
+  The worktree still contains unrelated pre-existing changes; they were not
+  staged or included in the permanent-fix commits.
+- Residual live risk is limited to per-publication runtime credentials and media
+  item selection for an authenticated canary. Those values remain runtime-only
+  and are never persisted in Git, logs, state, or this runbook.
