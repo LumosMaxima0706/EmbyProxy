@@ -660,7 +660,7 @@ Re-run the isolated full Go test/vet/build gate, then deploy only the resulting 
   bounded item discovery, and the publication UI marker. These pass in the
   isolated BWG Go 1.26.4 build clone.
 
-### Remaining live gate
+### Remaining live gate (superseded by final acceptance)
 
 - The `1111` 625260/601953 real canary cannot run until an owner submits valid
   Emby username/password once through the new Admin publish dialog. No valid
@@ -686,6 +686,10 @@ Re-run the isolated full Go test/vet/build gate, then deploy only the resulting 
   production EmbyProxy server block was changed.
 - BWG's protected playback directory contains no `1111` credential. No real
   canary was attempted; `1111` remains failed-unverified.
+
+The above gate was superseded on 2026-08-22 after the owner provisioned the
+credential and confirmed real Yamby playback. The final status is recorded
+below; it is retained only as historical rollout context.
 
 ### Rollback
 
@@ -775,3 +779,13 @@ check for UHD/feimu/yuchu.
   matches the real client policy. No wildcard route or auth bypass was added.
 - The two-sample canary must be rerun after this UA correction. Until both
   samples report `206 + Content-Range + byte growth`, `1111` remains failed.
+
+### Final acceptance (2026-08-22)
+
+- Both `625260` and `601953` passed the bounded canary with
+  `PlaybackInfo=200`, `VideoStream=302`, final media `206`, valid Range
+  headers, and sustained byte growth (`samples_passed=2/2`).
+- The owner confirmed the previously stuck videos now play continuously in the
+  real Yamby client. The publication status is `playback_status=healthy`.
+- New deployments must pull `main` (or the release branch at the same commit)
+  and use the publication workflow; no manual fragment edits are required.
