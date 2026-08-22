@@ -488,3 +488,58 @@ Re-run the isolated full Go test/vet/build gate, then deploy only the resulting 
   sample reaches 200/206 with byte growth. Add regression coverage for item A on
   endpoint X and item B on endpoint Y, including the API-healthy/media-403 state
   gate. Then rebuild and roll out the publication components on NOSLA and BWG.
+
+### Implementation and test update
+
+- Implemented bounded `item_ids` (one to eight, distinct, runtime-only) while
+  retaining the legacy single `item_id` request for compatibility. The admin UI
+  now treats a comma-separated entry as a sample set.
+- Each sample refreshes the manifest after prior scoped discovery. A failure
+  returns `playback_status=failed` with its classified reason and a count of
+  samples passed; no successful first sample can mark the set healthy.
+- Safely observed endpoints are retained only after edge synchronization, even
+  if a later sample receives upstream 403. They remain exact slug-scoped routes,
+  and the status remains failed until every sample succeeds.
+- The isolated BWG test clone passed `TestHeterogeneousMediaSamplesRequireEveryItemToPass`,
+  `TestNormalizedCanaryItemsSupportsBoundedDistinctSampleSet`, the existing
+  `TestPlaybackCanary*` suite, and `go vet` for publication-agent/protocol.
+  A full admin-package test gate is separately blocked by pre-existing local
+  admin test/source drift, not by the staged multi-sample code.
+- The permanent change is committed and pushed as `0a5faa6a32644e731982fd2c900b75a809b31c92`
+  on `origin/feature/failover-phase2-local`. Deployment remains pending fresh
+  sidecar and publication-agent builds; no fragment has been edited manually.
+
+### Live partial-failure evidence and rollout (2026-08-22)
+
+- A redacted NOSLA correlation of the owner's Yamby window proves two distinct
+  HTTP/80 media destinations for `1111`. The existing scoped endpoint (host
+  fingerprint `156fca61f27c`) returned 206 with multi-megabyte byte growth for
+  one title. A different endpoint (host fingerprint `94b771d3f2dd`) followed a
+  primary `VideoStream=302` for failing titles and immediately returned the
+  local small-body 403 response.
+- The `1111` fragment contains only the saved upstream HTTPS/443 endpoint and
+  the former HTTP/80 endpoint; it does not contain fingerprint
+  `94b771d3f2dd`. This classifies the observed 403 as an edge fail-closed
+  missing scoped route, not an upstream permission denial. The actual host,
+  item identifiers, query strings and credentials were not retained.
+- This validates the heterogeneous-origin regression: the original manual
+  repair fixed endpoint X, while item B uses endpoint Y. `1111` remains
+  **playback partially fixed / failed-unverified**, never healthy.
+- Candidate binaries built from `0a5faa6` were installed with backups on both
+  edges. Publication-agent/edge SHA-256 is
+  `a25ca3bc368d852afc31fd4d4718be8b716ac9f6bbcab4b6af7188d067dcf411`;
+  BWG sidecar SHA-256 is
+  `70994936c14264262a9900386d8529ead7eac13ac566f07f990bc11ba9e8fabc`.
+  BWG publication-agent and sidecar, NOSLA Nginx, and BWG Nginx are active;
+  `nginx -t` passed before and after. No fragment changed and no Nginx reload,
+  DNS, failover, helper policy, or wildcard route change occurred.
+
+### Current gate
+
+- To discover endpoint Y through the permanent path, run the deployed admin
+  playback canary with a bounded sample set containing both a known-working
+  title and a title that reproduces the 403. The runtime token and item IDs
+  must be entered only into the authenticated admin UI; they must not be sent
+  through chat, stored in Git, logged, or copied into this runbook. The canary
+  will render the exact Y route on both edges and leave the publication failed
+  unless every sample proves 200/206 plus byte growth.
