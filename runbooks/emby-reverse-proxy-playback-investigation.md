@@ -533,6 +533,11 @@ Re-run the isolated full Go test/vet/build gate, then deploy only the resulting 
   BWG publication-agent and sidecar, NOSLA Nginx, and BWG Nginx are active;
   `nginx -t` passed before and after. No fragment changed and no Nginx reload,
   DNS, failover, helper policy, or wildcard route change occurred.
+- NOSLA/BWG `1111` fragment byte hashes differ because edge rendering includes
+  node-local values, but their security/media structure is identical: 152 lines,
+  four exact locations, four Range and If-Range forwarders, four disabled
+  request/response buffering directives, and eight bounded redirect rewrites.
+  Neither fragment includes the failing endpoint fingerprint.
 
 ### Current gate
 
