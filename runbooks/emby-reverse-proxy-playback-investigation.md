@@ -110,6 +110,17 @@ action and a stored-credential multi-sample canary action. Operators enter only
 bounded item IDs for subsequent checks. The credential is read by the backend
 and passed through the existing protected publication bridge in memory.
 
+Implementation was built and tested in the isolated BWG Docker Go 1.26
+environment (`go test ./...` and `go vet ./...` passed). Commit
+`7a3715cc30fcd63d6c7b097c974c4d68548df05a` was pushed to
+`origin/feature/failover-phase2-local`. The BWG sidecar is now running that
+binary from a versioned release directory. Its credential directory was
+created with owner-only permissions (`0700`) for the sidecar account; no
+credential has been provisioned or inspected. The previous release path was
+retained as the rollback target. NOSLA needs no binary change for this stage:
+the credential remains only on the BWG sidecar and reaches the existing
+publication-agent over the local protected socket at canary time.
+
 Validation gates for the outstanding 1111 regression remain unchanged:
 Item 625260 is the known successful sample and Item 601953 is the known 403
 sample. The route remains `partially fixed / failed-unverified` until the
