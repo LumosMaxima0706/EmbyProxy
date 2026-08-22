@@ -157,4 +157,33 @@ http://服务器地址:8787/节点名/
 
 ## 许可证
 
+## Production deployment and playback acceptance
+
+Production deployments must be sourced from the `main` branch. For the current
+verified playback release, pin and record commit
+`97969af3e7b498070fde5989711b0dab5259e425` before building. The
+`release/emby-playback-permanent-20260822` branch is reference-only; do not use
+it as a deployment dependency, and do not deploy feature branches.
+
+Every new Emby server follows one workflow and must not require a slug-specific
+Nginx edit:
+
+`publish reverse proxy -> credential provisioning (if needed) -> PlaybackInfo -> VideoStream -> redirect discovery -> endpoint discovery -> scoped exact route generation -> NOSLA/BWG sync -> Range 206 -> Content-Range/Accept-Ranges -> sustained byte growth -> healthy`
+
+Credentials are entered only through the authenticated admin workflow and stay
+in the protected runtime store. They are never written to Git, Nginx fragments,
+ordinary API responses, or logs. Without a valid credential, the node remains
+`playback_status=unverified`; an API or image `200` is not playback acceptance.
+
+Playback validation is bounded and fail-closed. It may discover multiple media
+hosts, ports, schemes (including HTTP/80), and redirect hops, but generates only
+observed exact or narrowly scoped endpoints for that server slug. Unknown hosts
+are rejected; generic `/http/*` or `/https/*` wildcards and manual per-slug
+configuration are not permitted. Both NOSLA and BWG must pass candidate
+validation, `nginx -t`, reload, and the same authenticated multi-sample canary
+before the node is marked healthy.
+
+See [`docs/fusion-project-runbook/38-emby-publication-workflow.md`](docs/fusion-project-runbook/38-emby-publication-workflow.md)
+for the full operator gate, rollback procedure, and troubleshooting matrix.
+
 本项目采用 MIT License 开源。

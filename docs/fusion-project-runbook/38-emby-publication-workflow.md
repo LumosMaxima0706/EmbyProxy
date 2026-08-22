@@ -632,3 +632,68 @@ tag identifies the stable fixed release.
    global routes or another slug's fragment.
 5. Recheck UHD/existing route hashes, public URL, playback, isolation and
    failover state. Store concrete backup paths in the private deployment record.
+
+## Production playback acceptance (main)
+
+Production source is `main`, pinned to the approved commit before building. The
+current verified playback commit is
+`97969af3e7b498070fde5989711b0dab5259e425`. The
+`release/emby-playback-permanent-20260822` branch is reference-only and must not
+be a deployment dependency.
+
+For every fresh deployment and newly published server, use this gate:
+
+`publish reverse proxy -> credential provisioning -> PlaybackInfo -> VideoStream -> redirect discovery -> endpoint discovery -> scoped route -> NOSLA/BWG sync -> Range 206 -> Content-Range -> byte growth -> healthy`
+
+Credential provisioning is performed once through the authenticated admin
+workflow. A valid protected runtime credential is reused for re-canary and route
+repair; plaintext credentials never enter ordinary SQLite fields, Git, Nginx,
+API responses, or logs. Missing or invalid credentials leave the node
+`playback_status=unverified` with `credential_missing` or `credential_invalid`,
+even when connectivity succeeds.
+
+Connectivity and playback are separate states. `System/Info/Public`, images, or
+`PlaybackInfo` alone cannot mark a publication healthy. Use a bounded,
+multi-sample set of known-playable items. For every sample:
+
+1. Authenticated `PlaybackInfo` succeeds.
+2. `VideoStream` is followed through bounded 301/302/303/307/308 hops.
+3. Each observed media destination becomes an exact, slug-scoped route with
+   scheme, host, port, and safe path prefix preserved. HTTP/80 and HTTPS/443
+   are independent endpoints. Private destinations, redirect loops, and unknown
+   hosts remain fail-closed.
+4. A public bounded Range request returns `200` or `206`. For `206`, require
+   `Accept-Ranges: bytes`, a valid `Content-Range`, and at least 16 KiB of
+   sustained byte growth. A redirect or short redirect body is not acceptance.
+5. Every requested sample passes before setting `playback_status=healthy`; any
+   failure remains classified `failed/unverified` without widening the allowlist
+   or hand-editing a slug fragment.
+
+After route generation, the restricted publication agent produces a candidate,
+runs `nginx -t` on both edges, reloads gracefully, and reports matching NOSLA/BWG
+manifest state. Re-run the same samples after synchronization and, where
+user-facing, confirm one real client playback. Existing routes and failover state
+must remain unchanged.
+
+### Fresh deployment checklist
+
+- Clone/fetch `main`; verify the pinned commit and a clean worktree.
+- Run repository tests, migration checks, and the Nginx candidate-fragment test.
+- Install the identical publication-agent/helper build on BWG and NOSLA; verify
+  hashes, readiness, include hooks, and root-only state/credential paths.
+- Back up the binary/release link, SQLite WAL/SHM state, sidecar environment,
+  edge configs, and publication manifests in a private operator record.
+- Run authenticated dry-run, then publish through the owner API. Never copy or
+  edit a live fragment by hand.
+- Complete the multi-sample canary and all `206`/`Content-Range`/byte-growth
+  checks on both edges before calling the server healthy.
+- Record commit, canary sample count, endpoint hashes, edge sync results, and
+  rollback script. Keep secrets and signed URLs out of the record.
+
+### Rollback reminder
+
+Stop new publication operations, run the operation-specific agent rollback for
+the affected slug, run `nginx -t` and graceful reload on both edges, then repoint
+the sidecar/agent to the previously tested release. Restore the DB only for a
+confirmed migration failure. Re-run existing-server playback, isolation, and
+failover checks before resuming publication.
