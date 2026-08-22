@@ -11,3 +11,4 @@ ExecStartPost=/bin/chgrp embyproxy-meter /var/lib/embyproxy-stats/nosla-snapshot
 ExecStartPost=/bin/chmod 0640 /var/lib/embyproxy-stats/nosla-snapshot.json
 NoNewPrivileges=true
 PrivateTmp=true
+

@@ -107,6 +107,8 @@ func (a *Agent) Handle(ctx context.Context, request publicationprotocol.Request)
 		return a.publish(ctx, manifest)
 	case publicationprotocol.ActionUnpublish:
 		return a.unpublish(ctx, manifest)
+	case publicationprotocol.ActionPlaybackCanary:
+		return a.runPlaybackCanary(ctx, request, manifest)
 	default:
 		return protocolFailure("edge_adapter_request_invalid", "request_validation")
 	}
@@ -117,7 +119,14 @@ func validateRequest(request publicationprotocol.Request) error {
 		proxyadapter.ValidateManagedRouteSlug(request.NodeName) != nil {
 		return errors.New("edge_adapter_request_invalid")
 	}
-	if request.Action != publicationprotocol.ActionCheck && request.Action != publicationprotocol.ActionPublish && request.Action != publicationprotocol.ActionUnpublish {
+	if request.Action != publicationprotocol.ActionCheck && request.Action != publicationprotocol.ActionPublish && request.Action != publicationprotocol.ActionUnpublish && request.Action != publicationprotocol.ActionPlaybackCanary {
+		return errors.New("edge_adapter_request_invalid")
+	}
+	if request.Action == publicationprotocol.ActionPlaybackCanary {
+		if request.PlaybackCanary == nil {
+			return errors.New("edge_adapter_request_invalid")
+		}
+	} else if request.PlaybackCanary != nil {
 		return errors.New("edge_adapter_request_invalid")
 	}
 	if request.OperationID == "" || len(request.OperationID) > 64 {
@@ -179,7 +188,8 @@ func (a *Agent) manifestFromDatabase(ctx context.Context, request publicationpro
 	appendRedirect := func(endpoint RedirectEndpoint) {
 		scheme := strings.ToLower(strings.TrimSpace(endpoint.Scheme))
 		host := strings.ToLower(strings.TrimSpace(endpoint.Host))
-		key := scheme + "://" + host + ":" + strconv.Itoa(endpoint.Port) + "/"
+		basePath := strings.TrimSpace(endpoint.PathPrefix)
+		key := scheme + "://" + host + ":" + strconv.Itoa(endpoint.Port) + "/" + basePath
 		if seenHosts[key] {
 			return
 		}
@@ -187,7 +197,7 @@ func (a *Agent) manifestFromDatabase(ctx context.Context, request publicationpro
 		redirectIndex++
 		routes = append(routes, publicationprotocol.EdgeRoute{
 			LineID: fmt.Sprintf("redirect-%d", redirectIndex), Scheme: scheme, Host: host, Port: endpoint.Port,
-			Kind: "redirect", Position: len(targets) + redirectIndex,
+			BasePath: basePath, Kind: "redirect", Position: len(targets) + redirectIndex,
 		})
 	}
 	for _, rawHost := range a.config.RedirectHosts[request.RouteSlug] {
@@ -196,6 +206,13 @@ func (a *Agent) manifestFromDatabase(ctx context.Context, request publicationpro
 	}
 	for _, endpoint := range a.config.RedirectEndpoints[request.RouteSlug] {
 		appendRedirect(endpoint)
+	}
+	if discovered, loadErr := a.loadDiscoveredEndpoints(); loadErr != nil {
+		return publicationprotocol.EdgeManifest{}, errors.New("redirect_store_invalid")
+	} else {
+		for _, endpoint := range discovered[request.RouteSlug] {
+			appendRedirect(endpoint)
+		}
 	}
 	patternIndex := 0
 	for _, pattern := range a.config.RedirectPatterns[request.RouteSlug] {
@@ -250,7 +267,8 @@ WHERE route_slug = ? ORDER BY position, line_slug`, slug)
 		return errors.New("managed_route_stage_invalid")
 	}
 	var publicationStatus string
-	if err := database.QueryRowContext(ctx, `SELECT status FROM emby_publications WHERE uid='admin' AND node_name=?`, slug).Scan(&publicationStatus); err != nil || publicationStatus != storage.PublicationPublishing {
+	if err := database.QueryRowContext(ctx, `SELECT status FROM emby_publications WHERE uid='admin' AND node_name=?`, slug).Scan(&publicationStatus); err != nil ||
+		(publicationStatus != storage.PublicationPublishing && publicationStatus != storage.PublicationPublished) {
 		return errors.New("publication_state_invalid")
 	}
 	return nil

@@ -140,7 +140,7 @@ func TestListBuildsPublicNodeURLsWithoutAdminOriginOrSecrets(t *testing.T) {
 	}
 	body := string(encoded)
 	for _, want := range []string{
-		`"publicUrl":"https://` + `stream.example/https/` + `media.example/443/"`,
+		`"publicUrl":"https://stream.example/https/media.example/443/"`,
 		`"publicUrlStatus":"published"`,
 		`"publicUrlReason":"public_entry_configured"`,
 		`"name":"feimu"`,
@@ -173,7 +173,7 @@ func TestAdminIndexUsesBackendPublicURLForDisplayCopyAndPreview(t *testing.T) {
 	for _, forbidden := range []string{
 		"`${location.origin}/${n.name}",
 		"n.secret ? '/' + n.secret",
-		"owner-admin.example.invalid",
+		"owner-admin.149077530.xyz",
 	} {
 		if strings.Contains(indexHTML, forbidden) {
 			t.Fatalf("Admin UI still derives public URL from unsafe source %q", forbidden)

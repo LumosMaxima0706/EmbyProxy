@@ -8,3 +8,4 @@ Unit=embyproxy-stats-collector-nosla.service
 
 [Install]
 WantedBy=timers.target
+

@@ -33,6 +33,16 @@ def traffic(percent=44, quality="fresh_estimate", new_cycle=False):
             "new_cycle_baseline": new_cycle}
 
 
+class AtomicStateTests(unittest.TestCase):
+    def test_group_read_state_uses_parent_group(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = pathlib.Path(temporary)
+            target = parent / "state.json"
+            policy.atomic_json(target, {"active_target": "nosla"}, mode=0o640)
+            self.assertEqual(target.stat().st_mode & 0o777, 0o640)
+            self.assertEqual(target.stat().st_gid, parent.stat().st_gid)
+
+
 class EvaluateTests(unittest.TestCase):
     now = dt.datetime(2026, 8, 12, tzinfo=dt.timezone.utc)
     healthy = {"healthy": True}

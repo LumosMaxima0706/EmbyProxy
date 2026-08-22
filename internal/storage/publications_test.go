@@ -82,7 +82,7 @@ CREATE TABLE emby_publications (
 		t.Fatal(err)
 	}
 	publication, err = store.GetPublication(ctx, "admin", "demo")
-	if err != nil || publication == nil || publication.PlaybackStatus != "ok" || publication.PlaybackVerifiedAt != 123 {
+	if err != nil || publication == nil || publication.PlaybackStatus != "healthy" || publication.PlaybackVerifiedAt != 123 {
 		t.Fatalf("verified publication=%+v err=%v", publication, err)
 	}
 }

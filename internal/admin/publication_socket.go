@@ -41,6 +41,48 @@ func (s *SocketPublicationSyncer) Readiness(ctx context.Context, plan Publicatio
 	return s.call(ctx, publicationprotocol.ActionCheck, plan)
 }
 
+func (s *SocketPublicationSyncer) PlaybackCanary(ctx context.Context, plan PublicationPlan, input PlaybackCanaryInput) (PlaybackCanaryResult, error) {
+	timeout := s.timeout
+	if timeout < 90*time.Second {
+		timeout = 90 * time.Second
+	}
+	callCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	connection, err := (&net.Dialer{}).DialContext(callCtx, "unix", s.socketPath)
+	if err != nil {
+		return PlaybackCanaryResult{Status: "failed", FailureClass: "edge_adapter_unreachable"}, err
+	}
+	defer connection.Close()
+	_ = connection.SetDeadline(time.Now().Add(timeout))
+	request := publicationprotocol.Request{
+		Version: publicationprotocol.Version, Action: publicationprotocol.ActionPlaybackCanary,
+		OperationID: plan.OperationID, NodeName: plan.NodeName, RouteSlug: plan.RouteSlug,
+		PlaybackCanary: &publicationprotocol.PlaybackCanaryRequest{ItemID: input.ItemID, ItemIDs: input.ItemIDs, AccessToken: input.AccessToken, UserID: input.UserID},
+	}
+	if err := json.NewEncoder(connection).Encode(request); err != nil {
+		return PlaybackCanaryResult{Status: "failed", FailureClass: "edge_adapter_request_failed"}, err
+	}
+	request.PlaybackCanary.AccessToken = ""
+	var response publicationprotocol.Response
+	decoder := json.NewDecoder(bufio.NewReaderSize(io.LimitReader(connection, 64<<10), 16<<10))
+	if err := decoder.Decode(&response); err != nil || response.Playback == nil {
+		return PlaybackCanaryResult{Status: "failed", FailureClass: "edge_adapter_response_invalid"}, errors.New("edge_adapter_response_invalid")
+	}
+	p := response.Playback
+	result := PlaybackCanaryResult{Status: p.Status, FailureClass: p.FailureClass, ConnectivityStatus: p.ConnectivityStatus,
+		PlaybackInfoStatus: p.PlaybackInfoStatus, VideoStreamStatus: p.VideoStreamStatus, MediaStatus: p.MediaStatus,
+		RedirectsFollowed: p.RedirectsFollowed, EndpointsDiscovered: p.EndpointsDiscovered, BytesRead: p.BytesRead,
+		ByteGrowth: p.ByteGrowth, ContentRange: p.ContentRange, AcceptRanges: p.AcceptRanges,
+		Samples: p.Samples, SamplesPassed: p.SamplesPassed}
+	if !response.OK {
+		if result.FailureClass == "" {
+			result.FailureClass = response.FailedStep
+		}
+		return result, errors.New("playback_canary_failed")
+	}
+	return result, nil
+}
+
 func (s *SocketPublicationSyncer) call(ctx context.Context, action string, plan PublicationPlan) (PublicationSyncResult, error) {
 	callCtx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()

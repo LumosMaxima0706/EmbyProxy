@@ -52,12 +52,7 @@ func Parse(line string) (Event, error) {
 		if !ok || key == "" {
 			continue
 		}
-		switch strings.ToLower(key) {
-		case "authorization", "cookie", "x-emby-token", "x-mediabrowser-token", "access_token", "token":
-			return Event{}, errInvalidLine
-		case "time_iso8601", "host", "status", "method", "uri", "request_length", "bytes_sent", "body_bytes_sent", "request_time":
-			fields[key] = value
-		}
+		fields[key] = value
 	}
 	if strings.ContainsAny(fields["uri"], "?#\r\n") || fields["uri"] == "" {
 		return Event{}, errInvalidLine
@@ -74,11 +69,7 @@ func Parse(line string) (Event, error) {
 	if err != nil {
 		return Event{}, errInvalidLine
 	}
-	responseLength := fields["body_bytes_sent"]
-	if responseLength == "" {
-		responseLength = fields["bytes_sent"]
-	}
-	responseBytes, err := parseNonNegative(responseLength)
+	responseBytes, err := parseNonNegative(fields["bytes_sent"])
 	if err != nil {
 		return Event{}, errInvalidLine
 	}
@@ -112,20 +103,10 @@ func parseNonNegative(value string) (int64, error) {
 
 func safeHost(value string) string {
 	value = strings.ToLower(strings.TrimSpace(value))
-	if value == "" || len(value) > 253 || strings.ContainsAny(value, " /\\:\t\r\n") {
-		return "unknown"
+	if value == "stream.149077530.xyz" || value == "stream-b.149077530.xyz" {
+		return value
 	}
-	for _, label := range strings.Split(value, ".") {
-		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
-			return "unknown"
-		}
-		for _, character := range label {
-			if (character < 'a' || character > 'z') && (character < '0' || character > '9') && character != '-' {
-				return "unknown"
-			}
-		}
-	}
-	return value
+	return "unknown"
 }
 
 func classifyPath(uri string) PathClass {

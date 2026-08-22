@@ -8,3 +8,4 @@ Unit=embyproxy-stats-collector-bwg.service
 
 [Install]
 WantedBy=timers.target
+

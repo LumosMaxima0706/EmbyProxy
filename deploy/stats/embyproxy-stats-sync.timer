@@ -8,3 +8,4 @@ Unit=embyproxy-stats-sync.service
 
 [Install]
 WantedBy=timers.target
+

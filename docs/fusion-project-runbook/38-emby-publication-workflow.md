@@ -527,6 +527,49 @@ redirect host is still fail-closed and must never be auto-allowed. Such a node
 remains playback `unverified` until a real authenticated playback canary
 succeeds; edge synchronization alone must not claim playback success.
 
+### Mandatory playback canary gate
+
+Publication connectivity and playback readiness are separate states. A 200
+from `System/Info/Public` proves only `connectivity healthy`. A route remains
+`playback_status=unverified` until the authenticated canary completes this
+chain:
+
+1. Submit a bounded, diverse set of one to eight known-playable item IDs and
+   an Emby access token through the authenticated admin canary action. Use
+   titles likely to cover different formats/CDNs; all values are used once in
+   memory and sent only over the peer-credential-protected publication-agent
+   Unix socket.
+2. Require `PlaybackInfo=2xx` for every sample, then issue a bounded Range
+   request to each returned DirectStream URL through the public route.
+3. Follow at most eight 301/302/303/307/308 responses. Reduce each destination
+   to scheme, exact host, exact port and a safe first path prefix. Never retain
+   its query, token, cookie or full media path.
+4. Accept HTTP/80 and HTTPS/443 independently of the primary upstream. Reject
+   loopback/private/link-local destinations and any destination that does not
+   resolve exclusively to public addresses.
+5. Generate only slug-scoped exact/prefix routes, write the candidate through
+   the restricted agent, and require both BWG and NOSLA edge sync. Do not add a
+   generic `/http/*` or `/https/*` location.
+6. Retry each bounded request and require media status 200 or 206, at least
+   16 KiB of byte growth, no redirect loop, and for 206 both `Content-Range`
+   and `Accept-Ranges: bytes`. Merge only exact endpoints observed across the
+   successful/failed chains; do not infer host patterns.
+7. Only when every requested sample passes record `playback_status=healthy`.
+   A failure records a classified `failed` state without widening the
+   allowlist. Safely observed, synchronized exact endpoints may be retained for
+   a future bounded retry, but they never convert a failed sample to healthy.
+
+The root-owned runtime endpoint store defaults to
+`/var/lib/embyproxy-publication-agent/redirect-endpoints.json`, must be mode
+0600, and must never enter Git. The publication-agent systemd unit must grant
+write access only to `/var/lib/embyproxy-publication-agent` in addition to its
+existing backup/include paths. Re-publishing or changing route lines resets
+playback readiness to `unverified` and requires a new canary.
+
+The old `playback-verify` endpoint is intentionally fail-closed and returns
+`PLAYBACK_CANARY_REQUIRED`; an operator click can no longer mark a route green
+without 200/206 and byte-growth evidence.
+
 Use the operation-specific rollback script created during deployment. Restore
 the prior release without restoring the database when possible because the
 new columns are backward-compatible. Restore a database snapshot only for a

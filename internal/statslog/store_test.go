@@ -14,8 +14,8 @@ func TestStoreIngestAndQueryAggregatesWithoutRawURI(t *testing.T) {
 	}
 	defer store.Close()
 	events := []Event{
-		{OccurredAt: time.Now(), Host: "stream.example.invalid", Status: 200, PathClass: PlaybackInfo, RequestBytes: 10, ResponseBytes: 20, DurationMS: 5},
-		{OccurredAt: time.Now(), Host: "stream.example.invalid", Status: 206, PathClass: VideoStream, RequestBytes: 5, ResponseBytes: 100, DurationMS: 40, Partial: true},
+		{OccurredAt: time.Now(), Host: "stream.149077530.xyz", Status: 200, PathClass: PlaybackInfo, RequestBytes: 10, ResponseBytes: 20, DurationMS: 5},
+		{OccurredAt: time.Now(), Host: "stream.149077530.xyz", Status: 206, PathClass: VideoStream, RequestBytes: 5, ResponseBytes: 100, DurationMS: 40, Partial: true},
 	}
 	result, err := store.Ingest(context.Background(), "nosla", events)
 	if err != nil || result.Parsed != 2 || result.PlaybackHints != 1 || result.Partial != 1 || result.ResponseBytes != 120 {

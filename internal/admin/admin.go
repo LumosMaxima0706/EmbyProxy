@@ -73,18 +73,19 @@ const telegramServerRemarkMaxRunes = 80
 const ownerAdminAuthenticatedHeader = "X-Owner-Admin-Authenticated"
 
 type Handler struct {
-	cfg               config.Config
-	store             *storage.Store
-	checker           *auth.Checker
-	telegram          *telegram.Service
-	log               *logging.Logger
-	resetRoute        ResetFunc
-	imageCache        ImageCacheManager
-	globalStats       *statslog.Store
-	failover          *failover.Controller
-	dnsStatusReader   func() map[string]any
-	publicationSyncer PublicationSyncer
-	publicationMu     sync.Mutex
+	cfg                 config.Config
+	store               *storage.Store
+	checker             *auth.Checker
+	telegram            *telegram.Service
+	log                 *logging.Logger
+	resetRoute          ResetFunc
+	imageCache          ImageCacheManager
+	globalStats         *statslog.Store
+	failover            *failover.Controller
+	dnsStatusReader     func() map[string]any
+	publicationSyncer   PublicationSyncer
+	playbackCredentials publicationCredentialStore
+	publicationMu       sync.Mutex
 }
 
 // readExternalFailoverState reads the policy runner's state file without
@@ -122,7 +123,7 @@ func New(cfg config.Config, store *storage.Store, checker *auth.Checker, tg *tel
 	if len(imageCaches) > 0 {
 		imageCache = imageCaches[0]
 	}
-	return &Handler{
+	h := &Handler{
 		cfg:        cfg,
 		store:      store,
 		checker:    checker,
@@ -131,6 +132,10 @@ func New(cfg config.Config, store *storage.Store, checker *auth.Checker, tg *tel
 		resetRoute: reset,
 		imageCache: imageCache,
 	}
+	if credentials, err := newFilePlaybackCredentialStore(cfg.PlaybackCredentialDir); err == nil {
+		h.playbackCredentials = credentials
+	}
+	return h
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -1230,25 +1235,15 @@ func (h *Handler) save(ctx context.Context, uid string, body map[string]any) map
 	if oldName != "" && oldName != node.Name && existsNew {
 		return fail("请求路径重复:该节点已存在")
 	}
-	var publishedTargetUpdate bool
-	var previousNode storage.Node
 	if prevOK {
 		if prevNode, ok := storage.UnpackNode(prevName, prevPacked); ok {
-			previousNode = prevNode
 			publication, statusErr := h.publicationStatus(ctx, uid, prevName)
 			if statusErr != nil {
 				return fail("PUBLICATION_STATUS_FAILED")
 			}
 			if publication.Status != storage.PublicationSavedUnpublished &&
 				(prevName != node.Name || strings.TrimSpace(prevNode.Target) != strings.TrimSpace(node.Target)) {
-				if publication.Status != storage.PublicationPublished || prevName != node.Name {
-					return fail("PUBLISHED_REQUIRES_UNPUBLISH")
-				}
-				oldTargets, newTargets := storage.SplitTargets(prevNode.Target), storage.SplitTargets(node.Target)
-				if len(oldTargets) == 0 || len(newTargets) == 0 || oldTargets[0] != newTargets[0] {
-					return fail("PUBLISHED_PRIMARY_UPSTREAM_CANNOT_CHANGE")
-				}
-				publishedTargetUpdate = true
+				return fail("PUBLISHED_REQUIRES_UNPUBLISH")
 			}
 			if _, hasFav := raw["fav"]; !hasFav {
 				node.Fav = prevNode.Fav
@@ -1257,13 +1252,6 @@ func (h *Handler) save(ctx context.Context, uid string, body map[string]any) map
 				node.Rank = prevNode.Rank
 			}
 		}
-	}
-	if publishedTargetUpdate {
-		if err := h.syncPublishedNodeTargets(ctx, uid, previousNode, node); err != nil {
-			return fail(err.Error())
-		}
-		h.reset(uid, node.Name)
-		return map[string]any{"ok": true, "node": node, "publication_sync": "synced"}
 	}
 	if err := h.store.SaveNode(ctx, uid, node); err != nil {
 		return fail(err.Error())
@@ -1364,7 +1352,6 @@ func (h *Handler) checkStatus(ctx context.Context, uid string, body map[string]a
 			results = append(results, map[string]any{"name": nm, "target": nm, "status": 0, "error": "节点不存在"})
 			continue
 		}
-		lineResults := checkSavedUpstreamLines(ctx, *node)
 		proxyPath := "/" + urlPathEscape(nm)
 		if node.Secret != "" {
 			proxyPath += "/" + urlPathEscape(node.Secret)
@@ -1376,65 +1363,13 @@ func (h *Handler) checkStatus(ctx context.Context, uid string, body map[string]a
 		res, err := client.Do(req)
 		ms := time.Since(started).Milliseconds()
 		if err != nil {
-			results = append(results, map[string]any{"name": nm, "status": 0, "error": errorText(err), "ms": ms, "lines": lineResults})
+			results = append(results, map[string]any{"name": nm, "target": checked, "checked": checked, "status": 0, "error": errorText(err), "ms": ms})
 			continue
 		}
 		_ = res.Body.Close()
-		results = append(results, map[string]any{"name": nm, "status": res.StatusCode, "ms": ms, "lines": lineResults})
+		results = append(results, map[string]any{"name": nm, "target": checked, "checked": checked, "status": res.StatusCode, "ms": ms})
 	}
 	return map[string]any{"ok": true, "results": results}
-}
-
-func checkSavedUpstreamLines(ctx context.Context, node storage.Node) []map[string]any {
-	client := &http.Client{Timeout: 8 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
-	return checkSavedUpstreamLinesWithClient(ctx, node, client)
-}
-
-func checkSavedUpstreamLinesWithClient(ctx context.Context, node storage.Node, client *http.Client) []map[string]any {
-	targets := storage.SplitTargets(node.Target)
-	results := make([]map[string]any, len(targets))
-	var wg sync.WaitGroup
-	for index, target := range targets {
-		index, target := index, target
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			result := map[string]any{"line_id": publicationPlanLineID(index), "priority": index + 1, "status": 0, "health": "unreachable"}
-			base, err := url.Parse(target)
-			if err != nil || base.Scheme != "https" || base.Hostname() == "" || base.User != nil || base.RawQuery != "" || base.Fragment != "" {
-				result["health"], result["error"] = "invalid", "upstream_invalid"
-				results[index] = result
-				return
-			}
-			base.Path = strings.TrimRight(base.Path, "/") + "/emby/System/Info/Public"
-			req, _ := http.NewRequestWithContext(ctx, http.MethodGet, base.String(), nil)
-			req.Header.Set("User-Agent", "emby-proxy-line-check/1.0")
-			started := time.Now()
-			response, requestErr := client.Do(req)
-			result["ms"] = time.Since(started).Milliseconds()
-			if requestErr != nil {
-				if errors.Is(requestErr, context.DeadlineExceeded) || strings.Contains(strings.ToLower(requestErr.Error()), "timeout") {
-					result["health"], result["error"] = "timeout", "upstream_timeout"
-				} else {
-					result["error"] = "upstream_unreachable"
-				}
-				results[index] = result
-				return
-			}
-			_ = response.Body.Close()
-			result["status"] = response.StatusCode
-			if response.StatusCode >= 200 && response.StatusCode < 400 {
-				result["health"] = "reachable"
-			} else if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden {
-				result["health"] = "unauthorized"
-			} else {
-				result["health"] = "unhealthy"
-			}
-			results[index] = result
-		}()
-	}
-	wg.Wait()
-	return results
 }
 
 func (h *Handler) tgSet(ctx context.Context, body map[string]any) map[string]any {

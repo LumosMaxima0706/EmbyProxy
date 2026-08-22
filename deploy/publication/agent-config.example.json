@@ -6,6 +6,7 @@
   "bwg_config_path": "/etc/embyproxy-publication-agent/edge-bwg.json",
   "public_media_host": "stream.example.invalid",
   "owner_admin_host": "owner-admin.example.invalid",
+  "discovered_endpoints_path": "/var/lib/embyproxy-publication-agent/redirect-endpoints.json",
   "nosla": {
     "user": "publication-agent",
     "host": "nosla.example.invalid",

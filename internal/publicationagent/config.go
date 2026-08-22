@@ -35,13 +35,17 @@ type AgentConfig struct {
 	// RedirectPatterns is a narrow allowance for CDNs that rotate only the
 	// left-most short label below an observed root-owned suffix.
 	RedirectPatterns map[string][]RedirectPattern `json:"redirect_patterns,omitempty"`
-	NOSLA            RemoteConfig                 `json:"nosla"`
+	// DiscoveredEndpointsPath is a root-owned runtime store populated only by
+	// a successful bounded playback canary. It must never be committed to Git.
+	DiscoveredEndpointsPath string       `json:"discovered_endpoints_path,omitempty"`
+	NOSLA                   RemoteConfig `json:"nosla"`
 }
 
 type RedirectEndpoint struct {
-	Scheme string `json:"scheme"`
-	Host   string `json:"host"`
-	Port   int    `json:"port"`
+	Scheme     string `json:"scheme"`
+	Host       string `json:"host"`
+	Port       int    `json:"port"`
+	PathPrefix string `json:"path_prefix,omitempty"`
 }
 
 type RedirectPattern struct {
@@ -70,6 +74,12 @@ func LoadAgentConfig(path string) (AgentConfig, error) {
 	}
 	if !safeHostname(cfg.PublicMediaHost) || !safeHostname(cfg.OwnerAdminHost) ||
 		!safeRemote(cfg.NOSLA) {
+		return cfg, errors.New("agent_config_invalid")
+	}
+	if cfg.DiscoveredEndpointsPath == "" {
+		cfg.DiscoveredEndpointsPath = "/var/lib/embyproxy-publication-agent/redirect-endpoints.json"
+	}
+	if !safeAbsoluteBelow(cfg.DiscoveredEndpointsPath, "/var/lib/embyproxy-publication-agent") {
 		return cfg, errors.New("agent_config_invalid")
 	}
 	for slug, hosts := range cfg.RedirectHosts {
@@ -120,7 +130,23 @@ func safeRedirectEndpoint(endpoint RedirectEndpoint, publicMediaHost, ownerAdmin
 	scheme := strings.ToLower(strings.TrimSpace(endpoint.Scheme))
 	host := strings.ToLower(strings.TrimSpace(endpoint.Host))
 	return (scheme == "http" || scheme == "https") && endpoint.Port >= 1 && endpoint.Port <= 65535 &&
-		safeRedirectHost(host) && !strings.EqualFold(host, publicMediaHost) && !strings.EqualFold(host, ownerAdminHost)
+		safeRedirectHost(host) && safeRedirectPathPrefix(endpoint.PathPrefix) &&
+		!strings.EqualFold(host, publicMediaHost) && !strings.EqualFold(host, ownerAdminHost)
+}
+
+func safeRedirectPathPrefix(value string) bool {
+	if value == "" {
+		return true
+	}
+	if len(value) > 64 || strings.ContainsAny(value, "/\\?#%\r\n\t ") || value == "." || value == ".." {
+		return false
+	}
+	for _, r := range value {
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && !strings.ContainsRune("._~-", r) {
+			return false
+		}
+	}
+	return true
 }
 
 // Redirect endpoints are root-owned observed media origins. They may be a
