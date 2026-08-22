@@ -19,6 +19,19 @@ type successfulPublicationSyncer struct{}
 
 type successfulPlaybackCanarySyncer struct{ successfulPublicationSyncer }
 
+type capturingPlaybackCanarySyncer struct {
+	successfulPublicationSyncer
+	token string
+}
+
+func (s *capturingPlaybackCanarySyncer) PlaybackCanary(_ context.Context, _ PublicationPlan, input PlaybackCanaryInput) (PlaybackCanaryResult, error) {
+	s.token = input.AccessToken
+	return PlaybackCanaryResult{Status: "healthy", ConnectivityStatus: 200, PlaybackInfoStatus: 200,
+		VideoStreamStatus: 302, MediaStatus: 206, RedirectsFollowed: 2, EndpointsDiscovered: 2,
+		Samples: len(input.ItemIDs), SamplesPassed: len(input.ItemIDs), BytesRead: 131072,
+		ByteGrowth: true, ContentRange: true, AcceptRanges: true}, nil
+}
+
 func (successfulPlaybackCanarySyncer) PlaybackCanary(context.Context, PublicationPlan, PlaybackCanaryInput) (PlaybackCanaryResult, error) {
 	return PlaybackCanaryResult{Status: "healthy", ConnectivityStatus: 200, PlaybackInfoStatus: 200,
 		VideoStreamStatus: 302, MediaStatus: 206, RedirectsFollowed: 1, EndpointsDiscovered: 1,
@@ -94,7 +107,7 @@ func publicationTestHandler(t *testing.T) (*Handler, *http.Cookie) {
 	t.Helper()
 	cfg := config.Config{
 		AdminToken: "strong-admin-token", PublicMediaBaseURL: "https://stream.example",
-		OwnerAdminHost: "owner-admin.example", PublicMediaNodePaths: map[string]string{},
+		OwnerAdminHost: "owner-admin.example", PublicMediaNodePaths: map[string]string{}, PlaybackCredentialDir: t.TempDir(),
 	}
 	handler := newAuthTestHandler(t, cfg)
 	if err := handler.store.SaveNode(context.Background(), "admin", storage.Node{Name: "feimu", Target: "https://media.example"}); err != nil {
@@ -105,6 +118,43 @@ func publicationTestHandler(t *testing.T) (*Handler, *http.Cookie) {
 		t.Fatalf("login status=%d body=%s", login.Code, login.Body.String())
 	}
 	return handler, login.Result().Cookies()[0]
+}
+
+func TestStoredPlaybackCredentialFeedsCanaryWithoutReturningSecret(t *testing.T) {
+	handler, cookie := publicationTestHandler(t)
+	syncer := &capturingPlaybackCanarySyncer{}
+	handler.SetPublicationSyncer(syncer)
+	published := serveAdminJSON(t, handler, http.MethodPost, "/api/admin/emby-servers/feimu/publish", nil, cookie)
+	if published.Code != http.StatusOK {
+		t.Fatalf("publish status=%d body=%s", published.Code, published.Body.String())
+	}
+	configured := serveAdminJSON(t, handler, http.MethodPost, "/api/admin/emby-servers/feimu/playback-credential", map[string]any{"access_token": "stored-runtime-secret"}, cookie)
+	if configured.Code != http.StatusOK || !strings.Contains(configured.Body.String(), `"credential_configured":true`) || strings.Contains(configured.Body.String(), "stored-runtime-secret") {
+		t.Fatalf("configure status=%d body=%s", configured.Code, configured.Body.String())
+	}
+	verified := serveAdminJSON(t, handler, http.MethodPost, "/api/admin/emby-servers/feimu/playback-canary", map[string]any{"item_ids": []string{"625260", "601953"}}, cookie)
+	if verified.Code != http.StatusOK || !strings.Contains(verified.Body.String(), `"playback_status":"healthy"`) || syncer.token != "stored-runtime-secret" {
+		t.Fatalf("verify status=%d token=%q body=%s", verified.Code, syncer.token, verified.Body.String())
+	}
+	if strings.Contains(verified.Body.String(), "stored-runtime-secret") {
+		t.Fatal("stored credential leaked in canary response")
+	}
+	status := serveAdminJSON(t, handler, http.MethodGet, "/api/admin/emby-servers/feimu/publish-status", nil, cookie)
+	if strings.Contains(status.Body.String(), "stored-runtime-secret") || !strings.Contains(status.Body.String(), `"playback_credential_configured":true`) {
+		t.Fatalf("status leaked credential or configured flag missing: %s", status.Body.String())
+	}
+}
+
+func TestMissingPlaybackCredentialBlocksCanary(t *testing.T) {
+	handler, cookie := publicationTestHandler(t)
+	handler.SetPublicationSyncer(&capturingPlaybackCanarySyncer{})
+	if response := serveAdminJSON(t, handler, http.MethodPost, "/api/admin/emby-servers/feimu/publish", nil, cookie); response.Code != http.StatusOK {
+		t.Fatalf("publish status=%d body=%s", response.Code, response.Body.String())
+	}
+	response := serveAdminJSON(t, handler, http.MethodPost, "/api/admin/emby-servers/feimu/playback-canary", map[string]any{"item_ids": []string{"625260"}}, cookie)
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), `"reason":"credential_missing"`) || strings.Contains(response.Body.String(), "access_token") {
+		t.Fatalf("missing credential status=%d body=%s", response.Code, response.Body.String())
+	}
 }
 
 func TestPublicationAPIsRequireAuthentication(t *testing.T) {

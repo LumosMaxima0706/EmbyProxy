@@ -79,6 +79,13 @@ type publicationPlaybackCanary interface {
 	PlaybackCanary(context.Context, PublicationPlan, PlaybackCanaryInput) (PlaybackCanaryResult, error)
 }
 
+type publicationCredentialStore interface {
+	PlaybackCredentialConfigured(context.Context, string) bool
+	ReadPlaybackCredential(context.Context, string) (string, error)
+	WritePlaybackCredential(context.Context, string, string) error
+	DeletePlaybackCredential(context.Context, string) error
+}
+
 type PlaybackCanaryInput struct {
 	ItemID      string
 	ItemIDs     []string
@@ -94,8 +101,8 @@ type PlaybackCanaryResult struct {
 	MediaStatus         int    `json:"media_status"`
 	RedirectsFollowed   int    `json:"redirects_followed"`
 	EndpointsDiscovered int    `json:"endpoints_discovered"`
-	Samples              int    `json:"samples"`
-	SamplesPassed        int    `json:"samples_passed"`
+	Samples             int    `json:"samples"`
+	SamplesPassed       int    `json:"samples_passed"`
 	BytesRead           int64  `json:"bytes_read"`
 	ByteGrowth          bool   `json:"byte_growth"`
 	ContentRange        bool   `json:"content_range"`
@@ -103,20 +110,21 @@ type PlaybackCanaryResult struct {
 }
 
 type publicationStatusView struct {
-	Status               string           `json:"status"`
-	WorkflowState        string           `json:"workflow_state"`
-	Reason               string           `json:"reason,omitempty"`
-	FailedStep           string           `json:"failed_step,omitempty"`
-	PublicURL            string           `json:"public_url,omitempty"`
-	RouteSlug            string           `json:"route_slug,omitempty"`
-	NOSLAStatus          string           `json:"nosla_status"`
-	BWGStatus            string           `json:"bwg_status"`
-	Managed              bool             `json:"managed"`
-	AdapterRegistered    bool             `json:"adapter_registered"`
-	PlaybackStatus       string           `json:"playback_status"`
-	PlaybackFailureClass string           `json:"playback_failure_class,omitempty"`
-	PlaybackVerifiedAt   int64            `json:"playback_verified_at,omitempty"`
-	Plan                 *PublicationPlan `json:"plan,omitempty"`
+	Status                       string           `json:"status"`
+	WorkflowState                string           `json:"workflow_state"`
+	Reason                       string           `json:"reason,omitempty"`
+	FailedStep                   string           `json:"failed_step,omitempty"`
+	PublicURL                    string           `json:"public_url,omitempty"`
+	RouteSlug                    string           `json:"route_slug,omitempty"`
+	NOSLAStatus                  string           `json:"nosla_status"`
+	BWGStatus                    string           `json:"bwg_status"`
+	Managed                      bool             `json:"managed"`
+	AdapterRegistered            bool             `json:"adapter_registered"`
+	PlaybackStatus               string           `json:"playback_status"`
+	PlaybackFailureClass         string           `json:"playback_failure_class,omitempty"`
+	PlaybackVerifiedAt           int64            `json:"playback_verified_at,omitempty"`
+	PlaybackCredentialConfigured bool             `json:"playback_credential_configured"`
+	Plan                         *PublicationPlan `json:"plan,omitempty"`
 }
 
 type publicationArtifacts struct {
@@ -328,14 +336,20 @@ func (h *Handler) publicationStatus(ctx context.Context, uid, name string) (publ
 		if playbackStatus == "" {
 			playbackStatus = playbackPublicationStatus(p.Status)
 		}
+		credentialConfigured := h.playbackCredentials != nil && h.playbackCredentials.PlaybackCredentialConfigured(ctx, name)
+		reason, failedStep := p.Reason, p.FailedStep
+		if playbackStatus == "unverified" && !credentialConfigured {
+			reason, failedStep = "credential_missing", "credential"
+		}
 		return publicationStatusView{
-			Status: p.Status, WorkflowState: publicationWorkflowState(p.Status, p.Reason), Reason: p.Reason, FailedStep: p.FailedStep,
+			Status: p.Status, WorkflowState: publicationWorkflowState(p.Status, reason), Reason: reason, FailedStep: failedStep,
 			PublicURL: p.PublicURL, RouteSlug: p.RouteSlug,
 			NOSLAStatus: p.NOSLAStatus, BWGStatus: p.BWGStatus, Managed: true,
-			AdapterRegistered:    h.publicationSyncer != nil,
-			PlaybackStatus:       playbackStatus,
-			PlaybackFailureClass: p.PlaybackFailureClass,
-			PlaybackVerifiedAt:   p.PlaybackVerifiedAt,
+			AdapterRegistered:            h.publicationSyncer != nil,
+			PlaybackStatus:               playbackStatus,
+			PlaybackFailureClass:         p.PlaybackFailureClass,
+			PlaybackVerifiedAt:           p.PlaybackVerifiedAt,
+			PlaybackCredentialConfigured: h.playbackCredentials != nil && h.playbackCredentials.PlaybackCredentialConfigured(ctx, name),
 		}, nil
 	}
 	legacy := h.publicNodeURLs()[name]
@@ -343,8 +357,9 @@ func (h *Handler) publicationStatus(ctx context.Context, uid, name string) (publ
 		return publicationStatusView{
 			Status: storage.PublicationPublished, WorkflowState: storage.PublicationPublished, Reason: "public_entry_configured",
 			PublicURL: legacy, NOSLAStatus: "synced", BWGStatus: "synced",
-			AdapterRegistered: h.publicationSyncer != nil,
-			PlaybackStatus:    "unverified",
+			AdapterRegistered:            h.publicationSyncer != nil,
+			PlaybackStatus:               "unverified",
+			PlaybackCredentialConfigured: h.playbackCredentials != nil && h.playbackCredentials.PlaybackCredentialConfigured(ctx, name),
 		}, nil
 	}
 	return publicationStatusView{
@@ -540,14 +555,44 @@ func (h *Handler) handlePublicationAPI(w http.ResponseWriter, r *http.Request, p
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "publication": status})
 		return
 	}
-	if r.Method != http.MethodPost || (action != "publish" && action != "unpublish" && action != "publish/dry-run" && action != "publish/reconcile" && action != "publish/cleanup" && action != "verify-proxy" && action != "playback-verify" && action != "playback-canary") {
+	if r.Method != http.MethodPost || (action != "publish" && action != "unpublish" && action != "publish/dry-run" && action != "publish/reconcile" && action != "publish/cleanup" && action != "verify-proxy" && action != "playback-verify" && action != "playback-canary" && action != "playback-credential") {
 		w.Header().Set("Allow", "GET, POST")
 		http.NotFound(w, r)
 		return
 	}
-	if action == "publish" || action == "unpublish" || action == "publish/reconcile" || action == "publish/cleanup" || action == "playback-verify" || action == "playback-canary" {
+	if action == "publish" || action == "unpublish" || action == "publish/reconcile" || action == "publish/cleanup" || action == "playback-verify" || action == "playback-canary" || action == "playback-credential" {
 		h.publicationMu.Lock()
 		defer h.publicationMu.Unlock()
+	}
+	if action == "playback-credential" {
+		credentials := h.playbackCredentials
+		if credentials == nil {
+			writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "reason": "PLAYBACK_CREDENTIAL_STORE_UNAVAILABLE"})
+			return
+		}
+		var body struct {
+			AccessToken string `json:"access_token"`
+			Delete      bool   `json:"delete"`
+		}
+		decoder := json.NewDecoder(io.LimitReader(r.Body, 8<<10))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&body); err != nil || (!body.Delete && strings.TrimSpace(body.AccessToken) == "") {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "reason": "PLAYBACK_CREDENTIAL_INPUT_INVALID"})
+			return
+		}
+		var err error
+		if body.Delete {
+			err = credentials.DeletePlaybackCredential(ctx, name)
+		} else {
+			err = credentials.WritePlaybackCredential(ctx, name, body.AccessToken)
+		}
+		body.AccessToken = ""
+		if err != nil {
+			writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "reason": "PLAYBACK_CREDENTIAL_WRITE_FAILED"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "credential_configured": credentials.PlaybackCredentialConfigured(ctx, name)})
+		return
 	}
 	if action == "playback-verify" {
 		writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "reason": "PLAYBACK_CANARY_REQUIRED", "failed_step": "playback_canary"})
@@ -569,15 +614,28 @@ func (h *Handler) handlePublicationAPI(w http.ResponseWriter, r *http.Request, p
 			return
 		}
 		var body struct {
-			ItemID      string `json:"item_id"`
+			ItemID      string   `json:"item_id"`
 			ItemIDs     []string `json:"item_ids"`
-			AccessToken string `json:"access_token"`
+			AccessToken string   `json:"access_token"` // legacy runtime-only input
 		}
 		decoder := json.NewDecoder(io.LimitReader(r.Body, 16<<10))
 		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&body); err != nil || (strings.TrimSpace(body.ItemID) == "" && len(body.ItemIDs) == 0) || strings.TrimSpace(body.AccessToken) == "" {
+		if err := decoder.Decode(&body); err != nil || (strings.TrimSpace(body.ItemID) == "" && len(body.ItemIDs) == 0) {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "reason": "PLAYBACK_CANARY_INPUT_INVALID", "failed_step": "input"})
 			return
+		}
+		if strings.TrimSpace(body.AccessToken) == "" {
+			credentials := h.playbackCredentials
+			if credentials == nil || !credentials.PlaybackCredentialConfigured(ctx, name) {
+				writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "playback_status": "unverified", "reason": "credential_missing", "failed_step": "credential"})
+				return
+			}
+			var readErr error
+			body.AccessToken, readErr = credentials.ReadPlaybackCredential(ctx, name)
+			if readErr != nil || strings.TrimSpace(body.AccessToken) == "" {
+				writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "playback_status": "unverified", "reason": "credential_missing", "failed_step": "credential"})
+				return
+			}
 		}
 		result, canaryErr := canary.PlaybackCanary(ctx, plan, PlaybackCanaryInput{ItemID: body.ItemID, ItemIDs: body.ItemIDs, AccessToken: body.AccessToken})
 		body.AccessToken = ""

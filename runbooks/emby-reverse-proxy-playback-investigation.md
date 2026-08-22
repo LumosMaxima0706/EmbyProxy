@@ -88,6 +88,34 @@ No production edit is justified until the new slug's publication status, managed
 
 ## Status
 
+## Credential lifecycle hardening (2026-08-22)
+
+The multi-sample canary must not depend on an operator copying a runtime Emby
+token for every verification. Investigation found no safe reusable source in
+the ordinary node record: the existing `Node.Secret` value is SQLite data and
+is not suitable for playback credentials. The new lifecycle stores one token
+per route slug outside SQLite, under the configured
+`PLAYBACK_CREDENTIAL_DIR` (default `/var/lib/embyproxy-gsy-sidecar/playback-credentials`).
+
+The sidecar creates the directory as `0700` and writes `<slug>.token` atomically
+with mode `0600`. The admin API accepts a token only for configure/rotation and
+returns only `credential_configured`; it never returns the token, writes it to
+Nginx, logs, Git, runbook, or publication state. Read/delete operations are
+runtime-only and support rotation without exposing the previous value. A
+missing or unreadable credential forces `playback_status=unverified` with
+`reason=credential_missing`; API connectivity alone cannot mark a route healthy.
+
+The authenticated Admin UI now has a one-time “configure playback credential”
+action and a stored-credential multi-sample canary action. Operators enter only
+bounded item IDs for subsequent checks. The credential is read by the backend
+and passed through the existing protected publication bridge in memory.
+
+Validation gates for the outstanding 1111 regression remain unchanged:
+Item 625260 is the known successful sample and Item 601953 is the known 403
+sample. The route remains `partially fixed / failed-unverified` until the
+stored-credential canary discovers both exact media endpoints and demonstrates
+206, valid Range/Content-Range, and sustained byte growth for both samples.
+
 ## BWG Read-Only Evidence (2026-08-21)
 
 The owner-approved BWG read-only inspection produced the following redacted evidence:

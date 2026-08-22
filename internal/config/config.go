@@ -23,19 +23,22 @@ type Defaults struct {
 }
 
 type Config struct {
-	CWD                       string
-	DBPath                    string
-	GlobalStatsDBPath         string
-	Port                      int
-	ListenAddr                string
-	AdminListenAddr           string
-	AdminToken                string
-	Admin2FADisabled          bool
-	OwnerAdminAuthMode        string
-	OwnerAdminHost            string
-	PublicMediaBaseURL        string
-	PublicMediaNodePaths      map[string]string
-	PublicationAgentSocket    string
+	CWD                    string
+	DBPath                 string
+	GlobalStatsDBPath      string
+	Port                   int
+	ListenAddr             string
+	AdminListenAddr        string
+	AdminToken             string
+	Admin2FADisabled       bool
+	OwnerAdminAuthMode     string
+	OwnerAdminHost         string
+	PublicMediaBaseURL     string
+	PublicMediaNodePaths   map[string]string
+	PublicationAgentSocket string
+	// PlaybackCredentialDir stores per-publication Emby tokens outside SQLite.
+	// It is intentionally a local runtime directory, never a Git path.
+	PlaybackCredentialDir     string
 	MediaProxyRoutes          bool
 	FailoverDNSProviderMode   string
 	FailoverDNSAllowedRecords string
@@ -103,6 +106,7 @@ func Load() (Config, error) {
 		PublicMediaBaseURL:        publicMediaBaseURL,
 		PublicMediaNodePaths:      publicMediaNodePaths,
 		PublicationAgentSocket:    strings.TrimSpace(os.Getenv("PUBLICATION_AGENT_SOCKET")),
+		PlaybackCredentialDir:     envString("PLAYBACK_CREDENTIAL_DIR", "/var/lib/embyproxy-gsy-sidecar/playback-credentials"),
 		MediaProxyRoutes:          envBool("MEDIAPROXY_ROUTES_ENABLED", false),
 		FailoverDNSProviderMode:   strings.ToLower(strings.TrimSpace(os.Getenv("FAILOVER_DNS_PROVIDER_MODE"))),
 		FailoverDNSAllowedRecords: strings.TrimSpace(os.Getenv("FAILOVER_DNS_ALLOWED_RECORDS")),

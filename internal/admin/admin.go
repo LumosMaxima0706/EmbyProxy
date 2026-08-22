@@ -73,18 +73,19 @@ const telegramServerRemarkMaxRunes = 80
 const ownerAdminAuthenticatedHeader = "X-Owner-Admin-Authenticated"
 
 type Handler struct {
-	cfg               config.Config
-	store             *storage.Store
-	checker           *auth.Checker
-	telegram          *telegram.Service
-	log               *logging.Logger
-	resetRoute        ResetFunc
-	imageCache        ImageCacheManager
-	globalStats       *statslog.Store
-	failover          *failover.Controller
-	dnsStatusReader   func() map[string]any
-	publicationSyncer PublicationSyncer
-	publicationMu     sync.Mutex
+	cfg                 config.Config
+	store               *storage.Store
+	checker             *auth.Checker
+	telegram            *telegram.Service
+	log                 *logging.Logger
+	resetRoute          ResetFunc
+	imageCache          ImageCacheManager
+	globalStats         *statslog.Store
+	failover            *failover.Controller
+	dnsStatusReader     func() map[string]any
+	publicationSyncer   PublicationSyncer
+	playbackCredentials publicationCredentialStore
+	publicationMu       sync.Mutex
 }
 
 // readExternalFailoverState reads the policy runner's state file without
@@ -122,7 +123,7 @@ func New(cfg config.Config, store *storage.Store, checker *auth.Checker, tg *tel
 	if len(imageCaches) > 0 {
 		imageCache = imageCaches[0]
 	}
-	return &Handler{
+	h := &Handler{
 		cfg:        cfg,
 		store:      store,
 		checker:    checker,
@@ -131,6 +132,10 @@ func New(cfg config.Config, store *storage.Store, checker *auth.Checker, tg *tel
 		resetRoute: reset,
 		imageCache: imageCache,
 	}
+	if credentials, err := newFilePlaybackCredentialStore(cfg.PlaybackCredentialDir); err == nil {
+		h.playbackCredentials = credentials
+	}
+	return h
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
