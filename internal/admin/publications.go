@@ -1,9 +1,11 @@
 package admin
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -84,6 +86,161 @@ type publicationCredentialStore interface {
 	ReadPlaybackCredential(context.Context, string) (string, error)
 	WritePlaybackCredential(context.Context, string, string) error
 	DeletePlaybackCredential(context.Context, string) error
+}
+
+type embyAuthResponse struct {
+	AccessToken string `json:"AccessToken"`
+}
+
+type embyCurrentUser struct {
+	ID string `json:"Id"`
+}
+
+type embyItemsResponse struct {
+	Items []struct {
+		ID string `json:"Id"`
+	} `json:"Items"`
+}
+
+type publishCredentialInput struct {
+	Username string `json:"emby_username"`
+	Password string `json:"emby_password"`
+}
+
+// authenticateEmbyForPlayback performs the official Emby username/password
+// exchange only in memory. The password is never persisted or returned.
+func authenticateEmbyForPlayback(ctx context.Context, target, username, password string, client *http.Client) (string, error) {
+	username, password = strings.TrimSpace(username), strings.TrimSpace(password)
+	if username == "" || password == "" {
+		return "", errors.New("credential_input_incomplete")
+	}
+	u, err := url.Parse(strings.TrimRight(strings.TrimSpace(target), "/"))
+	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return "", errors.New("upstream_invalid")
+	}
+	basePath := strings.TrimRight(u.Path, "/")
+	u.Path = basePath + "/emby/Users/AuthenticateByName"
+	u.RawPath = ""
+	payload, _ := json.Marshal(map[string]string{"Username": username, "Pw": password})
+	defer func() {
+		for index := range payload {
+			payload[index] = 0
+		}
+	}()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader(payload))
+	if err != nil {
+		return "", errors.New("credential_auth_request_failed")
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", "EmbyProxy/1.0")
+	req.Header.Set("X-Emby-Authorization", `Emby Client="EmbyProxy", Device="EmbyProxy", DeviceId="embyproxy-canary", Version="1.0"`)
+	if client == nil {
+		client = &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", errors.New("credential_auth_unreachable")
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("credential_auth_http_%d", resp.StatusCode)
+	}
+	var result embyAuthResponse
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&result); err != nil || strings.TrimSpace(result.AccessToken) == "" || len(result.AccessToken) > 4096 || strings.ContainsAny(result.AccessToken, "\r\n") {
+		return "", errors.New("credential_auth_response_invalid")
+	}
+	return strings.TrimSpace(result.AccessToken), nil
+}
+
+func (h *Handler) provisionPlaybackCredential(ctx context.Context, plan PublicationPlan, username, password string) (string, error) {
+	usernamePresent, passwordPresent := strings.TrimSpace(username) != "", strings.TrimSpace(password) != ""
+	if !usernamePresent && !passwordPresent {
+		return "", nil
+	}
+	if !usernamePresent || !passwordPresent {
+		return "", errors.New("credential_input_incomplete")
+	}
+	if h.playbackCredentials == nil {
+		return "", errors.New("credential_store_unavailable")
+	}
+	token, err := authenticateEmbyForPlayback(ctx, plan.TargetURL, username, password, nil)
+	// Drop the caller-provided password as soon as the authentication exchange
+	// finishes; neither it nor the username is stored or returned.
+	username, password = "", ""
+	if err != nil {
+		return "", errors.New("credential_invalid")
+	}
+	if err := h.playbackCredentials.WritePlaybackCredential(ctx, plan.RouteSlug, token); err != nil {
+		token = ""
+		return "", errors.New("credential_store_write_failed")
+	}
+	token = ""
+	return "configured", nil
+}
+
+func discoverEmbyPlaybackItems(ctx context.Context, target, token string, client *http.Client) ([]string, error) {
+	base, err := url.Parse(strings.TrimRight(strings.TrimSpace(target), "/"))
+	if err != nil || base.Scheme != "https" || base.Hostname() == "" || strings.TrimSpace(token) == "" {
+		return nil, errors.New("credential_invalid")
+	}
+	if client == nil {
+		client = &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
+	}
+	doJSON := func(targetURL string, dst any) error {
+		req, requestErr := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
+		if requestErr != nil {
+			return errors.New("playback_sample_discovery_failed")
+		}
+		req.Header.Set("Accept", "application/json")
+		req.Header.Set("X-Emby-Token", token)
+		req.Header.Set("User-Agent", "EmbyProxy/1.0")
+		resp, requestErr := client.Do(req)
+		if requestErr != nil {
+			return errors.New("playback_sample_discovery_failed")
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+			return errors.New("credential_invalid")
+		}
+		if resp.StatusCode != http.StatusOK {
+			return errors.New("playback_sample_discovery_failed")
+		}
+		if json.NewDecoder(io.LimitReader(resp.Body, 2<<20)).Decode(dst) != nil {
+			return errors.New("playback_sample_discovery_failed")
+		}
+		return nil
+	}
+	root := strings.TrimRight(base.String(), "/") + "/emby"
+	var user embyCurrentUser
+	if err := doJSON(root+"/Users/Me", &user); err != nil || strings.TrimSpace(user.ID) == "" {
+		if err != nil {
+			return nil, err
+		}
+		return nil, errors.New("playback_sample_discovery_failed")
+	}
+	itemsURL := root + "/Users/" + url.PathEscape(strings.TrimSpace(user.ID)) + "/Items?Recursive=true&IncludeItemTypes=Movie%2CEpisode&Limit=8&SortBy=DateCreated&SortOrder=Descending"
+	var document embyItemsResponse
+	if err := doJSON(itemsURL, &document); err != nil {
+		return nil, err
+	}
+	items := make([]string, 0, 8)
+	seen := map[string]bool{}
+	for _, entry := range document.Items {
+		id := strings.TrimSpace(entry.ID)
+		if id == "" || len(id) > 128 || strings.ContainsAny(id, "/?#\\\r\n") || seen[id] {
+			continue
+		}
+		seen[id] = true
+		items = append(items, id)
+		if len(items) == 8 {
+			break
+		}
+	}
+	if len(items) < 2 {
+		return nil, errors.New("playback_samples_insufficient")
+	}
+	return items, nil
 }
 
 type PlaybackCanaryInput struct {
@@ -341,6 +498,9 @@ func (h *Handler) publicationStatus(ctx context.Context, uid, name string) (publ
 		if playbackStatus == "unverified" && !credentialConfigured {
 			reason, failedStep = "credential_missing", "credential"
 		}
+		if playbackStatus == "failed" && p.PlaybackFailureClass == "credential_invalid" {
+			playbackStatus, reason, failedStep = "unverified", "credential_invalid", "credential"
+		}
 		return publicationStatusView{
 			Status: p.Status, WorkflowState: publicationWorkflowState(p.Status, reason), Reason: reason, FailedStep: failedStep,
 			PublicURL: p.PublicURL, RouteSlug: p.RouteSlug,
@@ -368,6 +528,91 @@ func (h *Handler) publicationStatus(ctx context.Context, uid, name string) (publ
 		AdapterRegistered: h.publicationSyncer != nil,
 		PlaybackStatus:    "not_published",
 	}, nil
+}
+
+func (h *Handler) setPlaybackUnverified(ctx context.Context, uid, name, reason string) {
+	p, err := h.store.GetPublication(ctx, uid, name)
+	if err != nil || p == nil || p.Status != storage.PublicationPublished {
+		return
+	}
+	p.PlaybackStatus, p.PlaybackFailureClass, p.PlaybackVerifiedAt = "unverified", "", 0
+	p.Reason, p.FailedStep, p.UpdatedAt = reason, "credential", time.Now().Unix()
+	_ = h.store.SavePublication(ctx, *p)
+}
+
+func (h *Handler) runStoredPlaybackCanary(ctx context.Context, uid, name string, plan PublicationPlan, itemIDs []string) (PlaybackCanaryResult, string, error) {
+	status, statusErr := h.publicationStatus(ctx, uid, name)
+	if statusErr != nil || status.Status != storage.PublicationPublished || status.NOSLAStatus != "synced" || status.BWGStatus != "synced" {
+		return PlaybackCanaryResult{}, "PLAYBACK_CANARY_REQUIRES_SYNCED_PUBLICATION", errors.New("state_guard")
+	}
+	canary, ok := h.publicationSyncer.(publicationPlaybackCanary)
+	if !ok {
+		return PlaybackCanaryResult{}, "PLAYBACK_CANARY_UNAVAILABLE", errors.New("edge_adapter")
+	}
+	if h.playbackCredentials == nil || !h.playbackCredentials.PlaybackCredentialConfigured(ctx, name) {
+		return PlaybackCanaryResult{}, "credential_missing", errors.New("credential")
+	}
+	token, err := h.playbackCredentials.ReadPlaybackCredential(ctx, name)
+	if err != nil || strings.TrimSpace(token) == "" {
+		return PlaybackCanaryResult{}, "credential_missing", errors.New("credential")
+	}
+	result, canaryErr := canary.PlaybackCanary(ctx, plan, PlaybackCanaryInput{ItemIDs: itemIDs, AccessToken: token})
+	token = ""
+	if canaryErr != nil || result.Status != "healthy" {
+		failureClass := result.FailureClass
+		if (failureClass == "upstream_401" || failureClass == "upstream_403") &&
+			(result.ConnectivityStatus == http.StatusUnauthorized || result.ConnectivityStatus == http.StatusForbidden ||
+				result.PlaybackInfoStatus == http.StatusUnauthorized || result.PlaybackInfoStatus == http.StatusForbidden) {
+			failureClass = "credential_invalid"
+		}
+		if failureClass == "" {
+			failureClass = "transport_failure"
+		}
+		if failureClass == "credential_invalid" {
+			h.setPlaybackUnverified(ctx, uid, name, failureClass)
+		} else {
+			_ = h.store.SetPublicationPlaybackFailed(ctx, uid, name, failureClass, time.Now().Unix())
+		}
+		return result, failureClass, errors.New("playback_canary_failed")
+	}
+	verifiedAt := time.Now().Unix()
+	if err := h.store.SetPublicationPlaybackVerified(ctx, uid, name, verifiedAt); err != nil {
+		return result, "PLAYBACK_VERIFICATION_REQUIRES_SYNCED_PUBLICATION", err
+	}
+	return result, "", nil
+}
+
+func (h *Handler) autoVerifyPublishedPlayback(ctx context.Context, uid, name string, plan PublicationPlan, input *publishCredentialInput) (PlaybackCanaryResult, string) {
+	if input != nil && (strings.TrimSpace(input.Username) != "" || strings.TrimSpace(input.Password) != "") {
+		username, password := input.Username, input.Password
+		input.Username, input.Password = "", ""
+		_, provisionErr := h.provisionPlaybackCredential(ctx, plan, username, password)
+		username, password = "", ""
+		if provisionErr != nil {
+			h.setPlaybackUnverified(ctx, uid, name, provisionErr.Error())
+			return PlaybackCanaryResult{}, provisionErr.Error()
+		}
+	}
+	if h.playbackCredentials == nil || !h.playbackCredentials.PlaybackCredentialConfigured(ctx, name) {
+		h.setPlaybackUnverified(ctx, uid, name, "credential_missing")
+		return PlaybackCanaryResult{}, "credential_missing"
+	}
+	token, err := h.playbackCredentials.ReadPlaybackCredential(ctx, name)
+	if err != nil || strings.TrimSpace(token) == "" {
+		h.setPlaybackUnverified(ctx, uid, name, "credential_missing")
+		return PlaybackCanaryResult{}, "credential_missing"
+	}
+	items, discoverErr := discoverEmbyPlaybackItems(ctx, plan.TargetURL, token, nil)
+	token = ""
+	if discoverErr != nil {
+		reason := discoverErr.Error()
+		if reason == "credential_invalid" {
+			h.setPlaybackUnverified(ctx, uid, name, reason)
+		}
+		return PlaybackCanaryResult{}, reason
+	}
+	result, reason, _ := h.runStoredPlaybackCanary(ctx, uid, name, plan, items)
+	return result, reason
 }
 
 func playbackPublicationStatus(status string) string {
@@ -563,6 +808,23 @@ func (h *Handler) handlePublicationAPI(w http.ResponseWriter, r *http.Request, p
 	if action == "publish" || action == "unpublish" || action == "publish/reconcile" || action == "publish/cleanup" || action == "playback-verify" || action == "playback-canary" || action == "playback-credential" {
 		h.publicationMu.Lock()
 		defer h.publicationMu.Unlock()
+	}
+	var publishCredentials publishCredentialInput
+	if action == "publish" {
+		// The request is intentionally the only lifetime of the administrator's
+		// username/password. Clear this local copy on every exit path, including
+		// a failed plan or edge publication before authentication can begin.
+		defer func() {
+			publishCredentials.Username, publishCredentials.Password = "", ""
+		}()
+		decoder := json.NewDecoder(io.LimitReader(r.Body, 16<<10))
+		decoder.DisallowUnknownFields()
+		if r.Body != nil {
+			if err := decoder.Decode(&publishCredentials); err != nil && err != io.EOF {
+				writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "reason": "PUBLISH_CREDENTIAL_INPUT_INVALID", "failed_step": "credential"})
+				return
+			}
+		}
 	}
 	if action == "playback-credential" {
 		credentials := h.playbackCredentials
@@ -781,7 +1043,14 @@ func (h *Handler) handlePublicationAPI(w http.ResponseWriter, r *http.Request, p
 				writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "status": current.Status, "reason": "PUBLICATION_STATE_WRITE_FAILED", "failed_step": "db_write"})
 				return
 			}
-			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "status": refreshed.Status, "reason": "configuration_refreshed", "publication": refreshed})
+			canary, canaryReason := h.autoVerifyPublishedPlayback(ctx, uid, name, plan, &publishCredentials)
+			response := map[string]any{"ok": true, "status": refreshed.Status, "reason": "configuration_refreshed", "publication": refreshed}
+			if canaryReason != "" {
+				response["playback_status"], response["playback_reason"] = "unverified", canaryReason
+			} else {
+				response["playback_status"], response["canary"] = "healthy", canary
+			}
+			writeJSON(w, http.StatusOK, response)
 			return
 		}
 		rawPublication, rawErr := h.store.GetPublication(ctx, uid, name)
@@ -865,7 +1134,14 @@ func (h *Handler) handlePublicationAPI(w http.ResponseWriter, r *http.Request, p
 			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "status": failed.Status, "reason": failed.Reason, "failed_step": failed.FailedStep, "publication": failed})
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "status": published.Status, "publication": published})
+		canary, canaryReason := h.autoVerifyPublishedPlayback(ctx, uid, name, plan, &publishCredentials)
+		response := map[string]any{"ok": true, "status": published.Status, "publication": published}
+		if canaryReason != "" {
+			response["playback_status"], response["playback_reason"] = "unverified", canaryReason
+		} else {
+			response["playback_status"], response["canary"] = "healthy", canary
+		}
+		writeJSON(w, http.StatusOK, response)
 		h.logPublication("publicationCompleted", plan, published.Status, "")
 		return
 	}

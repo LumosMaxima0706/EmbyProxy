@@ -629,3 +629,42 @@ Re-run the isolated full Go test/vet/build gate, then deploy only the resulting 
   initiated from the authenticated Admin publication page, where the owner
   enters the two item IDs and token in memory only. The token will not be sent
   in chat, written to Git, logs, state, or this runbook.
+
+## Integrated Credential Provisioning (2026-08-22)
+
+### Current status
+
+- Playback credential provisioning is integrated into the Admin publish/refresh
+  action. A separate raw-token prompt is no longer part of the publication UI.
+- The publish sheet accepts optional Emby username/password. Empty fields reuse
+  the existing protected credential; if none exists, publication remains
+  `playback_status=unverified` with `credential_missing`.
+
+### Evidence and implementation
+
+- The backend calls official `POST /emby/Users/AuthenticateByName` over HTTPS,
+  receives `AccessToken`, and writes only that token to the existing protected
+  file store. Username/password are request-scoped and are cleared after the
+  authentication exchange; they are not persisted, returned, logged, written to
+  SQLite, Nginx, Git, or edge manifests.
+- Successful provisioning reuses the protected token to discover a bounded set
+  of up to eight item IDs through `Users/Me` and `Users/{id}/Items`, then invokes
+  the existing multi-sample canary. Authentication failures are classified as
+  `credential_invalid` without exposing credential material.
+- The UI exposes `配置凭据并验证` / `重新授权并验证` through the same publish
+  dialog. The stored credential status remains boolean-only.
+
+### Tests
+
+- Added tests for official authentication request shape, auth-failure redaction,
+  bounded item discovery, and the publication UI marker. These pass in the
+  isolated BWG Go 1.26.4 build clone.
+
+### Remaining live gate
+
+- The `1111` 625260/601953 real canary cannot run until an owner submits valid
+  Emby username/password once through the new Admin publish dialog. No valid
+  credential is currently available in BWG's protected store. After that one-time
+  provisioning, route discovery and re-canary are automatic. `1111` remains
+  `failed-unverified` until both real samples reach 200/206 with Range headers
+  and sustained byte growth.

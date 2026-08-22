@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -142,6 +143,68 @@ func TestStoredPlaybackCredentialFeedsCanaryWithoutReturningSecret(t *testing.T)
 	status := serveAdminJSON(t, handler, http.MethodGet, "/api/admin/emby-servers/feimu/publish-status", nil, cookie)
 	if strings.Contains(status.Body.String(), "stored-runtime-secret") || !strings.Contains(status.Body.String(), `"playback_credential_configured":true`) {
 		t.Fatalf("status leaked credential or configured flag missing: %s", status.Body.String())
+	}
+}
+
+func TestAuthenticateEmbyForPlaybackUsesOfficialExchangeWithoutReturningPassword(t *testing.T) {
+	var seenUser, seenPassword string
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/emby/Users/AuthenticateByName" {
+			t.Fatalf("request=%s %s", r.Method, r.URL.Path)
+		}
+		var body struct {
+			Username string `json:"Username"`
+			Password string `json:"Pw"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		seenUser, seenPassword = body.Username, body.Password
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"AccessToken":"runtime-token"}`))
+	}))
+	defer server.Close()
+	client := server.Client()
+	token, err := authenticateEmbyForPlayback(context.Background(), server.URL, "alice", "not-for-storage", client)
+	if err != nil || token != "runtime-token" {
+		t.Fatalf("token=%q err=%v", token, err)
+	}
+	if seenUser != "alice" || seenPassword != "not-for-storage" {
+		t.Fatalf("authentication payload user=%q password=%q", seenUser, seenPassword)
+	}
+}
+
+func TestAuthenticateEmbyForPlaybackClassifiesAuthFailureWithoutCredentialLeak(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer server.Close()
+	_, err := authenticateEmbyForPlayback(context.Background(), server.URL, "alice", "secret-value", server.Client())
+	if err == nil || !strings.Contains(err.Error(), "credential_auth_http_401") || strings.Contains(err.Error(), "secret-value") || strings.Contains(err.Error(), "alice") {
+		t.Fatalf("unexpected auth error=%v", err)
+	}
+}
+
+func TestDiscoverEmbyPlaybackItemsReturnsBoundedMultiSampleSet(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Emby-Token") != "runtime-token" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/emby/Users/Me":
+			_, _ = w.Write([]byte(`{"Id":"user-1"}`))
+		case r.URL.Path == "/emby/Users/user-1/Items":
+			_, _ = w.Write([]byte(`{"Items":[{"Id":"625260"},{"Id":"601953"},{"Id":"third"}]}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	items, err := discoverEmbyPlaybackItems(context.Background(), server.URL, "runtime-token", server.Client())
+	if err != nil || len(items) != 3 || items[0] != "625260" || items[1] != "601953" {
+		t.Fatalf("items=%v err=%v", items, err)
 	}
 }
 
