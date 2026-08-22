@@ -121,6 +121,31 @@ retained as the rollback target. NOSLA needs no binary change for this stage:
 the credential remains only on the BWG sidecar and reaches the existing
 publication-agent over the local protected socket at canary time.
 
+## Credential source audit (2026-08-22)
+
+Before requesting provisioning, the normal configuration sources were checked
+without reading or exporting secret values. The saved `1111` node record has
+only compact upstream/display/keepalive fields and no API key, access token, or
+playback-credential field. BWG's protected environment exposes only the
+administrator authentication setting; the publication-agent and edge configs
+contain no Emby credential source. The per-slug credential directory exists but
+contains no token file for `1111` (or any other slug).
+
+The ordinary node `Secret` field is not an Emby playback credential and is not
+reused. No client, access-log, capture, process-memory, or browser/session data
+was inspected. Therefore `1111` has no system-legitimate credential available
+for PlaybackInfo/VideoStream validation and requires one-time administrator
+provisioning through the authenticated Admin UI.
+
+Architecture check: BWG is the control plane. The BWG sidecar reads the local
+credential and invokes the publication-agent over its protected Unix socket;
+the agent performs the bounded canary and uses the existing edge helper to
+publish scoped routes to both edges. NOSLA is an edge-only Nginx/helper host and
+has no active publication-agent service or canary executor. It therefore does
+not need a copy of the Emby credential. Failover validation still runs from
+the BWG control plane against the public route, so the credential remains only
+on BWG and is never synchronized to NOSLA, Nginx fragments, Git, or logs.
+
 Validation gates for the outstanding 1111 regression remain unchanged:
 Item 625260 is the known successful sample and Item 601953 is the known 403
 sample. The route remains `partially fixed / failed-unverified` until the
