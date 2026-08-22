@@ -759,3 +759,19 @@ Do not mark `1111` healthy. The remaining acceptance requires the upstream to
 authorize the final media endpoint for both `625260` and `601953`, followed by
 `206 + Content-Range + Accept-Ranges + sustained byte growth` and a regression
 check for UHD/feimu/yuchu.
+
+### A/B media endpoint proof (latest)
+
+- For `601953`, the upstream-origin 302 target returned `206`,
+  `Content-Range`, `Accept-Ranges`, and 65,536 bytes with the protected
+  token/session and Range semantics. The equivalent public route initially
+  returned `403` because its exact `proplay.xxlb.net:80/stream` endpoint was
+  absent. After automatic discovery and sync, the public route also returned
+  `206` with 65,536 bytes.
+- For `625260`, repeated direct tests showed the signed endpoint is sensitive
+  to `User-Agent`: normal `Yamby` (and an empty UA) returned `206`, while the
+  previous synthetic `EmbyProxy/1.0` / `Emby/4.8.11` UA returned `403`. The
+  canary now uses the verified normal `Yamby` UA so its final Range request
+  matches the real client policy. No wildcard route or auth bypass was added.
+- The two-sample canary must be rerun after this UA correction. Until both
+  samples report `206 + Content-Range + byte growth`, `1111` remains failed.

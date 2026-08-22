@@ -430,7 +430,11 @@ func canaryRequest(ctx context.Context, client *http.Client, method, target, tok
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "embyproxy-playback-canary/1.0")
+	// The upstream media gateway applies normal client policy to the final
+	// signed URL. Yamby is the verified client for this deployment; using its
+	// ordinary UA keeps canary semantics aligned with the real player without
+	// persisting or spoofing any user identity.
+	req.Header.Set("User-Agent", "Yamby")
 	req.Header.Set("X-Emby-Token", token)
 	// Give the upstream a stable, non-user device identity. Some Emby forks
 	// require this to bind a token to a playback session before producing a
