@@ -668,3 +668,30 @@ Re-run the isolated full Go test/vet/build gate, then deploy only the resulting 
   provisioning, route discovery and re-canary are automatic. `1111` remains
   `failed-unverified` until both real samples reach 200/206 with Range headers
   and sustained byte growth.
+
+### Candidate rollout evidence (2026-08-22)
+
+- Commit `e4e8159c3615ee6582323b7568573b2a6f8de536` was pushed to
+  `origin/feature/failover-phase2-local` without force push. BWG built the exact
+  commit with Go 1.26.4; candidate main SHA-256:
+  `96734bcab0b4320060fb43efd4a324247e565daddd7a752022a9946a14dc0bb0`.
+- The BWG sidecar candidate is installed at
+  `/opt/embyproxy-gsy-sidecar/releases/e4e8159-publish-credential-20260822T034717Z`
+  and active. Its previous release remains available for rollback. The isolated
+  owner-admin/staging binary was also updated with backups. It needed the
+  already-scoped `GLOBAL_STATS_DB_PATH` environment setting to start; this is a
+  local staging prerequisite, not a credential or Nginx change.
+- `nginx -t` succeeds and unauthenticated owner-admin access still returns 401.
+  Nginx was not reloaded; no publication fragment, DNS/failover record, or
+  production EmbyProxy server block was changed.
+- BWG's protected playback directory contains no `1111` credential. No real
+  canary was attempted; `1111` remains failed-unverified.
+
+### Rollback
+
+- Sidecar: point `/opt/embyproxy-gsy-sidecar/current` to the prior release and
+  restart `embyproxy-gsy-sidecar.service`.
+- Owner admin: restore
+  `/opt/embyproxy-phase2-staging/bin/embyproxy-staging.bak-pre-e4e8159-second`
+  (or `.bak-e4e8159`) and restart only `embyproxy-phase2-staging.service`; the
+  staging environment backup is `/etc/embyproxy-phase2-staging/staging.env.bak-e4e8159`.
