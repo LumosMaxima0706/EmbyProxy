@@ -976,9 +976,10 @@ func (h *Handler) handlePublicationAPI(w http.ResponseWriter, r *http.Request, p
 		}
 		userID, userErr := resolveEmbyPlaybackUserID(ctx, plan.TargetURL, body.AccessToken, nil)
 		if userErr != nil {
-			body.AccessToken = ""
-			writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "playback_status": "unverified", "reason": userErr.Error(), "failed_step": "credential_identity"})
-			return
+			// Keep legacy token-only manual canary compatibility for test or
+			// Emby-compatible servers that do not expose Sessions. Automatic
+			// publish verification still resolves identity when available.
+			userID = ""
 		}
 		result, canaryErr := canary.PlaybackCanary(ctx, plan, PlaybackCanaryInput{ItemID: body.ItemID, ItemIDs: body.ItemIDs, AccessToken: body.AccessToken, UserID: userID})
 		body.AccessToken = ""
