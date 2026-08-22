@@ -548,3 +548,20 @@ Re-run the isolated full Go test/vet/build gate, then deploy only the resulting 
   through chat, stored in Git, logged, or copied into this runbook. The canary
   will render the exact Y route on both edges and leave the publication failed
   unless every sample proves 200/206 plus byte growth.
+
+### Runtime sample correlation (2026-08-22)
+
+- NOSLA access-log correlation found a concrete successful sample and a concrete
+  failing sample without copying URLs, query strings, headers, or credentials:
+  the successful item identifier is represented only by SHA-256 prefix
+  `3c59ce0b8e00`; the failing item identifier only by SHA-256 prefix
+  `87cce547bec0`.
+- The successful sample reached the existing HTTP/80 endpoint with 206 and
+  multi-megabyte byte growth. The failing sample repeatedly reached the primary
+  302 and then the missing HTTP/80 endpoint with the local 403 body. This is the
+  live X/Y regression required by the second-stage acceptance.
+- No safe runtime Emby token is persisted or derivable from the admin token,
+  publication-agent SSH identity, or edge environment. The final canary must be
+  initiated from the authenticated Admin publication page, where the owner
+  enters the two item IDs and token in memory only. The token will not be sent
+  in chat, written to Git, logs, state, or this runbook.
