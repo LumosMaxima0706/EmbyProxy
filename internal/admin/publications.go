@@ -600,9 +600,11 @@ func (h *Handler) runStoredPlaybackCanary(ctx context.Context, uid, name string,
 		return PlaybackCanaryResult{}, "credential_missing", errors.New("credential")
 	}
 	userID, userErr := resolveEmbyPlaybackUserID(ctx, plan.TargetURL, token, nil)
+	// Older/manual canary callers may target an Emby-compatible test server
+	// without Sessions support; retain the token-only path there. The publish
+	// flow still resolves UserId automatically before its production canary.
 	if userErr != nil {
-		token = ""
-		return PlaybackCanaryResult{}, userErr.Error(), userErr
+		userID = ""
 	}
 	result, canaryErr := canary.PlaybackCanary(ctx, plan, PlaybackCanaryInput{ItemIDs: itemIDs, AccessToken: token, UserID: userID})
 	userID = ""
