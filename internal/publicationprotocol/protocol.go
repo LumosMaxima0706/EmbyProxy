@@ -26,6 +26,8 @@ type PlaybackCanaryRequest struct {
 	// for older admin clients and is treated as a one-item sample.
 	ItemIDs     []string `json:"item_ids,omitempty"`
 	AccessToken string   `json:"access_token"`
+	// UserID is runtime-only metadata derived from the protected Emby token.
+	UserID string `json:"user_id,omitempty"`
 }
 
 type EdgeResult struct {

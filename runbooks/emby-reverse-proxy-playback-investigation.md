@@ -695,3 +695,67 @@ Re-run the isolated full Go test/vet/build gate, then deploy only the resulting 
   `/opt/embyproxy-phase2-staging/bin/embyproxy-staging.bak-pre-e4e8159-second`
   (or `.bak-e4e8159`) and restart only `embyproxy-phase2-staging.service`; the
   staging environment backup is `/etc/embyproxy-phase2-staging/staging.env.bak-e4e8159`.
+
+## 2026-08-22 Runtime Canary Evidence
+
+### Current status
+
+`1111` remains `playback_status=failed` / `failed-unverified`. The protected
+credential is configured; this is no longer `credential_missing`.
+
+### Evidence and executed checks
+
+- Using the protected runtime credential, both real samples `625260` and
+  `601953` returned `PlaybackInfo=200`. Their first MediaSource values were
+  remote HTTP sources with direct-play/direct-stream support and no public
+  `DirectStreamUrl`.
+- The old canary path `/emby/Videos/<id>/stream` returned upstream `404`. The
+  client-compatible lowercase `/emby/videos/<id>/original.mkv` path returns
+  `302`, proving the VideoStream construction defect was fixed.
+- The canary now resolves a runtime user identity from the official Emby
+  `/Sessions` response for the protected token, carries it only over the
+  authenticated Unix-socket request, and adds bounded `UserId`,
+  `MediaSourceId`, `PlaySessionId`, and stable canary `DeviceId` query values.
+  No user identity or token is persisted or returned by the API.
+- After the fix, the live two-sample canary reported:
+  `connectivity=200`, `playbackinfo=200`, `videostream=302`,
+  `redirects_followed=1`, `endpoints_discovered=1`, `media=403`,
+  `bytes_read` only a small error body, `content_range=false`,
+  `accept_ranges=false`, `byte_growth=false`, `samples_passed=0`.
+- A follow-up direct capture classified the redirect as the exact scoped
+  HTTP/80 media route. The route itself is present on both edge fragments, but
+  the final media request still returns upstream `403` (not a fail-closed
+  route miss), even with the runtime token, UserId, MediaSourceId,
+  PlaySessionId and canary DeviceId. This is an upstream media authorization
+  restriction for the selected remote source, not a missing Nginx location.
+- The discovered endpoint was automatically stored in the root-owned runtime
+  discovery file and synchronized into the scoped `1111` manifest. No manual
+  edit to `1111.conf` was made. Both BWG and NOSLA Nginx configurations pass
+  `nginx -t`; both publication services are active.
+
+### Failure classification
+
+The current boundary is layer G: the final media Range request is answered
+`403` after a valid 302. It is not an Emby login failure, PlaybackInfo failure,
+VideoStream construction failure, redirect discovery failure, route-generation
+failure, or Nginx syntax failure. The remaining 403 is an upstream media/CDN
+authorization or media-permission restriction; it must not be reported as
+playback healthy until both real samples produce 200/206, valid Range headers,
+and sustained byte growth.
+
+### Permanent fixes recorded
+
+- Sample discovery falls back to global `/emby/Items` when `/Users/Me` is
+  unsupported by an otherwise valid token.
+- Remote MediaSource paths use the observed client route and preserve the
+  runtime playback identifiers.
+- Playback validation now derives the token's user identity at runtime,
+  supports multi-sample canary requests, discovers exact redirect endpoints,
+  and keeps the fail-closed route policy.
+
+### Next gate
+
+Do not mark `1111` healthy. The remaining acceptance requires the upstream to
+authorize the final media endpoint for both `625260` and `601953`, followed by
+`206 + Content-Range + Accept-Ranges + sustained byte growth` and a regression
+check for UHD/feimu/yuchu.

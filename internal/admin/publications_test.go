@@ -208,6 +208,19 @@ func TestDiscoverEmbyPlaybackItemsReturnsBoundedMultiSampleSet(t *testing.T) {
 	}
 }
 
+func TestDiscoverEmbyPlaybackItemsFallsBackWhenUsersMeIsUnsupported(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Emby-Token") != "runtime-token" { w.WriteHeader(http.StatusUnauthorized); return }
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/emby/Users/Me" { w.WriteHeader(http.StatusInternalServerError); return }
+		if r.URL.Path == "/emby/Items" { _, _ = w.Write([]byte(`{"Items":[{"Id":"625260"},{"Id":"601953"}]}`)); return }
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+	items, err := discoverEmbyPlaybackItems(context.Background(), server.URL, "runtime-token", server.Client())
+	if err != nil || len(items) != 2 { t.Fatalf("items=%v err=%v", items, err) }
+}
+
 func TestMissingPlaybackCredentialBlocksCanary(t *testing.T) {
 	handler, cookie := publicationTestHandler(t)
 	handler.SetPublicationSyncer(&capturingPlaybackCanarySyncer{})

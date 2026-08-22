@@ -117,9 +117,43 @@ func ValidatePlaybackCanary(e PlaybackCanaryEvidence) (PlaybackCanaryResult, err
 
 type playbackInfoDocument struct {
 	MediaSources []struct {
-		ID              string `json:"Id"`
-		DirectStreamURL string `json:"DirectStreamUrl"`
+		ID                   string `json:"Id"`
+		Path                 string `json:"Path"`
+		Protocol             string `json:"Protocol"`
+		IsRemote             bool   `json:"IsRemote"`
+		SupportsDirectStream bool   `json:"SupportsDirectStream"`
+		SupportsDirectPlay   bool   `json:"SupportsDirectPlay"`
+		DirectStreamURL      string `json:"DirectStreamUrl"`
 	} `json:"MediaSources"`
+	PlaySessionID string `json:"PlaySessionId"`
+}
+
+func playbackStreamPath(item string, source struct {
+	ID                   string `json:"Id"`
+	Path                 string `json:"Path"`
+	Protocol             string `json:"Protocol"`
+	IsRemote             bool   `json:"IsRemote"`
+	SupportsDirectStream bool   `json:"SupportsDirectStream"`
+	SupportsDirectPlay   bool   `json:"SupportsDirectPlay"`
+	DirectStreamURL      string `json:"DirectStreamUrl"`
+}, playSessionID string) string {
+	if strings.TrimSpace(source.DirectStreamURL) != "" {
+		return strings.TrimSpace(source.DirectStreamURL)
+	}
+	if strings.HasPrefix(strings.TrimSpace(source.Path), "/") {
+		return strings.TrimSpace(source.Path)
+	}
+	if source.IsRemote && strings.TrimSpace(source.Path) != "" {
+		return "/emby/videos/" + item + "/original.mkv"
+	}
+	streamURL := "/emby/Videos/" + item + "/stream?Static=true"
+	if id := strings.TrimSpace(source.ID); id != "" {
+		streamURL += "&MediaSourceId=" + url.QueryEscape(id)
+	}
+	if strings.TrimSpace(playSessionID) != "" {
+		streamURL += "&PlaySessionId=" + url.QueryEscape(playSessionID)
+	}
+	return streamURL
 }
 
 // runPlaybackCanary validates a bounded, runtime-only sample set. A publication
@@ -136,7 +170,7 @@ func (a *Agent) runPlaybackCanary(ctx context.Context, request publicationprotoc
 	var last *publicationprotocol.PlaybackCanaryResponse
 	for index, item := range items {
 		sampleRequest := request
-		sampleRequest.PlaybackCanary = &publicationprotocol.PlaybackCanaryRequest{ItemID: item, AccessToken: request.PlaybackCanary.AccessToken}
+		sampleRequest.PlaybackCanary = &publicationprotocol.PlaybackCanaryRequest{ItemID: item, AccessToken: request.PlaybackCanary.AccessToken, UserID: request.PlaybackCanary.UserID}
 		if index > 0 {
 			refreshed, refreshErr := a.manifestFromDatabase(ctx, sampleRequest)
 			if refreshErr != nil {
@@ -211,6 +245,9 @@ func (a *Agent) runPlaybackCanaryOne(ctx context.Context, request publicationpro
 
 	item := url.PathEscape(request.PlaybackCanary.ItemID)
 	playbackInfoURL := publicRoot + "/emby/Items/" + item + "/PlaybackInfo"
+	if userID := strings.TrimSpace(request.PlaybackCanary.UserID); userID != "" {
+		playbackInfoURL += "?UserId=" + url.QueryEscape(userID)
+	}
 	playbackInfo, err := canaryRequest(ctx, client, http.MethodPost, playbackInfoURL, request.PlaybackCanary.AccessToken, false)
 	if err != nil {
 		return fail(classifyTransport(err))
@@ -226,13 +263,8 @@ func (a *Agent) runPlaybackCanaryOne(ctx context.Context, request publicationpro
 	if decodeErr != nil || len(document.MediaSources) == 0 {
 		return fail("playbackinfo_invalid")
 	}
-	streamURL := strings.TrimSpace(document.MediaSources[0].DirectStreamURL)
-	if streamURL == "" {
-		streamURL = "/emby/Videos/" + item + "/stream?Static=true"
-		if id := strings.TrimSpace(document.MediaSources[0].ID); id != "" {
-			streamURL += "&MediaSourceId=" + url.QueryEscape(id)
-		}
-	}
+	streamURL := playbackStreamPath(item, document.MediaSources[0], document.PlaySessionID)
+	streamURL = addPlaybackQuery(streamURL, document.MediaSources[0].ID, document.PlaySessionID, request.PlaybackCanary.UserID)
 	streamURL, err = canaryPublicURL(publicRoot, a.config.PublicMediaHost, streamURL)
 	if err != nil {
 		return fail("playbackinfo_media_url_invalid")
@@ -355,9 +387,31 @@ func (a *Agent) runPlaybackCanaryOne(ctx context.Context, request publicationpro
 	return publicationprotocol.Response{OK: true, NOSLA: publicationprotocol.EdgeResult{Status: "synced"}, BWG: publicationprotocol.EdgeResult{Status: "synced"}, Playback: result}
 }
 
+func addPlaybackQuery(raw, mediaSourceID, playSessionID, userID string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+	q := u.Query()
+	if strings.TrimSpace(mediaSourceID) != "" {
+		q.Set("MediaSourceId", mediaSourceID)
+	}
+	if strings.TrimSpace(playSessionID) != "" {
+		q.Set("PlaySessionId", playSessionID)
+	}
+	if strings.TrimSpace(userID) != "" {
+		q.Set("UserId", userID)
+	}
+	// This upstream requires a stable client device identifier to create its
+	// remote-media redirect. It is a non-secret constant, not a user device ID.
+	q.Set("DeviceId", "embyproxy-canary")
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
 func validCanaryCredential(in publicationprotocol.PlaybackCanaryRequest) bool {
 	item, token := strings.TrimSpace(in.ItemID), strings.TrimSpace(in.AccessToken)
-	if item == "" || len(item) > 128 || token == "" || len(token) > 4096 || strings.ContainsAny(item, "/?#\\\r\n") || strings.ContainsAny(token, "\r\n") {
+	if item == "" || len(item) > 128 || token == "" || len(token) > 4096 || strings.ContainsAny(item, "/?#\\\r\n") || strings.ContainsAny(token, "\r\n") || len(in.UserID) > 128 || strings.ContainsAny(in.UserID, "\r\n") {
 		return false
 	}
 	return true
@@ -378,6 +432,10 @@ func canaryRequest(ctx context.Context, client *http.Client, method, target, tok
 	}
 	req.Header.Set("User-Agent", "embyproxy-playback-canary/1.0")
 	req.Header.Set("X-Emby-Token", token)
+	// Give the upstream a stable, non-user device identity. Some Emby forks
+	// require this to bind a token to a playback session before producing a
+	// remote-media redirect.
+	req.Header.Set("X-Emby-Authorization", `Emby Client="EmbyProxy", Device="EmbyProxy", DeviceId="embyproxy-canary", Version="1.0"`)
 	if ranged {
 		req.Header.Set("Range", "bytes=0-65535")
 	}

@@ -213,13 +213,11 @@ func discoverEmbyPlaybackItems(ctx context.Context, target, token string, client
 	}
 	root := strings.TrimRight(base.String(), "/") + "/emby"
 	var user embyCurrentUser
-	if err := doJSON(root+"/Users/Me", &user); err != nil || strings.TrimSpace(user.ID) == "" {
-		if err != nil {
-			return nil, err
-		}
-		return nil, errors.New("playback_sample_discovery_failed")
+	userErr := doJSON(root+"/Users/Me", &user)
+	itemsURL := root + "/Items?Recursive=true&IncludeItemTypes=Movie%2CEpisode&Limit=8&SortBy=DateCreated&SortOrder=Descending"
+	if userErr == nil && strings.TrimSpace(user.ID) != "" {
+		itemsURL = root + "/Users/" + url.PathEscape(strings.TrimSpace(user.ID)) + "/Items?Recursive=true&IncludeItemTypes=Movie%2CEpisode&Limit=8&SortBy=DateCreated&SortOrder=Descending"
 	}
-	itemsURL := root + "/Users/" + url.PathEscape(strings.TrimSpace(user.ID)) + "/Items?Recursive=true&IncludeItemTypes=Movie%2CEpisode&Limit=8&SortBy=DateCreated&SortOrder=Descending"
 	var document embyItemsResponse
 	if err := doJSON(itemsURL, &document); err != nil {
 		return nil, err
@@ -243,10 +241,55 @@ func discoverEmbyPlaybackItems(ctx context.Context, target, token string, client
 	return items, nil
 }
 
+func resolveEmbyPlaybackUserID(ctx context.Context, target, token string, client *http.Client) (string, error) {
+	base, err := url.Parse(strings.TrimRight(strings.TrimSpace(target), "/"))
+	if err != nil || base.Scheme != "https" || base.Hostname() == "" || strings.TrimSpace(token) == "" {
+		return "", errors.New("credential_invalid")
+	}
+	if client == nil {
+		client = &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
+	}
+	root := strings.TrimRight(base.String(), "/") + "/emby"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, root+"/Sessions?DeviceId=embyproxy-canary", nil)
+	if err != nil {
+		return "", errors.New("playback_user_resolution_failed")
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-Emby-Token", token)
+	req.Header.Set("User-Agent", "EmbyProxy/1.0")
+	req.Header.Set("X-Emby-Authorization", `Emby Client="EmbyProxy", Device="EmbyProxy", DeviceId="embyproxy-canary", Version="1.0"`)
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", errors.New("playback_user_resolution_failed")
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return "", errors.New("credential_invalid")
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", errors.New("playback_user_resolution_failed")
+	}
+	var sessions []struct {
+		UserID   string `json:"UserId"`
+		DeviceID string `json:"DeviceId"`
+	}
+	if json.NewDecoder(io.LimitReader(resp.Body, 2<<20)).Decode(&sessions) != nil {
+		return "", errors.New("playback_user_resolution_failed")
+	}
+	for _, session := range sessions {
+		userID := strings.TrimSpace(session.UserID)
+		if session.DeviceID == "embyproxy-canary" && len(userID) == 32 && !strings.ContainsAny(userID, "\r\n") {
+			return userID, nil
+		}
+	}
+	return "", errors.New("playback_user_resolution_failed")
+}
+
 type PlaybackCanaryInput struct {
 	ItemID      string
 	ItemIDs     []string
 	AccessToken string
+	UserID      string
 }
 
 type PlaybackCanaryResult struct {
@@ -556,7 +599,13 @@ func (h *Handler) runStoredPlaybackCanary(ctx context.Context, uid, name string,
 	if err != nil || strings.TrimSpace(token) == "" {
 		return PlaybackCanaryResult{}, "credential_missing", errors.New("credential")
 	}
-	result, canaryErr := canary.PlaybackCanary(ctx, plan, PlaybackCanaryInput{ItemIDs: itemIDs, AccessToken: token})
+	userID, userErr := resolveEmbyPlaybackUserID(ctx, plan.TargetURL, token, nil)
+	if userErr != nil {
+		token = ""
+		return PlaybackCanaryResult{}, userErr.Error(), userErr
+	}
+	result, canaryErr := canary.PlaybackCanary(ctx, plan, PlaybackCanaryInput{ItemIDs: itemIDs, AccessToken: token, UserID: userID})
+	userID = ""
 	token = ""
 	if canaryErr != nil || result.Status != "healthy" {
 		failureClass := result.FailureClass
@@ -603,6 +652,16 @@ func (h *Handler) autoVerifyPublishedPlayback(ctx context.Context, uid, name str
 		return PlaybackCanaryResult{}, "credential_missing"
 	}
 	items, discoverErr := discoverEmbyPlaybackItems(ctx, plan.TargetURL, token, nil)
+	if discoverErr == nil {
+		userID, userErr := resolveEmbyPlaybackUserID(ctx, plan.TargetURL, token, nil)
+		if userErr != nil {
+			token = ""
+			return PlaybackCanaryResult{}, userErr.Error()
+		}
+		result, reason, _ := h.runStoredPlaybackCanaryWithCredential(ctx, uid, name, plan, items, token, userID)
+		token, userID = "", ""
+		return result, reason
+	}
 	token = ""
 	if discoverErr != nil {
 		reason := discoverErr.Error()
@@ -611,8 +670,22 @@ func (h *Handler) autoVerifyPublishedPlayback(ctx context.Context, uid, name str
 		}
 		return PlaybackCanaryResult{}, reason
 	}
-	result, reason, _ := h.runStoredPlaybackCanary(ctx, uid, name, plan, items)
-	return result, reason
+	return PlaybackCanaryResult{}, discoverErr.Error()
+}
+
+func (h *Handler) runStoredPlaybackCanaryWithCredential(ctx context.Context, uid, name string, plan PublicationPlan, itemIDs []string, token, userID string) (PlaybackCanaryResult, string, error) {
+	canary, ok := h.publicationSyncer.(publicationPlaybackCanary)
+	if !ok {
+		return PlaybackCanaryResult{}, "PLAYBACK_CANARY_UNAVAILABLE", errors.New("edge_adapter")
+	}
+	result, canaryErr := canary.PlaybackCanary(ctx, plan, PlaybackCanaryInput{ItemIDs: itemIDs, AccessToken: token, UserID: userID})
+	if canaryErr != nil || result.Status != "healthy" {
+		return result, result.FailureClass, errors.New("playback_canary_failed")
+	}
+	if err := h.store.SetPublicationPlaybackVerified(ctx, uid, name, time.Now().Unix()); err != nil {
+		return result, "PLAYBACK_VERIFICATION_REQUIRES_SYNCED_PUBLICATION", err
+	}
+	return result, "", nil
 }
 
 func playbackPublicationStatus(status string) string {
@@ -899,8 +972,15 @@ func (h *Handler) handlePublicationAPI(w http.ResponseWriter, r *http.Request, p
 				return
 			}
 		}
-		result, canaryErr := canary.PlaybackCanary(ctx, plan, PlaybackCanaryInput{ItemID: body.ItemID, ItemIDs: body.ItemIDs, AccessToken: body.AccessToken})
+		userID, userErr := resolveEmbyPlaybackUserID(ctx, plan.TargetURL, body.AccessToken, nil)
+		if userErr != nil {
+			body.AccessToken = ""
+			writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "playback_status": "unverified", "reason": userErr.Error(), "failed_step": "credential_identity"})
+			return
+		}
+		result, canaryErr := canary.PlaybackCanary(ctx, plan, PlaybackCanaryInput{ItemID: body.ItemID, ItemIDs: body.ItemIDs, AccessToken: body.AccessToken, UserID: userID})
 		body.AccessToken = ""
+		userID = ""
 		body.ItemIDs = nil
 		if canaryErr != nil || result.Status != "healthy" {
 			failureClass := result.FailureClass

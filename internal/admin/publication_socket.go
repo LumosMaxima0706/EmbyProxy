@@ -57,7 +57,7 @@ func (s *SocketPublicationSyncer) PlaybackCanary(ctx context.Context, plan Publi
 	request := publicationprotocol.Request{
 		Version: publicationprotocol.Version, Action: publicationprotocol.ActionPlaybackCanary,
 		OperationID: plan.OperationID, NodeName: plan.NodeName, RouteSlug: plan.RouteSlug,
-		PlaybackCanary: &publicationprotocol.PlaybackCanaryRequest{ItemID: input.ItemID, ItemIDs: input.ItemIDs, AccessToken: input.AccessToken},
+		PlaybackCanary: &publicationprotocol.PlaybackCanaryRequest{ItemID: input.ItemID, ItemIDs: input.ItemIDs, AccessToken: input.AccessToken, UserID: input.UserID},
 	}
 	if err := json.NewEncoder(connection).Encode(request); err != nil {
 		return PlaybackCanaryResult{Status: "failed", FailureClass: "edge_adapter_request_failed"}, err
