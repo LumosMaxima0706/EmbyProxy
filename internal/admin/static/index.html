@@ -2082,7 +2082,7 @@ async function runPlaybackCanary(name) {
   const r = await publicationFetch(name, 'playback-canary', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({item_id: itemId, access_token: accessToken})
+    body: JSON.stringify({item_ids: itemId.split(',').map(v => v.trim()).filter(Boolean), access_token: accessToken})
   });
   await loadNodes();
   if (!r.ok || r.playback_status === 'failed') {

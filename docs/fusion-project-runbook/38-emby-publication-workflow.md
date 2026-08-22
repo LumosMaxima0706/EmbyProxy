@@ -534,11 +534,13 @@ from `System/Info/Public` proves only `connectivity healthy`. A route remains
 `playback_status=unverified` until the authenticated canary completes this
 chain:
 
-1. Submit one known-playable item ID and an Emby access token through the
-   authenticated admin canary action. Both are used once in memory and sent
-   only over the peer-credential-protected publication-agent Unix socket.
-2. Require `PlaybackInfo=2xx`, then issue a bounded Range request to the
-   returned DirectStream URL through the public route.
+1. Submit a bounded, diverse set of one to eight known-playable item IDs and
+   an Emby access token through the authenticated admin canary action. Use
+   titles likely to cover different formats/CDNs; all values are used once in
+   memory and sent only over the peer-credential-protected publication-agent
+   Unix socket.
+2. Require `PlaybackInfo=2xx` for every sample, then issue a bounded Range
+   request to each returned DirectStream URL through the public route.
 3. Follow at most eight 301/302/303/307/308 responses. Reduce each destination
    to scheme, exact host, exact port and a safe first path prefix. Never retain
    its query, token, cookie or full media path.
@@ -548,12 +550,14 @@ chain:
 5. Generate only slug-scoped exact/prefix routes, write the candidate through
    the restricted agent, and require both BWG and NOSLA edge sync. Do not add a
    generic `/http/*` or `/https/*` location.
-6. Retry the same bounded request and require media status 200 or 206, at least
+6. Retry each bounded request and require media status 200 or 206, at least
    16 KiB of byte growth, no redirect loop, and for 206 both `Content-Range`
-   and `Accept-Ranges: bytes`.
-7. Only then record `playback_status=healthy`. On failure, roll back endpoints
-   discovered by that attempt and record a classified failure without widening
-   the allowlist.
+   and `Accept-Ranges: bytes`. Merge only exact endpoints observed across the
+   successful/failed chains; do not infer host patterns.
+7. Only when every requested sample passes record `playback_status=healthy`.
+   A failure records a classified `failed` state without widening the
+   allowlist. Safely observed, synchronized exact endpoints may be retained for
+   a future bounded retry, but they never convert a failed sample to healthy.
 
 The root-owned runtime endpoint store defaults to
 `/var/lib/embyproxy-publication-agent/redirect-endpoints.json`, must be mode

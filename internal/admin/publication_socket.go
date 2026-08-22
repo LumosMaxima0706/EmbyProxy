@@ -57,7 +57,7 @@ func (s *SocketPublicationSyncer) PlaybackCanary(ctx context.Context, plan Publi
 	request := publicationprotocol.Request{
 		Version: publicationprotocol.Version, Action: publicationprotocol.ActionPlaybackCanary,
 		OperationID: plan.OperationID, NodeName: plan.NodeName, RouteSlug: plan.RouteSlug,
-		PlaybackCanary: &publicationprotocol.PlaybackCanaryRequest{ItemID: input.ItemID, AccessToken: input.AccessToken},
+		PlaybackCanary: &publicationprotocol.PlaybackCanaryRequest{ItemID: input.ItemID, ItemIDs: input.ItemIDs, AccessToken: input.AccessToken},
 	}
 	if err := json.NewEncoder(connection).Encode(request); err != nil {
 		return PlaybackCanaryResult{Status: "failed", FailureClass: "edge_adapter_request_failed"}, err
@@ -72,7 +72,8 @@ func (s *SocketPublicationSyncer) PlaybackCanary(ctx context.Context, plan Publi
 	result := PlaybackCanaryResult{Status: p.Status, FailureClass: p.FailureClass, ConnectivityStatus: p.ConnectivityStatus,
 		PlaybackInfoStatus: p.PlaybackInfoStatus, VideoStreamStatus: p.VideoStreamStatus, MediaStatus: p.MediaStatus,
 		RedirectsFollowed: p.RedirectsFollowed, EndpointsDiscovered: p.EndpointsDiscovered, BytesRead: p.BytesRead,
-		ByteGrowth: p.ByteGrowth, ContentRange: p.ContentRange, AcceptRanges: p.AcceptRanges}
+		ByteGrowth: p.ByteGrowth, ContentRange: p.ContentRange, AcceptRanges: p.AcceptRanges,
+		Samples: p.Samples, SamplesPassed: p.SamplesPassed}
 	if !response.OK {
 		if result.FailureClass == "" {
 			result.FailureClass = response.FailedStep

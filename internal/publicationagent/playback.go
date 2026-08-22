@@ -122,7 +122,72 @@ type playbackInfoDocument struct {
 	} `json:"MediaSources"`
 }
 
+// runPlaybackCanary validates a bounded, runtime-only sample set. A publication
+// cannot be labelled healthy from one lucky title when another title resolves
+// through a different media origin. Each sample remains independently bounded;
+// the request carries no URLs, cookies, or persisted credentials.
 func (a *Agent) runPlaybackCanary(ctx context.Context, request publicationprotocol.Request, manifest publicationprotocol.EdgeManifest) publicationprotocol.Response {
+	items, err := normalizedCanaryItems(*request.PlaybackCanary)
+	if err != nil {
+		return publicationprotocol.Response{OK: false, ErrorCode: "playback_canary_failed", FailedStep: "canary_input_invalid",
+			NOSLA: publicationprotocol.EdgeResult{Status: "synced"}, BWG: publicationprotocol.EdgeResult{Status: "synced"},
+			Playback: &publicationprotocol.PlaybackCanaryResponse{Status: "failed", FailureClass: "canary_input_invalid"}}
+	}
+	var last *publicationprotocol.PlaybackCanaryResponse
+	for index, item := range items {
+		sampleRequest := request
+		sampleRequest.PlaybackCanary = &publicationprotocol.PlaybackCanaryRequest{ItemID: item, AccessToken: request.PlaybackCanary.AccessToken}
+		if index > 0 {
+			refreshed, refreshErr := a.manifestFromDatabase(ctx, sampleRequest)
+			if refreshErr != nil {
+				return publicationprotocol.Response{OK: false, ErrorCode: "playback_canary_failed", FailedStep: "manifest_refresh",
+					NOSLA: publicationprotocol.EdgeResult{Status: "synced"}, BWG: publicationprotocol.EdgeResult{Status: "synced"},
+					Playback: &publicationprotocol.PlaybackCanaryResponse{Status: "failed", FailureClass: "manifest_refresh_failed", Samples: len(items)}}
+			}
+			manifest = refreshed
+		}
+		response := a.runPlaybackCanaryOne(ctx, sampleRequest, manifest)
+		if response.Playback == nil {
+			response.Playback = &publicationprotocol.PlaybackCanaryResponse{Status: "failed", FailureClass: "transport_failure"}
+		}
+		response.Playback.Samples = len(items)
+		response.Playback.SamplesPassed = index
+		if !response.OK || response.Playback.Status != "healthy" {
+			return response
+		}
+		response.Playback.SamplesPassed = index + 1
+		last = response.Playback
+	}
+	last.Samples = len(items)
+	last.SamplesPassed = len(items)
+	return publicationprotocol.Response{OK: true, NOSLA: publicationprotocol.EdgeResult{Status: "synced"}, BWG: publicationprotocol.EdgeResult{Status: "synced"}, Playback: last}
+}
+
+func normalizedCanaryItems(in publicationprotocol.PlaybackCanaryRequest) ([]string, error) {
+	values := append([]string(nil), in.ItemIDs...)
+	if strings.TrimSpace(in.ItemID) != "" {
+		values = append([]string{in.ItemID}, values...)
+	}
+	if len(values) == 0 || len(values) > 8 {
+		return nil, errors.New("canary_input_invalid")
+	}
+	seen := make(map[string]bool, len(values))
+	items := make([]string, 0, len(values))
+	for _, value := range values {
+		item := strings.TrimSpace(value)
+		if item == "" || len(item) > 128 || strings.ContainsAny(item, "/?#\\\r\n") || seen[item] {
+			return nil, errors.New("canary_input_invalid")
+		}
+		seen[item] = true
+		items = append(items, item)
+	}
+	if strings.TrimSpace(in.AccessToken) == "" || len(in.AccessToken) > 4096 || strings.ContainsAny(in.AccessToken, "\r\n") {
+		return nil, errors.New("canary_input_invalid")
+	}
+	return items, nil
+}
+
+func (a *Agent) runPlaybackCanaryOne(ctx context.Context, request publicationprotocol.Request, manifest publicationprotocol.EdgeManifest) publicationprotocol.Response {
 	result := &publicationprotocol.PlaybackCanaryResponse{Status: "failed"}
 	fail := func(class string) publicationprotocol.Response {
 		result.FailureClass = class
@@ -276,10 +341,10 @@ func (a *Agent) runPlaybackCanary(ctx context.Context, request publicationprotoc
 	}
 	validated, validationErr := ValidatePlaybackCanary(evidence)
 	if mediaErr != nil || validationErr != nil {
-		if changedRoutes {
-			_ = a.saveDiscoveredEndpoints(oldEndpoints)
-			_ = a.publishUpdate(ctx, manifest, oldManifest)
-		}
+		// Keep endpoints that were observed and safely synchronized even when a
+		// sample ultimately fails upstream (for example media host Y returns 403).
+		// The publication remains playback failed/unverified, but a later canary
+		// can reuse the exact scoped route without widening it manually.
 		if mediaErr != nil {
 			return fail(classifyTransport(mediaErr))
 		}

@@ -81,6 +81,7 @@ type publicationPlaybackCanary interface {
 
 type PlaybackCanaryInput struct {
 	ItemID      string
+	ItemIDs     []string
 	AccessToken string
 }
 
@@ -93,6 +94,8 @@ type PlaybackCanaryResult struct {
 	MediaStatus         int    `json:"media_status"`
 	RedirectsFollowed   int    `json:"redirects_followed"`
 	EndpointsDiscovered int    `json:"endpoints_discovered"`
+	Samples              int    `json:"samples"`
+	SamplesPassed        int    `json:"samples_passed"`
 	BytesRead           int64  `json:"bytes_read"`
 	ByteGrowth          bool   `json:"byte_growth"`
 	ContentRange        bool   `json:"content_range"`
@@ -567,16 +570,18 @@ func (h *Handler) handlePublicationAPI(w http.ResponseWriter, r *http.Request, p
 		}
 		var body struct {
 			ItemID      string `json:"item_id"`
+			ItemIDs     []string `json:"item_ids"`
 			AccessToken string `json:"access_token"`
 		}
 		decoder := json.NewDecoder(io.LimitReader(r.Body, 16<<10))
 		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&body); err != nil || strings.TrimSpace(body.ItemID) == "" || strings.TrimSpace(body.AccessToken) == "" {
+		if err := decoder.Decode(&body); err != nil || (strings.TrimSpace(body.ItemID) == "" && len(body.ItemIDs) == 0) || strings.TrimSpace(body.AccessToken) == "" {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "reason": "PLAYBACK_CANARY_INPUT_INVALID", "failed_step": "input"})
 			return
 		}
-		result, canaryErr := canary.PlaybackCanary(ctx, plan, PlaybackCanaryInput{ItemID: body.ItemID, AccessToken: body.AccessToken})
+		result, canaryErr := canary.PlaybackCanary(ctx, plan, PlaybackCanaryInput{ItemID: body.ItemID, ItemIDs: body.ItemIDs, AccessToken: body.AccessToken})
 		body.AccessToken = ""
+		body.ItemIDs = nil
 		if canaryErr != nil || result.Status != "healthy" {
 			failureClass := result.FailureClass
 			if failureClass == "" {

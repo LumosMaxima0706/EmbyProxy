@@ -449,3 +449,42 @@ Re-run the isolated full Go test/vet/build gate, then deploy only the resulting 
 - Residual live risk is limited to per-publication runtime credentials and media
   item selection for an authenticated canary. Those values remain runtime-only
   and are never persisted in Git, logs, state, or this runbook.
+
+## Partial Playback Regression: Multiple Media Origins (2026-08-22)
+
+### Current status
+
+- `1111` playback is **partially fixed, not completed, and must not be marked
+  healthy**. The owner confirmed that some Yamby selections play normally while
+  another selection fails with `playback failed / source error / response 403`.
+- The earlier HTTP/80 endpoint is therefore one valid media route, not proof that
+  the publication's complete media-origin set has been discovered.
+
+### Evidence and revised hypothesis
+
+- A successful item follows `PlaybackInfo -> VideoStream -> redirect endpoint X
+  -> 206 -> growing bytes`.
+- A failing item follows the same API path but ends in 403 after its media
+  redirect. The exact endpoint for the failing selection remains runtime
+  evidence and is not copied into this repository.
+- Source review shows the deployed canary accepts exactly one `item_id` and marks
+  the publication healthy after that one item succeeds. This is the code-level
+  reason a heterogeneous server can be falsely green even though another item
+  uses a different CDN/origin.
+
+### Rejected hypotheses / safety decisions
+
+- Do not assume one host, scheme, port, or path prefix covers all media on a
+  server.
+- Do not manually widen `1111.conf`, add suffix wildcards, or infer a CDN from a
+  403 alone.
+- Discovery remains bounded, slug-scoped, public-address-only, and fail-closed.
+
+### Next step
+
+- Extend the runtime-only canary request to accept a bounded set of media item
+  IDs, execute every item independently, merge only endpoints actually observed
+  in their redirect chains, and mark playback healthy only when every requested
+  sample reaches 200/206 with byte growth. Add regression coverage for item A on
+  endpoint X and item B on endpoint Y, including the API-healthy/media-403 state
+  gate. Then rebuild and roll out the publication components on NOSLA and BWG.

@@ -21,8 +21,11 @@ type Request struct {
 }
 
 type PlaybackCanaryRequest struct {
-	ItemID      string `json:"item_id"`
-	AccessToken string `json:"access_token"`
+	ItemID string `json:"item_id"`
+	// ItemIDs is a bounded runtime-only sample set. ItemID remains supported
+	// for older admin clients and is treated as a one-item sample.
+	ItemIDs     []string `json:"item_ids,omitempty"`
+	AccessToken string   `json:"access_token"`
 }
 
 type EdgeResult struct {
@@ -52,6 +55,8 @@ type PlaybackCanaryResponse struct {
 	MediaStatus         int    `json:"media_status"`
 	RedirectsFollowed   int    `json:"redirects_followed"`
 	EndpointsDiscovered int    `json:"endpoints_discovered"`
+	Samples             int    `json:"samples"`
+	SamplesPassed       int    `json:"samples_passed"`
 	BytesRead           int64  `json:"bytes_read"`
 	ByteGrowth          bool   `json:"byte_growth"`
 	ContentRange        bool   `json:"content_range"`
