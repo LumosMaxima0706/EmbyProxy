@@ -842,3 +842,22 @@ Range 200/206 -> Content-Range/Accept-Ranges -> sustained byte growth`.
 
 An API `200`, a valid `MediaSource.Path`, or a `302` alone is not playback
 health evidence.
+
+### Production rollout (2026-08-23)
+
+- `main` commit `9913526` was built as the Linux amd64 publication-agent
+  binary. The deployed binary SHA-256 is
+  `8c8d2f48e664c35cbf6131b218d3eac26a59e3757cd0c769322fd97770835633`.
+- On BWG, the prior `/usr/local/sbin/embyproxy-publication-agent` was backed
+  up under `/var/backups/embyproxy-publication/20260823T081737Z-video-stream-canary/`.
+  The new binary was installed atomically and
+  `embyproxy-publication-agent.service` restarted successfully with zero
+  restarts reported after the restart.
+- NOSLA does not execute the canary; it runs the edge helper that receives
+  scoped manifests from BWG. No NOSLA binary or Nginx fragment was changed,
+  and no manual `younoyes.conf` edit was made.
+- The focused publicationagent canary tests pass after the rollout. A fresh
+  authenticated `younoyes` canary must be initiated from the Admin publish or
+  playback-canary action to move its existing `playback_status=unverified`
+  state to `healthy`; this deployment does not infer health from real-player
+  playback or from API-only `200` responses.
