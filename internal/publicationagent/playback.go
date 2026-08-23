@@ -154,6 +154,50 @@ func playbackStreamPath(item string, source struct {
 	return streamURL
 }
 
+// playbackStreamCandidates returns the small set of playback entry points an
+// Emby-compatible server may advertise for one MediaSource. MediaSource.Path
+// is intentionally never used: it is often a storage path. The standard
+// VideoStream endpoint is tried first, followed by the client-compatible
+// original route used by remote HTTP media, then an explicit DirectStreamUrl
+// when the upstream supplied one. A candidate is accepted only after the
+// normal redirect/Range canary proves it serves media.
+func playbackStreamCandidates(item string, source struct {
+	ID                   string `json:"Id"`
+	Path                 string `json:"Path"`
+	Protocol             string `json:"Protocol"`
+	IsRemote             bool   `json:"IsRemote"`
+	SupportsDirectStream bool   `json:"SupportsDirectStream"`
+	SupportsDirectPlay   bool   `json:"SupportsDirectPlay"`
+	DirectStreamURL      string `json:"DirectStreamUrl"`
+}, playSessionID string) []string {
+	candidates := []string{playbackStreamPath(item, source, playSessionID)}
+	if source.IsRemote && (strings.EqualFold(strings.TrimSpace(source.Protocol), "http") || strings.EqualFold(strings.TrimSpace(source.Protocol), "https")) {
+		original := "/emby/videos/" + item + "/original.mkv?Static=true"
+		if id := strings.TrimSpace(source.ID); id != "" {
+			original += "&MediaSourceId=" + url.QueryEscape(id)
+		}
+		if strings.TrimSpace(playSessionID) != "" {
+			original += "&PlaySessionId=" + url.QueryEscape(playSessionID)
+		}
+		candidates = append(candidates, original)
+	}
+	if direct := strings.TrimSpace(source.DirectStreamURL); direct != "" {
+		if parsed, err := url.Parse(direct); err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Hostname() != "" && parsed.User == nil {
+			candidates = append(candidates, addPlaybackQuery(direct, source.ID, playSessionID, ""))
+		}
+	}
+	seen := make(map[string]struct{}, len(candidates))
+	result := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		if _, ok := seen[candidate]; ok {
+			continue
+		}
+		seen[candidate] = struct{}{}
+		result = append(result, candidate)
+	}
+	return result
+}
+
 // runPlaybackCanary validates a bounded, runtime-only sample set. A publication
 // cannot be labelled healthy from one lucky title when another title resolves
 // through a different media origin. Each sample remains independently bounded;
@@ -261,15 +305,34 @@ func (a *Agent) runPlaybackCanaryOne(ctx context.Context, request publicationpro
 	if decodeErr != nil || len(document.MediaSources) == 0 {
 		return fail("playbackinfo_invalid")
 	}
-	streamURL := playbackStreamPath(item, document.MediaSources[0], document.PlaySessionID)
-	streamURL = addPlaybackQuery(streamURL, document.MediaSources[0].ID, document.PlaySessionID, request.PlaybackCanary.UserID)
-	streamURL, err = canaryPublicURL(publicRoot, a.config.PublicMediaHost, streamURL)
-	if err != nil {
-		return fail("playbackinfo_media_url_invalid")
+	var first *http.Response
+	var streamURL string
+	var streamErr error
+	for _, candidate := range playbackStreamCandidates(item, document.MediaSources[0], document.PlaySessionID) {
+		candidate = addPlaybackQuery(candidate, document.MediaSources[0].ID, document.PlaySessionID, request.PlaybackCanary.UserID)
+		publicCandidate, candidateErr := canaryPublicURL(publicRoot, a.config.PublicMediaHost, candidate)
+		if candidateErr != nil {
+			streamErr = candidateErr
+			continue
+		}
+		response, requestErr := canaryRequest(ctx, client, http.MethodGet, publicCandidate, request.PlaybackCanary.AccessToken, true)
+		if requestErr != nil {
+			streamErr = requestErr
+			continue
+		}
+		if response.StatusCode == http.StatusNotFound || response.StatusCode == http.StatusMethodNotAllowed {
+			streamErr = errors.New("playback_entry_not_supported")
+			_ = response.Body.Close()
+			continue
+		}
+		first, streamURL = response, publicCandidate
+		break
 	}
-	first, err := canaryRequest(ctx, client, http.MethodGet, streamURL, request.PlaybackCanary.AccessToken, true)
-	if err != nil {
-		return fail(classifyTransport(err))
+	if first == nil {
+		if streamErr != nil && streamErr.Error() != "playback_entry_not_supported" {
+			return fail(classifyTransport(streamErr))
+		}
+		return fail(classifyHTTP(http.StatusNotFound))
 	}
 	result.VideoStreamStatus = first.StatusCode
 	location := strings.TrimSpace(first.Header.Get("Location"))

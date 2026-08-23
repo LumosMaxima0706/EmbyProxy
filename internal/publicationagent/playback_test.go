@@ -1,6 +1,7 @@
 package publicationagent
 
 import (
+	"strings"
 	"testing"
 
 	"embyproxy/internal/publicationprotocol"
@@ -120,6 +121,22 @@ func TestPlaybackStreamPathAlwaysUsesVideoStreamEndpoint(t *testing.T) {
 	}{ID: "media-source", Path: "/upload/series/file.mkv", IsRemote: true, DirectStreamURL: "https://cdn.example/file.mkv"}
 	if got := playbackStreamPath("625260", source, "session"); got != "/emby/Videos/625260/stream?Static=true&MediaSourceId=media-source&PlaySessionId=session" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+func TestPlaybackStreamCandidatesIncludeRemoteClientEntryPoint(t *testing.T) {
+	source := struct {
+		ID                   string `json:"Id"`
+		Path                 string `json:"Path"`
+		Protocol             string `json:"Protocol"`
+		IsRemote             bool   `json:"IsRemote"`
+		SupportsDirectStream bool   `json:"SupportsDirectStream"`
+		SupportsDirectPlay   bool   `json:"SupportsDirectPlay"`
+		DirectStreamURL      string `json:"DirectStreamUrl"`
+	}{ID: "source", Protocol: "Http", IsRemote: true}
+	candidates := playbackStreamCandidates("item", source, "session")
+	if len(candidates) != 2 || !strings.Contains(candidates[0], "/emby/Videos/item/stream") || !strings.Contains(candidates[1], "/emby/videos/item/original.mkv") {
+		t.Fatalf("candidates=%v", candidates)
 	}
 }
 
