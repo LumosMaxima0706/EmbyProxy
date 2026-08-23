@@ -70,6 +70,15 @@ func TestPlaybackCanaryRequiresRangeHeadersAndByteGrowth(t *testing.T) {
 	}
 }
 
+func TestPlaybackCanaryAccepts206WithoutOptionalAcceptRanges(t *testing.T) {
+	evidence := healthyRedirectEvidence("https://media.example.test/stream")
+	evidence.Media.AcceptRanges = false
+	result, err := ValidatePlaybackCanary(evidence)
+	if err != nil || result.Status != "healthy" {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}
+
 func TestPlaybackCanaryAcceptsDirectMedia206(t *testing.T) {
 	evidence := PlaybackCanaryEvidence{ConnectivityStatus: 200, PlaybackInfoStatus: 200, VideoStreamStatus: 206,
 		Media: PlaybackMediaResult{StatusCode: 206, BytesRead: 65536, GrowthBytes: 65536, ContentRange: true, AcceptRanges: true}}

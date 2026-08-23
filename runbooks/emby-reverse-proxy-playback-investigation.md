@@ -861,3 +861,18 @@ health evidence.
   playback-canary action to move its existing `playback_status=unverified`
   state to `healthy`; this deployment does not infer health from real-player
   playback or from API-only `200` responses.
+
+### Younoyes range-header correction (2026-08-23)
+
+- The first post-rollout canary reached the correct chain for the selected
+  sample: `PlaybackInfo=200`, `VideoStream=206`, final media `206`, valid
+  `Content-Range`, and 65,536 bytes read. It was rejected only because the
+  upstream omitted the optional `Accept-Ranges` response header.
+- This was a false negative in the validator. The permanent rule now requires
+  the actual requested Range to be represented by `206 + Content-Range + byte
+  growth`; `Accept-Ranges` remains recorded as evidence but is not required
+  when the server has already honored the Range request. This matches the
+  verified Yamby behavior and keeps the canary independent of header cosmetics.
+- Regression coverage now explicitly accepts a valid 206 without
+  `Accept-Ranges` and continues to reject missing `Content-Range` or missing
+  byte growth.

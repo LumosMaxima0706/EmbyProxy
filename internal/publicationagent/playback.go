@@ -106,7 +106,11 @@ func ValidatePlaybackCanary(e PlaybackCanaryEvidence) (PlaybackCanaryResult, err
 	if e.Media.BytesRead <= 0 || e.Media.GrowthBytes <= 0 {
 		return PlaybackCanaryResult{Status: "failed", FailureClass: "no_byte_growth", RedirectEndpoints: endpoints}, errors.New("media_byte_growth_missing")
 	}
-	if e.Media.StatusCode == 206 && (!e.Media.ContentRange || !e.Media.AcceptRanges) {
+	// Some Emby-compatible media gateways honor a Range request and return a
+	// valid 206/Content-Range response without advertising Accept-Ranges. The
+	// real client accepts that response; Content-Range plus observed bytes is
+	// the authoritative proof that the requested range was served.
+	if e.Media.StatusCode == 206 && !e.Media.ContentRange {
 		return PlaybackCanaryResult{Status: "failed", FailureClass: "invalid_range", RedirectEndpoints: endpoints}, errors.New("range_headers_missing")
 	}
 	if e.Media.RedirectsFollowed > 8 {
