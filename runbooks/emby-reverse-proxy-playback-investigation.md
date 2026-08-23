@@ -893,3 +893,41 @@ health evidence.
   `playback_status=healthy`, `nosla_status=synced`, and `bwg_status=synced`.
   No route fragment was manually edited; the canary used the stored
   credential and the VideoStream-generated media path.
+
+## 2026-08-23 Generic Playback Entry-Point Fix
+
+### Change
+
+The publication agent now probes a bounded candidate list derived from
+`PlaybackInfo` rather than assuming one URL shape:
+
+1. standard `/emby/Videos/<item>/stream`;
+2. for remote HTTP/HTTPS MediaSources, lowercase client-compatible
+   `/emby/videos/<item>/original.mkv`;
+3. an explicit, absolute `DirectStreamUrl` only when supplied by Emby.
+
+`MediaSource.Path` is never requested. A candidate that returns 404/405 is
+discarded and the next candidate is tried; the selected candidate still must
+complete redirect discovery, Range, 206/Content-Range, and byte-growth
+validation. The list is bounded and contains no slug-specific branch.
+
+### Verification
+
+- Focused publicationagent regression tests pass, including remote candidate
+  selection, redirect discovery, HTTP/80 handling, Range validation, and byte
+  growth.
+- `main` commit `95badef` was built as Linux amd64 and deployed to BWG
+  publication-agent. Active binary SHA-256:
+  `24583b8e4bded32688477e207631462b1a766122834010c3471a6a8036f7ff9e`.
+  Prior binary backup:
+  `/var/backups/embyproxy-publication/20260823T092826Z-entrypoint-candidates/`.
+- 1111 bounded canary passed `2/2` (`625260`, `601953`):
+  `PlaybackInfo=200`, `VideoStream=302`, redirect followed, final `206`,
+  `Content-Range=true`, `byte_growth=true`.
+- younoyes bounded canary passed `3/3` (`3957222`, `3930736`, `1612565`):
+  `PlaybackInfo=200`, `VideoStream=206`, final `206`,
+  `Content-Range=true`, `byte_growth=true`. `Accept-Ranges` remains optional
+  evidence for gateways that omit it.
+- Both publications report `playback_status=healthy`, `nosla=synced`, and
+  `bwg=synced`; `nginx -t` passes. No Nginx, DNS, failover, or per-slug
+  fragment was modified.
