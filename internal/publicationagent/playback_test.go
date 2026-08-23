@@ -99,17 +99,17 @@ func TestCanaryPublicURLDoesNotDoublePrefixEncodedPublicPath(t *testing.T) {
 	}
 }
 
-func TestPlaybackStreamPathUsesRemoteOriginalMediaPath(t *testing.T) {
+func TestPlaybackStreamPathAlwaysUsesVideoStreamEndpoint(t *testing.T) {
 	source := struct {
-		ID string `json:"Id"`
-		Path string `json:"Path"`
-		Protocol string `json:"Protocol"`
-		IsRemote bool `json:"IsRemote"`
-		SupportsDirectStream bool `json:"SupportsDirectStream"`
-		SupportsDirectPlay bool `json:"SupportsDirectPlay"`
-		DirectStreamURL string `json:"DirectStreamUrl"`
-	}{Path: "http://127.0.0.1:5244/media/file.mkv", IsRemote: true}
-	if got := playbackStreamPath("625260", source, "session"); got != "/emby/videos/625260/original.mkv" {
+		ID                   string `json:"Id"`
+		Path                 string `json:"Path"`
+		Protocol             string `json:"Protocol"`
+		IsRemote             bool   `json:"IsRemote"`
+		SupportsDirectStream bool   `json:"SupportsDirectStream"`
+		SupportsDirectPlay   bool   `json:"SupportsDirectPlay"`
+		DirectStreamURL      string `json:"DirectStreamUrl"`
+	}{ID: "media-source", Path: "/upload/series/file.mkv", IsRemote: true, DirectStreamURL: "https://cdn.example/file.mkv"}
+	if got := playbackStreamPath("625260", source, "session"); got != "/emby/Videos/625260/stream?Static=true&MediaSourceId=media-source&PlaySessionId=session" {
 		t.Fatalf("got %q", got)
 	}
 }
