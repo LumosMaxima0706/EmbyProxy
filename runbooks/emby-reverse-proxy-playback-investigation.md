@@ -876,3 +876,20 @@ health evidence.
 - Regression coverage now explicitly accepts a valid 206 without
   `Accept-Ranges` and continues to reject missing `Content-Range` or missing
   byte growth.
+
+### Final Younoyes canary result (2026-08-23)
+
+- `main` commit `2261c58` was built and deployed to BWG. The active
+  publication-agent SHA-256 is
+  `91dc9595392c67189e30ef599f94d24253f47a3aec817781417a5bff6fc78e3b`;
+  the previous binary is retained under
+  `/var/backups/embyproxy-publication/20260823T083141Z-range-header-canary/`.
+- The authenticated bounded canary for `3957222`, `3930736`, and `1612565`
+  passed `3/3`: connectivity `200`, PlaybackInfo `200`, VideoStream `206`,
+  media `206`, `Content-Range=true`, `byte_growth=true`, and 65,536 bytes
+  observed. The upstream reports `Accept-Ranges=false`, which is now treated
+  as optional evidence.
+- The publication API now reports `status=published`,
+  `playback_status=healthy`, `nosla_status=synced`, and `bwg_status=synced`.
+  No route fragment was manually edited; the canary used the stored
+  credential and the VideoStream-generated media path.
