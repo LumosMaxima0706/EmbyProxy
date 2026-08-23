@@ -137,15 +137,9 @@ func playbackStreamPath(item string, source struct {
 	SupportsDirectPlay   bool   `json:"SupportsDirectPlay"`
 	DirectStreamURL      string `json:"DirectStreamUrl"`
 }, playSessionID string) string {
-	if strings.TrimSpace(source.DirectStreamURL) != "" {
-		return strings.TrimSpace(source.DirectStreamURL)
-	}
-	if strings.HasPrefix(strings.TrimSpace(source.Path), "/") {
-		return strings.TrimSpace(source.Path)
-	}
-	if source.IsRemote && strings.TrimSpace(source.Path) != "" {
-		return "/emby/videos/" + item + "/original.mkv"
-	}
+	// MediaSource.Path can be a storage path rather than a client-playable URL.
+	// Always ask Emby for its VideoStream redirect so the canary follows the
+	// same media selection and session binding as a real client.
 	streamURL := "/emby/Videos/" + item + "/stream?Static=true"
 	if id := strings.TrimSpace(source.ID); id != "" {
 		streamURL += "&MediaSourceId=" + url.QueryEscape(id)

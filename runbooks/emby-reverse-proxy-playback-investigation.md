@@ -789,3 +789,56 @@ check for UHD/feimu/yuchu.
   real Yamby client. The publication status is `playback_status=healthy`.
 - New deployments must pull `main` (or the release branch at the same commit)
   and use the publication workflow; no manual fragment edits are required.
+
+## 2026-08-23 Younoyes Canary Path Regression
+
+### Current status
+
+`younoyes` has one configured upstream and real Yamby playback succeeds. The
+publication canary previously reported `upstream_404`; this was a canary
+request-construction defect, not an upstream credential, route, or failover
+failure.
+
+### Evidence
+
+- The protected credential resolved the runtime Emby identity successfully.
+  `PlaybackInfo` returned `200` for items `3957222`, `3930736`, and `1612565`.
+- Real playback for `3930736` and `1612565` produced `206` and sustained byte
+  growth. The old canary requested `MediaSource.Path` directly and received
+  `404` for the same class of remote media. A storage path is not necessarily
+  a client-playable URL.
+- The canary must therefore ask Emby for `/emby/Videos/<item>/stream` with
+  `Static`, `MediaSourceId`, and `PlaySessionId`, then follow the returned
+  redirect chain. It must not infer a playable URL from a leading slash,
+  `DirectStreamUrl`, or remote path shape.
+- Existing redirect discovery, exact slug-scoped route generation, Yamby
+  User-Agent, Range/Content-Range validation, byte-growth checks, and bounded
+  multi-sample failure semantics remain unchanged.
+
+### Permanent change
+
+`internal/publicationagent/playback.go` now always constructs the Emby
+`VideoStream` endpoint from the item and selected MediaSource. The old path
+selection branches were removed. `playback_test.go` now asserts that storage
+paths and `DirectStreamUrl` values cannot bypass VideoStream generation.
+
+### Verification
+
+- `gofmt` completed for `internal/publicationagent`.
+- Focused regression suite passed:
+  `go test ./internal/publicationagent -run 'Playback|Redirect|Canary' -count=1`.
+- The full package suite was also run; it has one pre-existing unrelated
+  temporary-directory timestamp failure in `TestOperationBackupDirectoryIsUniqueForRollback`.
+- No Nginx fragment was edited and no wildcard route was added. Production
+  deployment/re-canary must use the resulting publication-agent build before
+  `younoyes` can be considered playback healthy.
+
+### Reusable acceptance
+
+For every new server, canary each bounded sample as:
+
+`PlaybackInfo 200 -> VideoStream -> redirect discovery -> scoped route ->
+Range 200/206 -> Content-Range/Accept-Ranges -> sustained byte growth`.
+
+An API `200`, a valid `MediaSource.Path`, or a `302` alone is not playback
+health evidence.
