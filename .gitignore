@@ -25,5 +25,6 @@ CLAUDE.md
 !/docs/fusion-project-runbook/
 /docs/fusion-project-runbook/*
 !/docs/fusion-project-runbook/*.md
+!/docs/RUNBOOK_VPS_CONTROL_PLANE.md
 __pycache__/
 *.py[cod]
