@@ -143,3 +143,26 @@ func TestProxyNodeDrainWithoutConnectionsRevokesImmediately(t *testing.T) {
 		t.Fatalf("node=%+v err=%v", node, err)
 	}
 }
+
+func TestProxyNodeUsageAdvancesExpiredBillingCycle(t *testing.T) {
+	ctx := context.Background()
+	store, err := New(filepath.Join(t.TempDir(), "proxy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	enrollment, _, err := store.CreateProxyNode(ctx, ProxyNode{Name: "edge-cycle", ResetDay: 1, ResetTimezone: "UTC"}, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB().Exec(`UPDATE proxy_nodes SET used_bytes=900,next_reset_at=? WHERE id=?`, time.Now().Add(-time.Hour).Unix(), enrollment.NodeID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AddProxyNodeUsage(ctx, enrollment.NodeID, 100, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	node, err := store.GetProxyNode(ctx, enrollment.NodeID)
+	if err != nil || node == nil || node.UsedBytes != 100 || node.NextResetAt <= time.Now().Unix() {
+		t.Fatalf("node=%+v err=%v", node, err)
+	}
+}

@@ -47,25 +47,26 @@ func NextMonthlyReset(now time.Time, resetDay int, timezone string) (time.Time, 
 // ProxyNode is an independently enrolled data-plane node. Secrets never leave
 // this package after enrollment and are stored only as SHA-256 verifiers.
 type ProxyNode struct {
-	ID              string `json:"id"`
-	Name            string `json:"name"`
-	PublicAddress   string `json:"public_address"`
-	Enabled         bool   `json:"enabled"`
-	State           string `json:"state"`
-	Priority        int    `json:"priority"`
-	QuotaBytes      int64  `json:"quota_bytes"`
-	UsedBytes       int64  `json:"used_bytes"`
-	ResetDay        int    `json:"reset_day"`
-	ResetTimezone   string `json:"reset_timezone"`
-	NextResetAt     int64  `json:"next_reset_at"`
-	LastHeartbeatAt int64  `json:"last_heartbeat_at"`
-	PlaybackHealthy bool   `json:"playback_healthy"`
-	ConfigSynced    bool   `json:"config_synced"`
-	AgentVersion    string `json:"agent_version"`
-	AgentCommit     string `json:"agent_commit"`
-	LastError       string `json:"last_error,omitempty"`
-	CreatedAt       int64  `json:"created_at"`
-	UpdatedAt       int64  `json:"updated_at"`
+	ID                string `json:"id"`
+	Name              string `json:"name"`
+	PublicAddress     string `json:"public_address"`
+	Enabled           bool   `json:"enabled"`
+	State             string `json:"state"`
+	Priority          int    `json:"priority"`
+	QuotaBytes        int64  `json:"quota_bytes"`
+	UsedBytes         int64  `json:"used_bytes"`
+	ResetDay          int    `json:"reset_day"`
+	ResetTimezone     string `json:"reset_timezone"`
+	NextResetAt       int64  `json:"next_reset_at"`
+	LastHeartbeatAt   int64  `json:"last_heartbeat_at"`
+	PlaybackHealthy   bool   `json:"playback_healthy"`
+	ConfigSynced      bool   `json:"config_synced"`
+	AgentVersion      string `json:"agent_version"`
+	AgentCommit       string `json:"agent_commit"`
+	LastError         string `json:"last_error,omitempty"`
+	ActiveConnections int    `json:"active_connections"`
+	CreatedAt         int64  `json:"created_at"`
+	UpdatedAt         int64  `json:"updated_at"`
 }
 
 type Enrollment struct {
@@ -207,6 +208,13 @@ func (s *Store) CreateProxyNode(ctx context.Context, node ProxyNode, enrollmentT
 	node.ID, _ = randomNodeToken()
 	node.ID = node.ID[:24]
 	now := time.Now().Unix()
+	if node.NextResetAt == 0 {
+		next, err := NextMonthlyReset(time.Unix(now, 0), node.ResetDay, node.ResetTimezone)
+		if err != nil {
+			return Enrollment{}, "", errors.New("invalid_reset_timezone")
+		}
+		node.NextResetAt = next.Unix()
+	}
 	node.State = "registered"
 	node.Enabled = true
 	node.CreatedAt, node.UpdatedAt = now, now
@@ -256,7 +264,14 @@ func (s *Store) ListProxyNodes(ctx context.Context) ([]ProxyNode, error) {
 		}
 		out = append(out, n)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	_ = rows.Close()
+	for i := range out {
+		out[i].ActiveConnections, _ = s.ProxyNodeActiveConnections(ctx, out[i].ID)
+	}
+	return out, nil
 }
 func (s *Store) GetProxyNode(ctx context.Context, id string) (*ProxyNode, error) {
 	n, err := scanProxyNode(s.db.QueryRowContext(ctx, `SELECT `+proxyNodeFields+` FROM proxy_nodes WHERE id=?`, id))
@@ -266,6 +281,7 @@ func (s *Store) GetProxyNode(ctx context.Context, id string) (*ProxyNode, error)
 	if err != nil {
 		return nil, err
 	}
+	n.ActiveConnections, _ = s.ProxyNodeActiveConnections(ctx, n.ID)
 	return &n, nil
 }
 func (s *Store) UpdateProxyNode(ctx context.Context, n ProxyNode) error {
@@ -282,6 +298,9 @@ func (s *Store) UpdateProxyNode(ctx context.Context, n ProxyNode) error {
 func (s *Store) RecordProxyNodeUsage(ctx context.Context, id string, usedBytes int64, sampledAt time.Time) error {
 	if usedBytes < 0 {
 		return errors.New("invalid_usage")
+	}
+	if err := s.advanceProxyNodeCycle(ctx, id, sampledAt); err != nil {
+		return err
 	}
 	result, err := s.db.ExecContext(ctx, `UPDATE proxy_nodes SET used_bytes=CASE WHEN used_bytes>? THEN used_bytes ELSE ? END,updated_at=? WHERE id=? AND state!='revoked'`, usedBytes, usedBytes, sampledAt.Unix(), id)
 	if err != nil {
@@ -300,6 +319,9 @@ func (s *Store) AddProxyNodeUsage(ctx context.Context, id string, bytes int64, s
 	if bytes < 0 {
 		return errors.New("invalid_usage")
 	}
+	if err := s.advanceProxyNodeCycle(ctx, id, sampledAt); err != nil {
+		return err
+	}
 	result, err := s.db.ExecContext(ctx, `UPDATE proxy_nodes SET used_bytes=used_bytes+?,updated_at=? WHERE id=? AND state!='revoked'`, bytes, sampledAt.Unix(), id)
 	if err != nil {
 		return err
@@ -309,6 +331,27 @@ func (s *Store) AddProxyNodeUsage(ctx context.Context, id string, bytes int64, s
 		return sql.ErrNoRows
 	}
 	return nil
+}
+
+// advanceProxyNodeCycle persists the next reset before admitting a new usage
+// sample, so process restarts cannot silently retain an expired billing cycle.
+func (s *Store) advanceProxyNodeCycle(ctx context.Context, id string, now time.Time) error {
+	node, err := s.GetProxyNode(ctx, id)
+	if err != nil || node == nil {
+		if err == nil {
+			return sql.ErrNoRows
+		}
+		return err
+	}
+	if node.NextResetAt == 0 || now.Unix() < node.NextResetAt {
+		return nil
+	}
+	next, err := NextMonthlyReset(now, node.ResetDay, node.ResetTimezone)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `UPDATE proxy_nodes SET used_bytes=0,next_reset_at=?,updated_at=? WHERE id=? AND next_reset_at<=?`, next.Unix(), now.Unix(), id, now.Unix())
+	return err
 }
 
 func (s *Store) ResetProxyNodeUsage(ctx context.Context, id string, now time.Time) error {
