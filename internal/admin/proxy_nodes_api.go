@@ -1,10 +1,13 @@
 package admin
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -164,43 +167,72 @@ func (h *Handler) handleBootstrap(w http.ResponseWriter, r *http.Request, enroll
 	if controller == "" {
 		controller = "https://OWNER_CONTROLLER"
 	}
+	curlProtocol := "=https"
+	if strings.HasPrefix(controller, "http://") && h.cfg.AllowInsecureLoopbackEnrollment {
+		curlProtocol = "=http,https"
+	}
 	payload := map[string]string{"version": buildinfo.Current().Version, "commit": buildinfo.Current().Commit}
 	body, _ := json.Marshal(payload)
 	script := fmt.Sprintf(`#!/bin/sh
 set -eu
 command -v curl >/dev/null 2>&1 || { echo 'curl is required' >&2; exit 1; }
-command -v systemctl >/dev/null 2>&1 || { echo 'systemd is required' >&2; exit 1; }
+command -v sha256sum >/dev/null 2>&1 || { echo 'sha256sum is required' >&2; exit 1; }
+install_root=${EMBYPROXY_INSTALL_ROOT:-}
+if [ -n "$install_root" ]; then
+  case "$install_root" in /*) ;; *) echo 'EMBYPROXY_INSTALL_ROOT must be absolute' >&2; exit 1;; esac
+  case "$install_root" in *..*|*' '*|*'	'*) echo 'unsafe install root' >&2; exit 1;; esac
+else
+  command -v systemctl >/dev/null 2>&1 || { echo 'systemd is required' >&2; exit 1; }
+fi
 umask 077
-install -d -m 0700 /etc/embyproxy-edge /var/lib/embyproxy-edge
-	response=$(curl --fail --silent --show-error --proto '=https' --tlsv1.2 -H 'Content-Type: application/json' --data '%s' '%s/api/edge/enroll/%s/%s')
+CONTROLLER='%s'
+cfg_dir="${install_root}/etc/embyproxy-edge"
+state_dir="${install_root}/var/lib/embyproxy-edge"
+lib_dir="${install_root}/usr/local/lib"
+bin_dir="${install_root}/usr/local/bin"
+unit_dir="${install_root}/etc/systemd/system"
+install -d -m 0700 "$cfg_dir" "$state_dir" "$lib_dir" "$bin_dir" "$unit_dir"
+	response=$(curl --fail --silent --show-error --proto '%s' --tlsv1.2 -H 'Content-Type: application/json' --data '%s' "$CONTROLLER/api/edge/enroll/%s/%s")
 credential=$(printf '%%s' "$response" | sed -n 's/.*"credential":"\([^"]*\)".*/\1/p')
 node_id=$(printf '%%s' "$response" | sed -n 's/.*"node_id":"\([^"]*\)".*/\1/p')
 [ -n "$credential" ] && [ -n "$node_id" ] || { echo 'invalid enrollment response' >&2; exit 1; }
-printf 'NODE_ID=%%s\nCREDENTIAL=%%s\nCONTROLLER=%%s\n' "$node_id" "$credential" '%s' > /etc/embyproxy-edge/identity.env
-chmod 0600 /etc/embyproxy-edge/identity.env
-cat > /usr/local/lib/embyproxy-edge-heartbeat <<'HEARTBEAT'
+printf 'NODE_ID=%%s\nCREDENTIAL=%%s\nCONTROLLER=%%s\n' "$node_id" "$credential" '%s' > "$cfg_dir/identity.env"
+chmod 0600 "$cfg_dir/identity.env"
+edge_listen=${EMBYPROXY_EDGE_LISTEN_ADDR:-127.0.0.1:18080}
+edge_canary=${EMBYPROXY_EDGE_CANARY_PATH:-}
+edge_allow_private=${EMBYPROXY_EDGE_ALLOW_PRIVATE_TARGETS:-false}
+artifact_headers="$state_dir/edge-agent.headers"
+curl --fail --silent --show-error --proto '%s' --tlsv1.2 -D "$artifact_headers" -H "X-EmbyProxy-Node-Credential: $credential" "$CONTROLLER/api/edge/artifact/$node_id/edge-agent" -o "$bin_dir/embyproxy-edge-agent"
+artifact_sha=$(sed -n 's/^[Xx]-[Ee]mby[Pp]roxy-[Aa]rtifact-[Ss][Hh][Aa]256: *\([0-9a-fA-F]\{64\}\).*$/\1/p' "$artifact_headers" | tail -n 1)
+actual_sha=$(sha256sum "$bin_dir/embyproxy-edge-agent" | awk '{print $1}')
+[ -n "$artifact_sha" ] && [ "$artifact_sha" = "$actual_sha" ] || { echo 'edge agent checksum verification failed' >&2; exit 1; }
+rm -f "$artifact_headers"
+chmod 0700 "$bin_dir/embyproxy-edge-agent"
+printf '{"listen_addr":"%%s","db_path":"%%s/edge.db","controller":"%%s","node_id":"%%s","credential":"%%s","version":"bootstrap","commit":"%s","canary_path":"%%s","allow_private_targets":%%s}\n' "$edge_listen" "$state_dir" "$CONTROLLER" "$node_id" "$credential" "$edge_canary" "$edge_allow_private" > "$cfg_dir/edge-agent.json"
+chmod 0600 "$cfg_dir/edge-agent.json"
+cat > "$lib_dir/embyproxy-edge-heartbeat" <<HEARTBEAT
 #!/bin/sh
 set -eu
-. /etc/embyproxy-edge/identity.env
+. "$cfg_dir/identity.env"
 payload=$(printf '{"credential":"%%s","version":"bootstrap","commit":"%s","state":"online","playbackHealthy":false,"configSynced":false}' "$CREDENTIAL")
-curl --fail --silent --show-error --proto '=https' --tlsv1.2 -H 'Content-Type: application/json' --data "$payload" "$CONTROLLER/api/edge/heartbeat/$NODE_ID" >/dev/null
+curl --fail --silent --show-error --proto '%s' --tlsv1.2 -H 'Content-Type: application/json' --data "$payload" "$CONTROLLER/api/edge/heartbeat/$NODE_ID" >/dev/null
 HEARTBEAT
-chmod 0700 /usr/local/lib/embyproxy-edge-heartbeat
-cat > /etc/systemd/system/embyproxy-edge-heartbeat.service <<'UNIT'
+chmod 0700 "$lib_dir/embyproxy-edge-heartbeat"
+cat > "$unit_dir/embyproxy-edge-heartbeat.service" <<UNIT
 [Unit]
 Description=EmbyProxy enrolled edge heartbeat
 Wants=network-online.target
 After=network-online.target
 [Service]
 Type=oneshot
-ExecStart=/usr/local/lib/embyproxy-edge-heartbeat
+ExecStart=$lib_dir/embyproxy-edge-heartbeat
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/etc/embyproxy-edge
+ReadWritePaths=$cfg_dir
 UNIT
-cat > /etc/systemd/system/embyproxy-edge-heartbeat.timer <<'TIMER'
+cat > "$unit_dir/embyproxy-edge-heartbeat.timer" <<TIMER
 [Unit]
 Description=EmbyProxy enrolled edge heartbeat timer
 [Timer]
@@ -210,11 +242,26 @@ RandomizedDelaySec=10s
 [Install]
 WantedBy=timers.target
 TIMER
-systemctl daemon-reload
-systemctl enable --now embyproxy-edge-heartbeat.timer
-/usr/local/lib/embyproxy-edge-heartbeat || true
-echo 'Edge identity enrolled. This host remains unadmitted until its separately provisioned data-plane configuration reports a passing playback canary.'
-	`, string(body), controller, url.PathEscape(enrollmentID), url.PathEscape(token), controller, buildinfo.Current().Commit)
+cat > "$unit_dir/embyproxy-edge.service" <<UNIT
+[Unit]
+Description=EmbyProxy enrolled edge agent
+Wants=network-online.target
+After=network-online.target
+[Service]
+Type=simple
+ExecStart=$bin_dir/embyproxy-edge-agent --config $cfg_dir/edge-agent.json
+Restart=on-failure
+RestartSec=3s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=$cfg_dir $state_dir
+UNIT
+if [ -z "$install_root" ]; then systemctl daemon-reload; systemctl enable --now embyproxy-edge-heartbeat.timer embyproxy-edge.service; fi
+"$lib_dir/embyproxy-edge-heartbeat" || true
+echo 'Edge identity enrolled. This host remains unadmitted until its data-plane configuration reports a passing playback canary.'
+		`, controller, curlProtocol, string(body), url.PathEscape(enrollmentID), url.PathEscape(token), controller, curlProtocol, buildinfo.Current().Commit, curlProtocol, buildinfo.Current().Commit)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
@@ -270,6 +317,84 @@ func (h *Handler) handleEdgeEnrollment(w http.ResponseWriter, r *http.Request, p
 			return
 		}
 		writeJSON(w, 200, map[string]any{"ok": true})
+		return
+	}
+	if r.Method == http.MethodGet && strings.HasPrefix(path, "/api/edge/artifact/") {
+		parts := strings.Split(strings.TrimPrefix(path, "/api/edge/artifact/"), "/")
+		if len(parts) != 2 || h.cfg.EdgeAgentBinaryPath == "" {
+			http.NotFound(w, r)
+			return
+		}
+		credential := strings.TrimSpace(r.Header.Get("X-EmbyProxy-Node-Credential"))
+		node, err := h.store.GetProxyNode(r.Context(), parts[0])
+		if err != nil || node == nil || credential == "" || !h.store.ValidateProxyNodeCredential(r.Context(), parts[0], credential) {
+			http.NotFound(w, r)
+			return
+		}
+		file, err := os.Open(h.cfg.EdgeAgentBinaryPath)
+		if err != nil {
+			http.Error(w, "artifact unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		defer file.Close()
+		info, err := file.Stat()
+		if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > 128<<20 {
+			http.Error(w, "artifact unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", info.Size()))
+		sum := sha256.New()
+		if _, err := io.Copy(sum, file); err != nil {
+			http.Error(w, "artifact unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			http.Error(w, "artifact unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("X-EmbyProxy-Artifact-SHA256", fmt.Sprintf("%x", sum.Sum(nil)))
+		_, _ = io.Copy(w, io.LimitReader(file, 128<<20))
+		return
+	}
+	if r.Method == http.MethodGet && strings.HasPrefix(path, "/api/edge/config/") {
+		id := strings.TrimPrefix(path, "/api/edge/config/")
+		credential := strings.TrimSpace(r.Header.Get("X-EmbyProxy-Node-Credential"))
+		if id == "" || !h.store.ValidateProxyNodeCredential(r.Context(), id, credential) {
+			http.NotFound(w, r)
+			return
+		}
+		routes, err := h.store.ListManagedRoutes(r.Context())
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false})
+			return
+		}
+		response := struct {
+			Routes []struct {
+				Route storage.ManagedRoute       `json:"route"`
+				Lines []storage.ManagedRouteLine `json:"lines"`
+			} `json:"routes"`
+		}{Routes: make([]struct {
+			Route storage.ManagedRoute       `json:"route"`
+			Lines []storage.ManagedRouteLine `json:"lines"`
+		}, 0, len(routes))}
+		for _, route := range routes {
+			if !route.Enabled || !route.Public {
+				continue
+			}
+			lines, listErr := h.store.ListManagedRouteLines(r.Context(), route.Slug)
+			if listErr != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false})
+				return
+			}
+			response.Routes = append(response.Routes, struct {
+				Route storage.ManagedRoute       `json:"route"`
+				Lines []storage.ManagedRouteLine `json:"lines"`
+			}{Route: route, Lines: lines})
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		writeJSON(w, http.StatusOK, response)
 		return
 	}
 	http.NotFound(w, r)

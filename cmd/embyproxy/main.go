@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -218,6 +219,9 @@ func main() {
 	if cfg.AdminAddr() == "" {
 		mux := http.NewServeMux()
 		registerRoutes(mux, adminHandler, proxyRoute)
+		if cfg.IsolatedTestMedia {
+			mux.HandleFunc("/__isolated-media/", isolatedTestMedia)
+		}
 		serverSpecs = append(serverSpecs, serverSpec{
 			server:      &http.Server{Addr: cfg.Addr(), Handler: wrapHTTPHandler(cfg, store, log, mux)},
 			logProfiles: true,
@@ -259,6 +263,35 @@ func main() {
 		if err := spec.server.Shutdown(shutdownCtx); err != nil {
 			log.Error("shutdown", "server shutdown failed", map[string]any{"event": "serverShutdownFailed", "error": err.Error()})
 		}
+	}
+}
+
+func isolatedTestMedia(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	body := []byte(strings.Repeat("embyproxy-isolated-media-", 4096))
+	start, end := 0, len(body)-1
+	if raw := r.Header.Get("Range"); strings.HasPrefix(raw, "bytes=") {
+		if _, err := fmt.Sscanf(strings.TrimPrefix(raw, "bytes="), "%d-%d", &start, &end); err != nil || start < 0 || end < start || start >= len(body) {
+			w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", len(body)))
+			w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
+			return
+		}
+		if end >= len(body) {
+			end = len(body) - 1
+		}
+		w.Header().Set("Accept-Ranges", "bytes")
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(body)))
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", end-start+1))
+		w.WriteHeader(http.StatusPartialContent)
+	} else {
+		w.Header().Set("Accept-Ranges", "bytes")
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(body)))
+	}
+	if r.Method != http.MethodHead {
+		_, _ = w.Write(body[start : end+1])
 	}
 }
 
@@ -388,7 +421,9 @@ func proxyRouteHandler(cfg config.Config, store *storage.Store, fallback http.Ha
 	if !cfg.MediaProxyRoutes || store == nil {
 		return fallback
 	}
-	mediaConfig := mediaproxy.Config{TrustProxyEnv: true}
+	// Private targets are only admitted by the explicitly isolated test
+	// controller. Production managed routes retain the normal SSRF boundary.
+	mediaConfig := mediaproxy.Config{TrustProxyEnv: true, AllowPrivateTargets: cfg.IsolatedTestMedia}
 	return proxyadapter.NewProductionRouter(
 		proxyadapter.NewStorageResolver(store, "admin", cfg.ProxyNodeSchedulerMode),
 		mediaproxy.NewExecutor(mediaConfig),

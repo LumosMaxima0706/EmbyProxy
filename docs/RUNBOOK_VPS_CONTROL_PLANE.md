@@ -1,6 +1,6 @@
 # VPS Control Plane Runbook
 
-Status: `CONTROL-PLANE FOUNDATION DEPLOYED; REAL NEW-EDGE ACCEPTANCE BLOCKED`
+Status: `ISOLATED PHASE 4/5 IMPLEMENTATION IN PROGRESS; PRODUCTION CUTOVER NOT AUTHORIZED`
 
 Last updated: 2026-09-02 (Asia/Shanghai)
 
@@ -42,8 +42,8 @@ validation.
 | 1 | Schema/API/enrollment/auth-migration design and local implementation | DONE |
 | 2 | Application HTML login | DEPLOYED AND VERIFIED |
 | 3 | Generic proxy-node model, API and Admin UI | LOCAL FOUNDATION DONE |
-| 4 | One-time enrollment/bootstrap and edge-agent identity | API FOUNDATION DONE; REAL HOST BLOCKED |
-| 5 | Heartbeat, health and playback-canary admission | HEARTBEAT FOUNDATION DONE; REAL HOST BLOCKED |
+| 4 | One-time enrollment/bootstrap and edge-agent identity | ISOLATED INSTALLER IMPLEMENTED; host exercise in progress |
+| 5 | Heartbeat, health and playback-canary admission | ISOLATED EDGE AGENT IMPLEMENTED; host exercise in progress |
 | 6 | Persistent traffic quota and reset accounting | MODEL FOUNDATION DONE |
 | 7 | Manual ordering and explainable smart scheduling | SELECTOR FOUNDATION DONE |
 | 8 | Drain, revoke and removal | API FOUNDATION DONE |
@@ -114,6 +114,61 @@ until it is separately reviewed and committed.
   `79d279c0d5c95008b8ea90715fe60a3cafb0a9cf85d9c5d40edfeb89f14009ad`.
 
 ### Continued implementation record
+
+#### Isolated Phase 4/5 bootstrap implementation (2026-09-02)
+
+- The installer now honors `EMBYPROXY_INSTALL_ROOT` for **all** files it
+  writes. In test-root mode it uses only:
+  `etc/embyproxy-edge`, `var/lib/embyproxy-edge`, `usr/local/bin`,
+  `usr/local/lib`, and `etc/systemd/system` below that root; it does not invoke
+  host `systemctl`. This specifically protects production
+  `/etc/embyproxy-edge`, `/var/lib/embyproxy-edge`, their credentials, and all
+  existing service state during approved isolated testing.
+- The bootstrap downloads a node-credential-gated `embyproxy-edge-agent`
+  artifact, requires a SHA-256 checksum header, verifies it locally, writes a
+  root-only agent configuration, and emits local unit templates. The one-time
+  enrollment token remains short-lived, single-use, and is exchanged for a
+  per-node credential; it is not placed in the Admin command or server logs.
+- The controller exposes `/api/edge/artifact/<node>/edge-agent` and
+  `/api/edge/config/<node>` only after validating the per-node credential.
+  Edge request capture and access logging remain suppressed to prevent
+  credential disclosure.
+- `cmd/edge-agent` is a separate data-plane process. It fetches its managed
+  route snapshot, serves the established `/s/<slug>` proxy path through the
+  shared media proxy implementation, executes bounded Range canaries, and
+  reports config-sync/playback health through its node credential.
+- `ISOLATED_TEST_MEDIA=true` enables a deterministic Range-capable fixture
+  only in the isolated controller. It supports `Range`, `206`,
+  `Content-Range`, `Accept-Ranges`, and positive response bytes without
+  contacting or modifying an existing Emby service. Private upstream targets
+  are admitted only for that explicit fixture mode.
+- Local verification after this batch: Go 1.26.4
+  `go test ./...`, `go vet ./...`, and `git diff --check` all pass. New API
+  coverage verifies missing/wrong node credentials receive no artifact or
+  snapshot, and a correct credential receives the expected checksum without
+  exposing the Admin secret.
+
+#### Approved host resource boundary
+
+- BWG only: `/opt/embyproxy-vps-control-plane-test`,
+  `/var/lib/embyproxy-vps-control-plane-test`,
+  `/var/log/embyproxy-vps-control-plane-test`, the four specifically approved
+  test units, loopback `18180`, `18181`, `18182`, and `28180`, plus only
+  `/etc/nginx/conf.d/embyproxy-vps-control-plane-test-bwg.conf`.
+- NOSLA only: the matching approved three test roots, its approved edge test
+  unit, and only `/etc/nginx/conf.d/embyproxy-vps-control-plane-test-nosla.conf`.
+  No existing Nginx server block, production sidecar, publication agent,
+  rathole, 3x-ui, xray, or `stream-erpgo-nosla` container is in scope.
+- The prior read-only audit found NOSLA `127.0.0.1:18180` already occupied by
+  `stream-erpgo-nosla`. It must not be reused, and the container will not be
+  stopped, rebound, or modified. Work may continue with local/BWG-only
+  validation, but the NOSLA edge service cannot be started under the listed
+  binding without a revised, explicitly approved free NOSLA loopback port.
+- Rollback for any approved isolated install is limited to stopping/disabling
+  the named test unit, removing only the named isolated include after restoring
+  its timestamped backup, `nginx -t`, then `systemctl reload nginx`; test roots
+  are retained until the validation evidence is archived. No production path
+  is removed or replaced.
 
 - `0b06d55` added a configurable HTTPS enrollment origin, a guarded one-time
   bootstrap script, persistent monotonic usage updates, explicit IANA-timezone

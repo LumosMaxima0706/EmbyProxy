@@ -33,13 +33,18 @@ type Config struct {
 	AdminUsername           string
 	AdminPasswordHash       string
 	EnrollmentControllerURL string
-	ProxyNodeSchedulerMode  string
-	Admin2FADisabled        bool
-	OwnerAdminAuthMode      string
-	OwnerAdminHost          string
-	PublicMediaBaseURL      string
-	PublicMediaNodePaths    map[string]string
-	PublicationAgentSocket  string
+	EdgeAgentBinaryPath     string
+	// AllowInsecureLoopbackEnrollment exists solely for an isolated controller
+	// bound to localhost. Production enrollment remains HTTPS-only.
+	AllowInsecureLoopbackEnrollment bool
+	IsolatedTestMedia               bool
+	ProxyNodeSchedulerMode          string
+	Admin2FADisabled                bool
+	OwnerAdminAuthMode              string
+	OwnerAdminHost                  string
+	PublicMediaBaseURL              string
+	PublicMediaNodePaths            map[string]string
+	PublicationAgentSocket          string
 	// PlaybackCredentialDir stores per-publication Emby tokens outside SQLite.
 	// It is intentionally a local runtime directory, never a Git path.
 	PlaybackCredentialDir     string
@@ -97,30 +102,33 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	cfg := Config{
-		CWD:                       cwd,
-		DBPath:                    envString("DB_PATH", filepath.Join(cwd, "data", "proxy.db")),
-		GlobalStatsDBPath:         envString("GLOBAL_STATS_DB_PATH", "/var/lib/embyproxy-gsy-sidecar/global-stats.db"),
-		Port:                      port,
-		ListenAddr:                listenAddr,
-		AdminListenAddr:           adminListenAddr,
-		AdminToken:                os.Getenv("ADMIN_TOKEN"),
-		AdminUsername:             strings.TrimSpace(os.Getenv("ADMIN_USERNAME")),
-		AdminPasswordHash:         strings.TrimSpace(os.Getenv("ADMIN_PASSWORD_HASH")),
-		EnrollmentControllerURL:   strings.TrimRight(strings.TrimSpace(os.Getenv("ENROLLMENT_CONTROLLER_URL")), "/"),
-		ProxyNodeSchedulerMode:    strings.ToLower(strings.TrimSpace(envString("PROXY_NODE_SCHEDULER_MODE", "manual"))),
-		Admin2FADisabled:          envBool("ADMIN_2FA_DISABLED", false),
-		OwnerAdminAuthMode:        strings.ToLower(strings.TrimSpace(os.Getenv("OWNER_ADMIN_AUTH_MODE"))),
-		OwnerAdminHost:            strings.ToLower(strings.TrimSpace(os.Getenv("OWNER_ADMIN_HOST"))),
-		PublicMediaBaseURL:        publicMediaBaseURL,
-		PublicMediaNodePaths:      publicMediaNodePaths,
-		PublicationAgentSocket:    strings.TrimSpace(os.Getenv("PUBLICATION_AGENT_SOCKET")),
-		PlaybackCredentialDir:     envString("PLAYBACK_CREDENTIAL_DIR", "/var/lib/embyproxy-gsy-sidecar/playback-credentials"),
-		MediaProxyRoutes:          envBool("MEDIAPROXY_ROUTES_ENABLED", false),
-		FailoverDNSProviderMode:   strings.ToLower(strings.TrimSpace(os.Getenv("FAILOVER_DNS_PROVIDER_MODE"))),
-		FailoverDNSAllowedRecords: strings.TrimSpace(os.Getenv("FAILOVER_DNS_ALLOWED_RECORDS")),
-		FailoverDNSRealApply:      envBool("FAILOVER_DNS_REAL_APPLY_ENABLED", false),
-		FailoverMockFixture:       envBool("FAILOVER_MOCK_FIXTURE_ENABLED", false),
-		FailoverStateFile:         envString("FAILOVER_STATE_FILE", "/var/lib/embyproxy-gsy-sidecar/failover-state.json"),
+		CWD:                             cwd,
+		DBPath:                          envString("DB_PATH", filepath.Join(cwd, "data", "proxy.db")),
+		GlobalStatsDBPath:               envString("GLOBAL_STATS_DB_PATH", "/var/lib/embyproxy-gsy-sidecar/global-stats.db"),
+		Port:                            port,
+		ListenAddr:                      listenAddr,
+		AdminListenAddr:                 adminListenAddr,
+		AdminToken:                      os.Getenv("ADMIN_TOKEN"),
+		AdminUsername:                   strings.TrimSpace(os.Getenv("ADMIN_USERNAME")),
+		AdminPasswordHash:               strings.TrimSpace(os.Getenv("ADMIN_PASSWORD_HASH")),
+		EnrollmentControllerURL:         strings.TrimRight(strings.TrimSpace(os.Getenv("ENROLLMENT_CONTROLLER_URL")), "/"),
+		EdgeAgentBinaryPath:             strings.TrimSpace(os.Getenv("EDGE_AGENT_BINARY_PATH")),
+		AllowInsecureLoopbackEnrollment: envBool("ALLOW_INSECURE_LOOPBACK_ENROLLMENT", false),
+		IsolatedTestMedia:               envBool("ISOLATED_TEST_MEDIA", false),
+		ProxyNodeSchedulerMode:          strings.ToLower(strings.TrimSpace(envString("PROXY_NODE_SCHEDULER_MODE", "manual"))),
+		Admin2FADisabled:                envBool("ADMIN_2FA_DISABLED", false),
+		OwnerAdminAuthMode:              strings.ToLower(strings.TrimSpace(os.Getenv("OWNER_ADMIN_AUTH_MODE"))),
+		OwnerAdminHost:                  strings.ToLower(strings.TrimSpace(os.Getenv("OWNER_ADMIN_HOST"))),
+		PublicMediaBaseURL:              publicMediaBaseURL,
+		PublicMediaNodePaths:            publicMediaNodePaths,
+		PublicationAgentSocket:          strings.TrimSpace(os.Getenv("PUBLICATION_AGENT_SOCKET")),
+		PlaybackCredentialDir:           envString("PLAYBACK_CREDENTIAL_DIR", "/var/lib/embyproxy-gsy-sidecar/playback-credentials"),
+		MediaProxyRoutes:                envBool("MEDIAPROXY_ROUTES_ENABLED", false),
+		FailoverDNSProviderMode:         strings.ToLower(strings.TrimSpace(os.Getenv("FAILOVER_DNS_PROVIDER_MODE"))),
+		FailoverDNSAllowedRecords:       strings.TrimSpace(os.Getenv("FAILOVER_DNS_ALLOWED_RECORDS")),
+		FailoverDNSRealApply:            envBool("FAILOVER_DNS_REAL_APPLY_ENABLED", false),
+		FailoverMockFixture:             envBool("FAILOVER_MOCK_FIXTURE_ENABLED", false),
+		FailoverStateFile:               envString("FAILOVER_STATE_FILE", "/var/lib/embyproxy-gsy-sidecar/failover-state.json"),
 		Defaults: Defaults{
 			CacheTTL:           10000,
 			ListCacheTTL:       180000,
@@ -151,7 +159,24 @@ func Load() (Config, error) {
 		(!strings.HasPrefix(cfg.PublicationAgentSocket, "/run/") || strings.ContainsAny(cfg.PublicationAgentSocket, "\x00\r\n")) {
 		return Config{}, fmt.Errorf("PUBLICATION_AGENT_SOCKET must be an absolute path below /run")
 	}
+	if cfg.EdgeAgentBinaryPath != "" && (!filepath.IsAbs(cfg.EdgeAgentBinaryPath) || strings.ContainsAny(cfg.EdgeAgentBinaryPath, "\x00\r\n")) {
+		return Config{}, fmt.Errorf("EDGE_AGENT_BINARY_PATH must be an absolute path")
+	}
+	if cfg.AllowInsecureLoopbackEnrollment {
+		controller, err := url.Parse(cfg.EnrollmentControllerURL)
+		if err != nil || controller.Scheme != "http" || !isLoopbackHost(controller.Hostname()) {
+			return Config{}, fmt.Errorf("ALLOW_INSECURE_LOOPBACK_ENROLLMENT requires an http loopback ENROLLMENT_CONTROLLER_URL")
+		}
+	}
 	return cfg, nil
+}
+
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	parsed := net.ParseIP(host)
+	return parsed != nil && parsed.IsLoopback()
 }
 
 func normalizePublicMediaBaseURL(raw string) (string, error) {

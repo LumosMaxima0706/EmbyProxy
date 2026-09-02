@@ -431,3 +431,14 @@ func (s *Store) HeartbeatProxyNode(ctx context.Context, id, credential, version,
 	}
 	return nil
 }
+
+// ValidateProxyNodeCredential verifies a node-scoped long-lived credential
+// without returning it or exposing any verifier material.
+func (s *Store) ValidateProxyNodeCredential(ctx context.Context, id, credential string) bool {
+	if strings.TrimSpace(id) == "" || strings.TrimSpace(credential) == "" {
+		return false
+	}
+	var count int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM proxy_nodes WHERE id=? AND credential_hash=? AND state!='revoked'`, id, nodeHash(credential)).Scan(&count)
+	return err == nil && count == 1
+}
