@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,15 +18,16 @@ import (
 )
 
 type config struct {
-	ListenAddr   string `json:"listen_addr"`
-	DBPath       string `json:"db_path"`
-	Controller   string `json:"controller"`
-	NodeID       string `json:"node_id"`
-	Credential   string `json:"credential"`
-	Version      string `json:"version"`
-	Commit       string `json:"commit"`
-	CanaryPath   string `json:"canary_path"`
-	AllowPrivate bool   `json:"allow_private_targets"`
+	ListenAddr        string `json:"listen_addr"`
+	DBPath            string `json:"db_path"`
+	Controller        string `json:"controller"`
+	NodeID            string `json:"node_id"`
+	Credential        string `json:"credential"`
+	Version           string `json:"version"`
+	Commit            string `json:"commit"`
+	CanaryPath        string `json:"canary_path"`
+	AllowPrivate      bool   `json:"allow_private_targets"`
+	IsolatedTestMedia bool   `json:"isolated_test_media"`
 }
 
 type snapshot struct {
@@ -136,6 +138,39 @@ func main() {
 	router := proxyadapter.NewProductionRouter(proxyadapter.NewStorageResolver(store, "admin"), mediaproxy.NewExecutor(mediaproxy.Config{AllowPrivateTargets: cfg.AllowPrivate}), mediaproxy.Config{AllowPrivateTargets: cfg.AllowPrivate}, http.NotFoundHandler())
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) })
+	if cfg.IsolatedTestMedia {
+		mux.HandleFunc("/__isolated-media/", isolatedTestMedia)
+	}
 	mux.Handle("/", router)
 	panic(http.ListenAndServe(cfg.ListenAddr, mux))
+}
+
+func isolatedTestMedia(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	body := []byte(strings.Repeat("embyproxy-isolated-media-", 4096))
+	start, end := 0, len(body)-1
+	partial := false
+	if raw := r.Header.Get("Range"); strings.HasPrefix(raw, "bytes=") {
+		if _, err := fmt.Sscanf(strings.TrimPrefix(raw, "bytes="), "%d-%d", &start, &end); err != nil || start < 0 || end < start || start >= len(body) {
+			w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", len(body)))
+			w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
+			return
+		}
+		if end >= len(body) {
+			end = len(body) - 1
+		}
+		partial = true
+	}
+	w.Header().Set("Accept-Ranges", "bytes")
+	w.Header().Set("Content-Length", strconv.Itoa(end-start+1))
+	if partial {
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(body)))
+		w.WriteHeader(http.StatusPartialContent)
+	}
+	if r.Method != http.MethodHead {
+		_, _ = w.Write(body[start : end+1])
+	}
 }

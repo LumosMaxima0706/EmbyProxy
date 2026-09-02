@@ -201,6 +201,7 @@ chmod 0600 "$cfg_dir/identity.env"
 edge_listen=${EMBYPROXY_EDGE_LISTEN_ADDR:-127.0.0.1:18080}
 edge_canary=${EMBYPROXY_EDGE_CANARY_PATH:-}
 edge_allow_private=${EMBYPROXY_EDGE_ALLOW_PRIVATE_TARGETS:-false}
+edge_isolated_media=${EMBYPROXY_ISOLATED_TEST_MEDIA:-false}
 artifact_headers="$state_dir/edge-agent.headers"
 curl --fail --silent --show-error --proto '%s' --tlsv1.2 -D "$artifact_headers" -H "X-EmbyProxy-Node-Credential: $credential" "$CONTROLLER/api/edge/artifact/$node_id/edge-agent" -o "$bin_dir/embyproxy-edge-agent"
 artifact_sha=$(sed -n 's/^[Xx]-[Ee]mby[Pp]roxy-[Aa]rtifact-[Ss][Hh][Aa]256: *\([0-9a-fA-F]\{64\}\).*$/\1/p' "$artifact_headers" | tail -n 1)
@@ -208,7 +209,7 @@ actual_sha=$(sha256sum "$bin_dir/embyproxy-edge-agent" | awk '{print $1}')
 [ -n "$artifact_sha" ] && [ "$artifact_sha" = "$actual_sha" ] || { echo 'edge agent checksum verification failed' >&2; exit 1; }
 rm -f "$artifact_headers"
 chmod 0700 "$bin_dir/embyproxy-edge-agent"
-printf '{"listen_addr":"%%s","db_path":"%%s/edge.db","controller":"%%s","node_id":"%%s","credential":"%%s","version":"bootstrap","commit":"%s","canary_path":"%%s","allow_private_targets":%%s}\n' "$edge_listen" "$state_dir" "$CONTROLLER" "$node_id" "$credential" "$edge_canary" "$edge_allow_private" > "$cfg_dir/edge-agent.json"
+printf '{"listen_addr":"%%s","db_path":"%%s/edge.db","controller":"%%s","node_id":"%%s","credential":"%%s","version":"bootstrap","commit":"%s","canary_path":"%%s","allow_private_targets":%%s,"isolated_test_media":%%s}\n' "$edge_listen" "$state_dir" "$CONTROLLER" "$node_id" "$credential" "$edge_canary" "$edge_allow_private" "$edge_isolated_media" > "$cfg_dir/edge-agent.json"
 chmod 0600 "$cfg_dir/edge-agent.json"
 cat > "$lib_dir/embyproxy-edge-heartbeat" <<HEARTBEAT
 #!/bin/sh
