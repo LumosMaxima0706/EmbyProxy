@@ -792,7 +792,11 @@ invalidates node credentials.
 
 This addendum supersedes older provisional statements above where they differ.
 
-- The current development commit is `ec24c5019049b45c5043eed4e9191066c32d4fe7`.
+- The current canonical source commit is
+  `e54c4197c211cb378df43d059efd0f611abbd9ce` (`origin/main` and
+  `feature/vps-control-plane`). Its parent code commit is
+  `ec24c5019049b45c5043eed4e9191066c32d4fe7`; `e54c419` adds only this
+  Runbook evidence.
   The local `origin/main` tracking ref is stale in this environment; the BWG
   integration clone's authenticated fetch remains the source of truth before
   any push. No public production cutover was performed.
@@ -828,6 +832,20 @@ This addendum supersedes older provisional statements above where they differ.
   `go test ./...`, `go vet ./...`, and `git diff --check`. The local test
   environment lacks `gcc`, so its CGO test invocation failed before compiling;
   the same source was rebuilt and tested successfully on BWG with CGO enabled.
+- The final documentation commit was transferred as a Git bundle to the
+  independent BWG integration clone, fast-forwarded from the freshly fetched
+  remote `origin/main=ef5e5e065e4daa6cc0593250bde8630840642299`, and pushed
+  normally through the existing `github.com-embyproxy-fusion` identity. The
+  post-push fetch returned
+  `origin/main=e54c4197c211cb378df43d059efd0f611abbd9ce`, equal to the
+  integration clone's `main`; no force push was used.
+- Production provenance is intentionally separate in this scope:
+  BWG `current` remains
+  `/opt/embyproxy-gsy-sidecar/releases/20260902T0425-main-a31386a`, with its
+  existing binary and `NRestarts=0`; NOSLA remains the protected
+  `stream-erpgo-nosla` image `ghcr.io/gsy-allen/emby-proxy-go:v1.3` (digest
+  recorded above). No production release was rebuilt or switched by this
+  isolated-only approval.
 - Rollback for the isolated exercise is limited to stopping the named test
   units, restoring the timestamped test config backup, running `nginx -t`
   before any test-include reload, and retaining the approved test roots for
