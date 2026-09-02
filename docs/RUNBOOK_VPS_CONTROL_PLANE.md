@@ -521,6 +521,12 @@ shared canary classified PlaybackInfo as HTTP 500 `timeout_or_upstream_5xx`.
 No credential was altered or exposed. No third VPS was available, so a fresh
 host's full Nginx/data-plane enrollment and real media canary remain unclaimed.
 
+Final provenance correction: after this closure note was pushed, `origin/main`
+and `feature/vps-control-plane` became `a31386a`. BWG was rebuilt from that
+exact main commit and runs
+`/opt/embyproxy-gsy-sidecar/releases/20260902T0425-main-a31386a` with binary
+SHA-256 `acfc7ed6a72edac69b390394b3fd50c9b9405c849741f09984ad15e83d604ddd`.
+
 The managed-route runtime now consults the persisted `proxy_nodes` table before
 forwarding `/s/<slug>/...` requests. `StorageResolver` applies the configured
 `PROXY_NODE_SCHEDULER_MODE` (`manual` by default, `smart` when explicitly set)
