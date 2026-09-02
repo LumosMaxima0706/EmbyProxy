@@ -382,8 +382,9 @@ migration design, including:
 - node state machine and playback admission contract;
 - exact local files, ports, services and backup/rollback plan.
 
-It must not touch BWG, NOSLA, DNS, Nginx, firewall, certificates or production
-database until the next phase is separately approved.
+This original Phase 1 planning note is superseded by the continuous-session
+authorization. Production changes remain constrained by the backup,
+validation and rollback contract above.
 
 ## 2026-09-02 Implementation And Production Record
 
@@ -433,6 +434,15 @@ database until the next phase is separately approved.
 - No authenticated media object was replayed. The existing runtime
   VideoStream/Range canary has not been re-run in this session, so real
   1111/younoyes regression acceptance remains open rather than claimed.
+
+- Post-main regression on BWG: 1111 completed one authenticated sample with
+  `PlaybackInfo=200`, `VideoStream=302`, final media `206`,
+  `Content-Range=true`, `Accept-Ranges=true`, 65,536 bytes read and positive
+  byte growth; result `healthy`. Younoyes recheck was attempted without
+  changing credentials and returned upstream HTTP 403 for System Info/Items,
+  followed by canary `PlaybackInfo=500` (`timeout_or_upstream_5xx`). This is an
+  upstream credential/access failure, not a code-path success, so younoyes is
+  explicitly not marked as passed in this run.
 
 ### Current blockers
 
