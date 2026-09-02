@@ -73,9 +73,22 @@ func main() {
 		if err = json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(&body); err != nil {
 			return err
 		}
+		seen := make(map[string]struct{}, len(body.Routes))
 		for _, entry := range body.Routes {
 			if err = store.SaveManagedRoute(ctx, entry.Route, entry.Lines); err != nil {
 				return err
+			}
+			seen[entry.Route.Slug] = struct{}{}
+		}
+		current, err := store.ListManagedRoutes(ctx)
+		if err != nil {
+			return err
+		}
+		for _, route := range current {
+			if _, ok := seen[route.Slug]; !ok {
+				if err = store.DeleteManagedRoute(ctx, route.Slug); err != nil {
+					return err
+				}
 			}
 		}
 		return nil
@@ -101,7 +114,10 @@ func main() {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(cfg.Controller, "/")+"/api/edge/heartbeat/"+cfg.NodeID, strings.NewReader(string(body)))
 		if err == nil {
 			req.Header.Set("Content-Type", "application/json")
-			_, _ = client.Do(req)
+			res, err := client.Do(req)
+			if err == nil && res != nil {
+				_ = res.Body.Close()
+			}
 		}
 	}
 	go func() {
