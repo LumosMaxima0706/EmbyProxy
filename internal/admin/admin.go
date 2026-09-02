@@ -254,10 +254,12 @@ func (h *Handler) handleAuth(w http.ResponseWriter, r *http.Request, path string
 			session, status, res = h.checker.Login(r, body.Token, body.Code)
 		}
 		if !res.OK {
+			h.logSecurityEvent("adminLoginFailed", "administrator login failed", r)
 			writeJSON(w, res.Status, map[string]any{"ok": false, "error": res.Error, "twoFactor": status})
 			return
 		}
 		auth.SetSessionCookie(w, r, session)
+		h.logSecurityEvent("adminLoginSucceeded", "administrator login succeeded", r)
 		writeJSON(w, http.StatusOK, map[string]any{
 			"ok":               true,
 			"authenticated":    true,

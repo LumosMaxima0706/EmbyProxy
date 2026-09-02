@@ -77,6 +77,9 @@ type Enrollment struct {
 
 func (s *Store) InitProxyNodeSchema(ctx context.Context) error {
 	_, err := s.db.ExecContext(ctx, `
+CREATE TABLE IF NOT EXISTS schema_migrations (
+ version TEXT PRIMARY KEY, applied_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS proxy_nodes (
  id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, public_address TEXT NOT NULL DEFAULT '',
  enabled INTEGER NOT NULL DEFAULT 1, state TEXT NOT NULL DEFAULT 'registered', priority INTEGER NOT NULL DEFAULT 0,
@@ -94,6 +97,10 @@ CREATE TABLE IF NOT EXISTS proxy_node_enrollments (
 CREATE INDEX IF NOT EXISTS idx_proxy_nodes_priority ON proxy_nodes(enabled, state, priority);
 CREATE INDEX IF NOT EXISTS idx_proxy_node_enrollments_node ON proxy_node_enrollments(node_id);
 `)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES ('proxy_nodes_v1', ?)`, time.Now().Unix())
 	return err
 }
 
