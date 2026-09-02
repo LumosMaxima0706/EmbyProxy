@@ -242,10 +242,11 @@ until it is separately reviewed and committed.
   `origin/main` remote-tracking ref is stale because this environment cannot
   authenticate GitHub directly, while BWG's `git fetch origin` verified the
   remote ref.
-- BWG isolated controller build from `7d2ed8a` uses Go 1.26.4 with CGO:
-  `491913390fdf150edd8ed4d62793c73c48be526bc4929f05e38bd2fd8aaea3ae`.
+
+- BWG isolated controller build from final `a6f02a4` uses Go 1.26.4 with
+  CGO: `90812fe9594323102441986f04eb2288f30020db4495df0715272dff98792d42`.
   The isolated edge-agent build uses:
-  `5b013cc06e4f91214685cddf27b8f2d495936bdea6968d069668bc712ff5ef0e`.
+  `757b298517da809346ab904c551777981d0594c728bfa0361da4d9fec27c741b`.
   Both binaries are under the approved test root only.
 - BWG production was intentionally not switched by this approval. Its
   current symlink remains `/opt/embyproxy-gsy-sidecar/releases/20260902T0425-main-a31386a`.
@@ -260,6 +261,13 @@ until it is separately reviewed and committed.
   testing remains pending a free approved bind because its protected service
   layout occupies the audited port; fresh bare-VPS enrollment remains pending
   an authorized third machine.
+
+- Final canonical source is `origin/main=a6f02a4d3450...` (full commit is
+  recorded by the BWG integration clone and remote fetch). The feature branch
+  was pushed through the same normal fast-forward path. The binary-to-source
+  mapping is therefore `a6f02a4 -> controller SHA-256 above / edge-agent
+  SHA-256 above`; the production release mapping remains intentionally
+  unchanged because production cutover was not approved in this scope.
 
 - `0b06d55` added a configurable HTTPS enrollment origin, a guarded one-time
   bootstrap script, persistent monotonic usage updates, explicit IANA-timezone
