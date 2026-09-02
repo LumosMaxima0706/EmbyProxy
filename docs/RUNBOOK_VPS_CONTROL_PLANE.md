@@ -544,3 +544,8 @@ invalidates node credentials.
   `0803d151c53ba0dd5ee559bae5dfbde9c2b324e42528911fa44e93f8f8617921`.
   The binary bytes match the tested `ec5d121` source build because the final
   commit only changes this Runbook.
+
+- Final release naming follow-up after the provenance note:
+  `/opt/embyproxy-gsy-sidecar/releases/20260902T0330-main-d0d6efc` is active
+  on BWG with the same tested binary SHA-256
+  `0803d151c53ba0dd5ee559bae5dfbde9c2b324e42528911fa44e93f8f8617921`.
