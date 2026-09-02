@@ -75,7 +75,7 @@ not the EmbyProxy controller source.
 
 ### Snapshot at Phase 0
 
-- Current branch: `feature/failover-phase2-local`
+- Historical Phase 0 branch: `feature/failover-phase2-local`
 - Current HEAD: `b42ee844abb3045c14d884cc2dfa7aa9394c46ad`
 - HEAD subject: `fix: validate canary through Emby VideoStream`
 - `origin/main`: `5e49a3f22f5a58f516cda5d0f4f5392e6a72532b`
@@ -112,6 +112,43 @@ until it is separately reviewed and committed.
 - NOSLA remains on `ghcr.io/gsy-allen/emby-proxy-go:v1.3`; its named-target
   admin artifact SHA-256 is
   `79d279c0d5c95008b8ea90715fe60a3cafb0a9cf85d9c5d40edfeb89f14009ad`.
+
+### Continued implementation record
+
+- `0b06d55` added a configurable HTTPS enrollment origin, a guarded one-time
+  bootstrap script, persistent monotonic usage updates, explicit IANA-timezone
+  monthly reset calculation, and scheduler minimum-dwell/hysteresis policy.
+- `695a266` added the additive `schema_migrations` marker
+  `proxy_nodes_v1` and redacted admin login success/failure audit events.
+- `3a469fa` suppressed edge enrollment and heartbeat requests from traffic
+  capture and access logs because those payloads contain node credentials.
+- Local verification after these commits: `go test ./...`, `go vet ./...`, and
+  `git diff --check` all pass using Go 1.26.4 at `/tmp/embyproxy-go/go/bin`.
+- BWG final release for this run:
+  `/opt/embyproxy-gsy-sidecar/releases/20260902T0215-vps-control-plane-3a469fa`,
+  SHA-256 `8e6b79822ab8903769e600a570f7310544e67254c977fc7f653700b7d591952e`.
+  `nginx -t` passed, sidecar is `active`, `NRestarts=0`, `/admin` returns
+  HTML 200 without `WWW-Authenticate`, and stream health returns `ok`.
+- Two long-running SSH publish sessions closed before returning output. Read-only
+  checks proved the first release remained active; the final release was then
+  switched and verified explicitly. This is recorded as an SSH transport issue,
+  not a production outage.
+
+### Remaining acceptance boundaries
+
+- No authorized third VPS is available for a genuine fresh-host bootstrap and
+  data-plane playback acceptance. The generated installer enrolls identity and
+  installs an isolated heartbeat timer, but deliberately does not overwrite an
+  unknown host's Nginx or media service. A node stays out of the proxy pool
+  until the existing authenticated playback canary and publication sync report
+  healthy.
+- The generic registry/selector APIs are not yet wired into publication-agent
+  route selection or active-connection accounting. Drain therefore blocks new
+  eligibility and force revoke invalidates credentials; graceful connection
+  completion and automatic N-node publication rendering remain follow-up work.
+- 1111/younoyes authenticated media playback was not replayed during this
+  continuation; only public health and existing service availability were
+  checked. Historical canary acceptance remains the regression reference.
 
 ### Relevant completed history
 
