@@ -475,6 +475,29 @@ media container, publication fragment, rathole or unrelated service.
 ## Continuous-session addendum (2026-09-02)
 
 ### Data-plane control-plane wiring (2026-09-02)
+### Main release and rollback incident (2026-09-02)
+
+- `origin/main` advanced normally from `7c114b8` to `c3fb409`, then to
+  `0d8fbfd` after the base-path test correction. Local
+  `feature/vps-control-plane` was fast-forwarded to the same `0d8fbfd`.
+- The first stripped `CGO_ENABLED=0` upload crashed on BWG with SIGSEGV during
+  startup (systemd status 11/SEGV, restart counter 42). Backup
+  `/var/backups/embyproxy-vps-control-plane/20260902T033742Z-routing` restored
+  the previous release `20260902T0330-main-d0d6efc`; no Nginx or media
+  container was stopped.
+- Rebuilding from the BWG integration clone with native `/opt/go1.26.4` and
+  CGO produced hash
+  `0db2d74aebad40cd9e49451a88ee30a4c579cdb43a3ffb969471471eef63da22`.
+  `20260902T0405-main-0d8fbfd` is active with zero restarts, Admin HTTP 200,
+  and stream health HTTP 200. The failed artifact is not a production version.
+
+Current provenance is `origin/main 0d8fbfd` -> the BWG native build above ->
+`/opt/embyproxy-gsy-sidecar/releases/20260902T0405-main-0d8fbfd`.
+The production schema contains `proxy_nodes_v1` and
+`proxy_nodes_v2_connections`; no proxy nodes are currently enrolled in BWG,
+so selector routing remains a compatibility fallback until an edge reports
+playback/config health. NOSLA's existing `ghcr.io/gsy-allen/emby-proxy-go:v1.3`
+container remains running and unchanged.
 
 The managed-route runtime now consults the persisted `proxy_nodes` table before
 forwarding `/s/<slug>/...` requests. `StorageResolver` applies the configured
