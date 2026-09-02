@@ -174,7 +174,7 @@ func TestProductionSlugSelectsEligibleProxyNodeAndFailsOver(t *testing.T) {
 	newEdge := func(counter *atomic.Int32, marker string) *httptest.Server {
 		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			counter.Add(1)
-			if r.URL.Path != "/edge/demo/video" {
+			if r.URL.Path != "/s/demo/video" {
 				t.Errorf("%s path=%q", marker, r.URL.Path)
 			}
 			w.Header().Set("Content-Range", "bytes 0-2/3")
@@ -199,8 +199,8 @@ func TestProductionSlugSelectsEligibleProxyNodeAndFailsOver(t *testing.T) {
 		id, name, address string
 		priority          int
 	}{
-		{"node-a", "edge-a", edgeA.URL + "/edge/demo", 1},
-		{"node-b", "edge-b", edgeB.URL + "/edge/demo", 2},
+		{"node-a", "edge-a", edgeA.URL, 1},
+		{"node-b", "edge-b", edgeB.URL, 2},
 	} {
 		if _, err := store.DB().Exec(`INSERT INTO proxy_nodes
 			(id,name,public_address,enabled,state,priority,quota_bytes,used_bytes,reset_day,reset_timezone,next_reset_at,last_heartbeat_at,playback_healthy,config_synced,agent_version,agent_commit,credential_hash,last_error,created_at,updated_at)

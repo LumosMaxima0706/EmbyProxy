@@ -179,9 +179,7 @@ func (r *StorageResolver) selectEdge(ctx context.Context, slug string, fallback 
 	if err != nil || sameOrigin(target, fallback) {
 		return mediaproxy.Target{}, false
 	}
-	if target.BasePath == "" {
-		target.BasePath = "/s/" + slug
-	}
+	target.BasePath = strings.TrimRight(target.BasePath, "/") + "/s/" + slug
 	if meta, ok := ctx.Value(selectionMetaContextKey{}).(*selectionMeta); ok && meta != nil {
 		meta.selected = true
 		meta.nodeID = node.ID
