@@ -214,8 +214,8 @@ cat > "$lib_dir/embyproxy-edge-heartbeat" <<HEARTBEAT
 #!/bin/sh
 set -eu
 . "$cfg_dir/identity.env"
-payload=$(printf '{"credential":"%%s","version":"bootstrap","commit":"%s","state":"online","playbackHealthy":false,"configSynced":false}' "$CREDENTIAL")
-curl --fail --silent --show-error --proto '%s' --tlsv1.2 -H 'Content-Type: application/json' --data "$payload" "$CONTROLLER/api/edge/heartbeat/$NODE_ID" >/dev/null
+payload=\$(printf '{"credential":"%%s","version":"bootstrap","commit":"%s","state":"online","playbackHealthy":false,"configSynced":false}' "\$CREDENTIAL")
+curl --fail --silent --show-error --proto '%s' --tlsv1.2 -H 'Content-Type: application/json' --data "\$payload" "\$CONTROLLER/api/edge/heartbeat/\$NODE_ID" >/dev/null
 HEARTBEAT
 chmod 0700 "$lib_dir/embyproxy-edge-heartbeat"
 cat > "$unit_dir/embyproxy-edge-heartbeat.service" <<UNIT
