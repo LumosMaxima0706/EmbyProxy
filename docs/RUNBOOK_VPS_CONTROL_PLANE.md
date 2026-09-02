@@ -499,6 +499,28 @@ so selector routing remains a compatibility fallback until an edge reports
 playback/config health. NOSLA's existing `ghcr.io/gsy-allen/emby-proxy-go:v1.3`
 container remains running and unchanged.
 
+### Final main-aligned release (2026-09-02)
+
+Runbook closure was pushed as `origin/main df0804f` and the local feature branch
+was fast-forwarded to that exact commit. BWG rebuilt from the integration clone's
+`origin/main` with native `/opt/go1.26.4` and now runs release
+`/opt/embyproxy-gsy-sidecar/releases/20260902T0415-main-df0804f`, SHA-256
+`f88c242c1a66d4e53830f4e89672b596bc840bc9e545d746ca0f40970a673c00`. The
+service is active with zero restarts and `nginx -t` passes. Public Admin is
+HTML 200 without `WWW-Authenticate`; the standard username/password form uses
+`autocomplete="username"`, `type="password"` and
+`autocomplete="current-password"`. Stream health is HTTP 200. NOSLA Nginx and
+the existing `ghcr.io/gsy-allen/emby-proxy-go:v1.3` media container remain
+running and unchanged.
+
+The browser DOM/session checks are automated; validation of a Bitwarden browser
+extension's actual autofill action remains a manual final step because the
+extension is not available to this runtime. Younoyes remains externally blocked:
+its existing credential produced upstream HTTP 403 for System Info/Items and the
+shared canary classified PlaybackInfo as HTTP 500 `timeout_or_upstream_5xx`.
+No credential was altered or exposed. No third VPS was available, so a fresh
+host's full Nginx/data-plane enrollment and real media canary remain unclaimed.
+
 The managed-route runtime now consults the persisted `proxy_nodes` table before
 forwarding `/s/<slug>/...` requests. `StorageResolver` applies the configured
 `PROXY_NODE_SCHEDULER_MODE` (`manual` by default, `smart` when explicitly set)
