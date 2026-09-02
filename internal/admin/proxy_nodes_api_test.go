@@ -60,6 +60,26 @@ func TestProxyNodeAPICreatesOneTimeEnrollmentAndHeartbeat(t *testing.T) {
 	}
 }
 
+func TestProxyNodeAPIPersistsPublicAddressUpdate(t *testing.T) {
+	h := newAuthTestHandler(t, config.Config{AdminToken: "strong-admin-token"})
+	login := serveAdminJSON(t, h, http.MethodPost, "/admin/auth/login", map[string]any{"token": "strong-admin-token"}, nil)
+	cookie := login.Result().Cookies()[0]
+	created := serveAdminJSON(t, h, http.MethodPost, "/api/admin/proxy-nodes", map[string]any{"name": "edge-address", "public_address": "http://127.0.0.1:18181", "reset_day": 1}, cookie)
+	var body map[string]any
+	if err := json.Unmarshal(created.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	nodeID := body["enrollment"].(map[string]any)["node_id"].(string)
+	updated := serveAdminJSON(t, h, http.MethodPatch, "/api/admin/proxy-nodes/"+nodeID, map[string]any{"public_address": "http://127.0.0.1:28180"}, cookie)
+	if updated.Code != http.StatusOK || !strings.Contains(updated.Body.String(), "127.0.0.1:28180") {
+		t.Fatalf("update=%d %s", updated.Code, updated.Body.String())
+	}
+	node, err := h.store.GetProxyNode(context.Background(), nodeID)
+	if err != nil || node == nil || node.PublicAddress != "http://127.0.0.1:28180" {
+		t.Fatalf("node=%+v err=%v", node, err)
+	}
+}
+
 func TestProxyNodeBootstrapIsNoStoreAndDoesNotExposeAdminSecret(t *testing.T) {
 	h := newAuthTestHandler(t, config.Config{AdminToken: "strong-admin-token", EnrollmentControllerURL: "https://admin.example"})
 	login := serveAdminJSON(t, h, http.MethodPost, "/admin/auth/login", map[string]any{"token": "strong-admin-token"}, nil)

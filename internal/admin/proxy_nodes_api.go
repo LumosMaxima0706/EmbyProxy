@@ -96,6 +96,9 @@ func (h *Handler) handleProxyNodesAPI(w http.ResponseWriter, r *http.Request, pa
 			if v, ok := body["enabled"].(bool); ok {
 				n.Enabled = v
 			}
+			if v, ok := body["public_address"].(string); ok {
+				n.PublicAddress = strings.TrimSpace(v)
+			}
 			if v, ok := body["priority"].(float64); ok {
 				n.Priority = int(v)
 			}
