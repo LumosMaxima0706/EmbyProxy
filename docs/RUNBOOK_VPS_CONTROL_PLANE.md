@@ -787,3 +787,49 @@ invalidates node credentials.
 
 - Final repository check: `origin/main` and `feature/vps-control-plane` are
   both `c40523ca1dfd9a8b20dd54914a61e6d4de55d402`; the worktree is clean.
+
+### Latest isolated validation addendum (2026-09-02 18:30 CST)
+
+This addendum supersedes older provisional statements above where they differ.
+
+- The current development commit is `ec24c5019049b45c5043eed4e9191066c32d4fe7`.
+  The local `origin/main` tracking ref is stale in this environment; the BWG
+  integration clone's authenticated fetch remains the source of truth before
+  any push. No public production cutover was performed.
+- Read-only listener evidence: BWG isolated controller/edge/Nginx are on
+  `127.0.0.1:18180`, `127.0.0.1:18181`, and `127.0.0.1:18182`; NOSLA's
+  protected media container is `127.0.0.1:18080 -> container:8080`, its
+  protected admin sidecar is `127.0.0.1:18081`, and the approved test Nginx
+  include is on `127.0.0.1:18181`. All remain loopback-only.
+- The approved TCP tunnel unit was tested with
+  `BWG 127.0.0.1:28180 -> NOSLA 127.0.0.1:18181` and the reverse mapping to
+  BWG `127.0.0.1:18180`. Authentication succeeded, but NOSLA rejected the
+  reverse listener because the existing publication-agent key is marked
+  `restrict,command=...`; sshd logged `Server has disabled port forwarding`.
+  The unit was stopped after the evidence was captured. No SSH key,
+  `authorized_keys`, firewall, production Nginx block, container, or protected
+  service was modified. A real cross-host managed pool therefore remains
+  explicitly unclaimed pending a separately authorized forwarding identity.
+- A fresh generated bootstrap was exercised in the approved BWG root at
+  `/opt/embyproxy-vps-control-plane-test/bootstrap-e2e`. The command URL was
+  extracted from JSON without logging the enrollment token. The installer
+  wrote only isolated identity, credential-gated edge binary, SHA-256 header
+  verification record, config, state database, heartbeat helper and systemd
+  templates below that root. It did not invoke host `systemctl` in root mode.
+  The generated agent was run by temporarily replacing only the approved BWG
+  test edge config and then the original config was restored.
+- Bootstrap acceptance: the enrolled node reported `state=healthy`,
+  `config_synced=true`, and `playback_healthy=true`; the isolated route
+  returned `206`, `Content-Range: bytes 0-1023/102400`,
+  `Accept-Ranges: bytes`, and 1024 response bytes. The original BWG test edge
+  unit is active after restoration. This is an isolated data-plane result,
+  not a public or NOSLA production claim.
+- BWG integration validation with Go 1.26.4 (`/opt/go1.26.4/bin/go`) passed
+  `go test ./...`, `go vet ./...`, and `git diff --check`. The local test
+  environment lacks `gcc`, so its CGO test invocation failed before compiling;
+  the same source was rebuilt and tested successfully on BWG with CGO enabled.
+- Rollback for the isolated exercise is limited to stopping the named test
+  units, restoring the timestamped test config backup, running `nginx -t`
+  before any test-include reload, and retaining the approved test roots for
+  evidence. Production release, DNS, firewall and public route rollback are
+  not part of this phase.
