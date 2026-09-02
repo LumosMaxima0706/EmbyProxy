@@ -170,6 +170,49 @@ until it is separately reviewed and committed.
   are retained until the validation evidence is archived. No production path
   is removed or replaced.
 
+#### BWG isolated execution evidence (2026-09-02)
+
+- A no-checkout clone was created at `/opt/embyproxy-vps-control-plane-test/integration`
+  and fast-forwarded from the repository bundle. BWG-native Go 1.26.4 with
+  CGO enabled built the controller and edge agent into the test-only `bin/`
+  directory.
+- The controller ran on `127.0.0.1:18180`, the edge on `127.0.0.1:18181`, and
+  the approved Nginx include on `127.0.0.1:18182`. The include passed
+  `nginx -t` before reload. Controller/edge remained active with zero restarts;
+  production sidecar, publication-agent and Nginx also remained active.
+- Bootstrap with `EMBYPROXY_INSTALL_ROOT=/opt/embyproxy-vps-control-plane-test`
+  created only test-root identity, agent binary, config, state and unit
+  templates. The first run found a heartbeat heredoc expansion bug; commit
+  `f9b8be5` fixed it and the subsequent bootstrap completed successfully.
+- Controller, edge and Nginx paths all returned HTTP `206`, valid
+  `Content-Range`, `Accept-Ranges: bytes`, and 1024 positive bytes from the
+  deterministic isolated fixture. The enrolled node reported healthy,
+  config-synced, and accumulated traffic.
+- Manual failover was exercised by marking the first node playback-degraded;
+  the next request used a healthy logical node. Default drain of an idle node
+  revoked it immediately; a revoked credential received HTTP `403`. Restoring
+  the first node returned requests to it. Smart mode selected the low-usage
+  node after the first was set to 95% quota, increasing its usage from 1000 to
+  2024 bytes.
+- Active-connection accounting and reset persistence are covered by storage
+  tests. Idle drain now transitions directly to revoked; active drains revoke
+  only after the final response. Expired billing cycles reset usage and update
+  `next_reset_at`, while schema initialization backfills older rows.
+
+#### Remaining acceptance boundaries after isolated execution
+
+- NOSLA's approved `127.0.0.1:18180` edge binding cannot be used without
+  changing a protected service layout; the existing `stream-erpgo-nosla`
+  container was not stopped, rebound, or modified. No NOSLA test unit/include
+  was installed. A revised free NOSLA loopback port is required for a real
+  NOSLA isolated edge.
+- No separately authorized third VPS is available for fresh-host E2E. The
+  bootstrap and data-plane code is implemented and tested against the
+  isolated BWG controller/edge, but unknown-host installation is not claimed.
+- Existing 1111/younoyes credentials were not exported or replayed by this
+  isolated test. Historical 1111 remains the accepted full canary reference;
+  younoyes remains the documented upstream 403 blocker.
+
 - `0b06d55` added a configurable HTTPS enrollment origin, a guarded one-time
   bootstrap script, persistent monotonic usage updates, explicit IANA-timezone
   monthly reset calculation, and scheduler minimum-dwell/hysteresis policy.
@@ -197,13 +240,13 @@ until it is separately reviewed and committed.
   unknown host's Nginx or media service. A node stays out of the proxy pool
   until the existing authenticated playback canary and publication sync report
   healthy.
-- The generic registry/selector APIs are not yet wired into publication-agent
-  route selection or active-connection accounting. Drain therefore blocks new
-  eligibility and force revoke invalidates credentials; graceful connection
-  completion and automatic N-node publication rendering remain follow-up work.
-- 1111/younoyes authenticated media playback was not replayed during this
-  continuation; only public health and existing service availability were
-  checked. Historical canary acceptance remains the regression reference.
+- The generic registry/selector path is wired into the shared managed-route
+  adapter and isolated edge data plane. Production publication cutover remains
+  intentionally out of scope for this approval because public DNS/80/443 and
+  existing publication fragments were not changed.
+- 1111/younoyes authenticated media playback was not replayed by the isolated
+  fixture run. Historical 1111 acceptance remains the regression reference;
+  younoyes remains an upstream credential/access blocker.
 
 ### Relevant completed history
 
