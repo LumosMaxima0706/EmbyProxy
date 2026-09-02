@@ -386,6 +386,11 @@ database until the next phase is separately approved.
 3. Existing production artifacts predate the new source commit. The BWG Admin
    release is traceable by release directory and SHA-256; NOSLA has not been
    upgraded in this change.
+4. Source commit `1d6f18b` is committed locally on `feature/vps-control-plane`
+   but not pushed. The configured `origin` uses HTTPS and this environment has
+   no GitHub credential helper/token; `git push -u origin feature/vps-control-plane`
+   failed with `could not read Username for 'https://github.com'`. No remote,
+   branch history or local user worktree was changed to work around this.
 
 ### Rollback
 
