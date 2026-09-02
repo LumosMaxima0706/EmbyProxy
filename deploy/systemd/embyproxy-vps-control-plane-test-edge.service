@@ -1,0 +1,18 @@
+[Unit]
+Description=EmbyProxy VPS control-plane isolated test edge
+Wants=network-online.target
+After=network-online.target embyproxy-vps-control-plane-test-controller.service
+
+[Service]
+Type=simple
+ExecStart=/opt/embyproxy-vps-control-plane-test/usr/local/bin/embyproxy-edge-agent --config /opt/embyproxy-vps-control-plane-test/etc/embyproxy-edge/edge-agent.json
+Restart=on-failure
+RestartSec=3s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/embyproxy-vps-control-plane-test
+
+[Install]
+WantedBy=multi-user.target
