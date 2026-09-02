@@ -213,6 +213,35 @@ until it is separately reviewed and committed.
   isolated test. Historical 1111 remains the accepted full canary reference;
   younoyes remains the documented upstream 403 blocker.
 
+#### Final isolated provenance (2026-09-02)
+
+- The feature worktree and BWG integration clone were fast-forwarded from the
+  latest fetched `origin/main`, tested, and pushed normally through BWG's
+  existing GitHub deploy identity. The resulting canonical commit is
+  `7d2ed8ac9301ebf51fda05fb381863252728fcd1`; no force push was used. The
+  local feature branch points to the same source commit; the older local
+  `origin/main` remote-tracking ref is stale because this environment cannot
+  authenticate GitHub directly, while BWG's `git fetch origin` verified the
+  remote ref.
+- BWG isolated controller build from `7d2ed8a` uses Go 1.26.4 with CGO:
+  `491913390fdf150edd8ed4d62793c73c48be526bc4929f05e38bd2fd8aaea3ae`.
+  The isolated edge-agent build uses:
+  `5b013cc06e4f91214685cddf27b8f2d495936bdea6968d069668bc712ff5ef0e`.
+  Both binaries are under the approved test root only.
+- BWG production was intentionally not switched by this approval. Its
+  current symlink remains `/opt/embyproxy-gsy-sidecar/releases/20260902T0425-main-a31386a`.
+  NOSLA remains on its protected `ghcr.io/gsy-allen/emby-proxy-go:v1.3`
+  container. No production database, Nginx server block, DNS, firewall,
+  publication-agent, rathole, or media container was changed.
+- The isolated N-node evidence is real loopback data-plane evidence, not a
+  public cutover claim: controller, edge and Nginx returned `206` with
+  `Content-Range`, `Accept-Ranges` and positive bytes; manual failover,
+  smart quota pacing, persistent traffic, reset schedule backfill,
+  active-connection drain and credential revoke were exercised. NOSLA isolated
+  testing remains pending a free approved bind because its protected service
+  layout occupies the audited port; fresh bare-VPS enrollment remains pending
+  an authorized third machine.
+
 - `0b06d55` added a configurable HTTPS enrollment origin, a guarded one-time
   bootstrap script, persistent monotonic usage updates, explicit IANA-timezone
   monthly reset calculation, and scheduler minimum-dwell/hysteresis policy.
