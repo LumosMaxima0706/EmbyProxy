@@ -166,3 +166,26 @@ func TestProxyNodeUsageAdvancesExpiredBillingCycle(t *testing.T) {
 		t.Fatalf("node=%+v err=%v", node, err)
 	}
 }
+
+func TestProxyNodeSchemaBackfillsResetSchedule(t *testing.T) {
+	ctx := context.Background()
+	store, err := New(filepath.Join(t.TempDir(), "proxy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	enrollment, _, err := store.CreateProxyNode(ctx, ProxyNode{Name: "edge-backfill", ResetDay: 1, ResetTimezone: "UTC"}, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB().Exec(`UPDATE proxy_nodes SET next_reset_at=0 WHERE id=?`, enrollment.NodeID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.backfillProxyNodeResetSchedules(ctx, time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	node, err := store.GetProxyNode(ctx, enrollment.NodeID)
+	if err != nil || node == nil || node.NextResetAt == 0 {
+		t.Fatalf("node=%+v err=%v", node, err)
+	}
+}

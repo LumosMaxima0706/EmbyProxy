@@ -110,7 +110,47 @@ CREATE TABLE IF NOT EXISTS proxy_node_connections (
 		return err
 	}
 	_, err = s.db.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES ('proxy_nodes_v2_connections', ?)`, time.Now().Unix())
-	return err
+	if err != nil {
+		return err
+	}
+	return s.backfillProxyNodeResetSchedules(ctx, time.Now())
+}
+
+func (s *Store) backfillProxyNodeResetSchedules(ctx context.Context, now time.Time) error {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, reset_day, reset_timezone FROM proxy_nodes WHERE next_reset_at=0 AND state!='revoked'`)
+	if err != nil {
+		return err
+	}
+	type reset struct {
+		id   string
+		next int64
+	}
+	resets := make([]reset, 0)
+	for rows.Next() {
+		var id, timezone string
+		var day int
+		if err := rows.Scan(&id, &day, &timezone); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		next, err := NextMonthlyReset(now, day, timezone)
+		if err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("proxy node %s reset schedule: %w", id, err)
+		}
+		resets = append(resets, reset{id: id, next: next.Unix()})
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	_ = rows.Close()
+	for _, item := range resets {
+		if _, err := s.db.ExecContext(ctx, `UPDATE proxy_nodes SET next_reset_at=?,updated_at=? WHERE id=? AND next_reset_at=0`, item.next, now.Unix(), item.id); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // BeginProxyNodeConnection reserves one active request for drain accounting.
@@ -355,7 +395,18 @@ func (s *Store) advanceProxyNodeCycle(ctx context.Context, id string, now time.T
 }
 
 func (s *Store) ResetProxyNodeUsage(ctx context.Context, id string, now time.Time) error {
-	result, err := s.db.ExecContext(ctx, `UPDATE proxy_nodes SET used_bytes=0,updated_at=? WHERE id=? AND state!='revoked'`, now.Unix(), id)
+	node, err := s.GetProxyNode(ctx, id)
+	if err != nil || node == nil {
+		if err == nil {
+			return sql.ErrNoRows
+		}
+		return err
+	}
+	next, err := NextMonthlyReset(now, node.ResetDay, node.ResetTimezone)
+	if err != nil {
+		return err
+	}
+	result, err := s.db.ExecContext(ctx, `UPDATE proxy_nodes SET used_bytes=0,next_reset_at=?,updated_at=? WHERE id=? AND state!='revoked'`, next.Unix(), now.Unix(), id)
 	if err != nil {
 		return err
 	}
