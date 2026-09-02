@@ -213,6 +213,25 @@ until it is separately reviewed and committed.
   isolated test. Historical 1111 remains the accepted full canary reference;
   younoyes remains the documented upstream 403 blocker.
 
+#### Production playback regression (2026-09-02)
+
+- Using the existing protected Admin canary endpoint on BWG, a fresh run after
+  the isolated control-plane work returned `1111 playback_status=healthy`
+  with `samples_passed=2` and `younoyes playback_status=healthy` with
+  `samples_passed=3`. The canary used the stored runtime credentials inside
+  the production process; no credential, cookie or Authorization value was
+  exported. This supersedes the earlier transient younoyes 403 observation;
+  no younoyes-specific code path was added.
+- The canary endpoint is the existing full chain: authenticated connectivity,
+  `PlaybackInfo`, legitimate `VideoStream` entry, redirect/direct media
+  endpoint, Range response, `206`, `Content-Range`, and byte-growth checks.
+  The request returned HTTP 200 for the Admin operation and marked both
+  publications healthy.
+- Production was not switched to the new isolated binaries in this approval.
+  BWG `current` remains `/opt/embyproxy-gsy-sidecar/releases/20260902T0425-main-a31386a`;
+  the new `origin/main` code is built and exercised only under the approved
+  test root pending a separately scoped production cutover plan.
+
 #### Final isolated provenance (2026-09-02)
 
 - The feature worktree and BWG integration clone were fast-forwarded from the
