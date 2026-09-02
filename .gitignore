@@ -12,6 +12,7 @@
 # 本地构建产物
 /embyproxy
 /embyproxy.exe
+/build/
 
 # 本地工作区
 .claude/
