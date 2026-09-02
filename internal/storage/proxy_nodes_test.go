@@ -65,7 +65,7 @@ func TestProxyNodeOrderAndRevokePersist(t *testing.T) {
 		t.Fatal(err)
 	}
 	n, err := store.GetProxyNode(context.Background(), b.NodeID)
-	if err != nil || n.State != "draining" || n.Enabled {
+	if err != nil || n.State != "revoked" || n.Enabled {
 		t.Fatalf("node=%+v err=%v", n, err)
 	}
 	if err = store.RevokeProxyNode(context.Background(), b.NodeID, true); err != nil {
@@ -121,5 +121,25 @@ func TestProxyNodeDrainWaitsForActiveConnections(t *testing.T) {
 	n, err := store.GetProxyNode(ctx, id)
 	if err != nil || n.State != "revoked" || n.Enabled {
 		t.Fatalf("node after drain=%+v err=%v", n, err)
+	}
+}
+
+func TestProxyNodeDrainWithoutConnectionsRevokesImmediately(t *testing.T) {
+	ctx := context.Background()
+	store, err := New(filepath.Join(t.TempDir(), "proxy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	enrollment, _, err := store.CreateProxyNode(ctx, ProxyNode{Name: "edge-empty-drain", ResetDay: 1}, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DrainProxyNode(ctx, enrollment.NodeID); err != nil {
+		t.Fatal(err)
+	}
+	node, err := store.GetProxyNode(ctx, enrollment.NodeID)
+	if err != nil || node == nil || node.State != "revoked" || node.Enabled {
+		t.Fatalf("node=%+v err=%v", node, err)
 	}
 }

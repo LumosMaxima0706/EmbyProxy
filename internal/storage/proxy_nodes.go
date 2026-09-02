@@ -357,7 +357,13 @@ func (s *Store) RevokeProxyNode(ctx context.Context, id string, force bool) erro
 // DrainProxyNode removes a node from new-session eligibility while preserving
 // its credential so existing streams and a later finalization can complete.
 func (s *Store) DrainProxyNode(ctx context.Context, id string) error {
-	result, err := s.db.ExecContext(ctx, `UPDATE proxy_nodes SET enabled=0,state='draining',updated_at=? WHERE id=? AND state!='revoked'`, time.Now().Unix(), id)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := time.Now().Unix()
+	result, err := tx.ExecContext(ctx, `UPDATE proxy_nodes SET enabled=0,state='draining',updated_at=? WHERE id=? AND state!='revoked'`, now, id)
 	if err != nil {
 		return err
 	}
@@ -365,7 +371,19 @@ func (s *Store) DrainProxyNode(ctx context.Context, id string) error {
 	if changed != 1 {
 		return sql.ErrNoRows
 	}
-	return nil
+	var active int
+	if err := tx.QueryRowContext(ctx, `SELECT active FROM proxy_node_connections WHERE node_id=?`, id).Scan(&active); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if active == 0 {
+		if _, err := tx.ExecContext(ctx, `UPDATE proxy_nodes SET state='revoked',credential_hash='',updated_at=? WHERE id=?`, now, id); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE proxy_node_enrollments SET revoked=1 WHERE node_id=?`, id); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 func (s *Store) CompleteEnrollment(ctx context.Context, enrollmentID, token, version, commit string) (ProxyNode, string, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
