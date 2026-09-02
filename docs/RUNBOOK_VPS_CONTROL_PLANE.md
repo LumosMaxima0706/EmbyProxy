@@ -549,3 +549,6 @@ invalidates node credentials.
   `/opt/embyproxy-gsy-sidecar/releases/20260902T0330-main-d0d6efc` is active
   on BWG with the same tested binary SHA-256
   `0803d151c53ba0dd5ee559bae5dfbde9c2b324e42528911fa44e93f8f8617921`.
+
+- Final repository check: `origin/main` and `feature/vps-control-plane` are
+  both `c40523ca1dfd9a8b20dd54914a61e6d4de55d402`; the worktree is clean.
