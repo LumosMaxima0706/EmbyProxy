@@ -372,6 +372,7 @@ func registerAdminEndpoints(mux *http.ServeMux, adminHandler http.Handler) {
 	mux.Handle("/admin/", adminHandler)
 	mux.Handle("/api/admin", adminHandler)
 	mux.Handle("/api/admin/", adminHandler)
+	mux.Handle("/api/edge/", adminHandler)
 	mux.HandleFunc("/favicon.ico", func(w http.ResponseWriter, r *http.Request) {
 		capture.SetMeta(r, map[string]any{"mode": "admin", "stage": "favicon"})
 		w.WriteHeader(http.StatusNoContent)

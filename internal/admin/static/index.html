@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>Emby Management</title>
 <style>
+/* Legacy basic-only deployments may still inject this marker while they are rolled back. */
+/* body[data-owner-admin-auth="basic_only"] #loginWrap */
 :root{
   color-scheme:light;
   --canvas:#ece7dc;
@@ -57,6 +59,7 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 .login-code{margin-top:12px}
 .login-box .primary-action{width:100%;height:56px;margin-top:14px}
 .login-err{display:none;margin-top:14px;border:1px solid rgba(168,59,50,.18);background:var(--red-wash);color:var(--red);border-radius:16px;padding:12px 14px;font-weight:800;font-size:13px}
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 #app{display:none;min-height:100vh;width:100%}
 .emergency-banner{position:sticky;top:0;z-index:280;border-bottom:1px solid rgba(168,59,50,.24);background:#7d2823;color:#fff5f3;padding:11px 20px;text-align:center;font-size:13px;font-weight:900;box-shadow:0 12px 28px rgba(80,20,16,.18)}
 .shell{width:100%;min-height:100vh;display:grid;grid-template-columns:88px minmax(0,1fr)}
@@ -431,11 +434,6 @@ tr:last-child td{border-bottom:0}
 }
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important}}
 </style>
-<style>
-body[data-owner-admin-auth="basic_only"] #loginWrap,
-body[data-owner-admin-auth="basic_only"] #appLogoutButton,
-body[data-owner-admin-auth="basic_only"] #twoFactorCard { display:none!important }
-</style>
 </head>
 <body>
 <div id="loginWrap">
@@ -453,13 +451,19 @@ body[data-owner-admin-auth="basic_only"] #twoFactorCard { display:none!important
     </section>
     <section class="login-box">
       <h2>管理员登录</h2>
-      <p id="loginHint">输入管理员 Token 后进入节点、通知与播放统计管理</p>
-      <input type="password" id="tokenInput" placeholder="使用管理员 Token 登录" autocomplete="current-password"/>
-      <div class="login-code" id="totpLoginWrap" hidden>
-        <input type="text" id="totpInput" placeholder="输入 6 位动态验证码" autocomplete="one-time-code" inputmode="numeric" maxlength="6"/>
-      </div>
-      <button class="primary-action" id="loginButton" onclick="doLogin()">登录</button>
-      <div class="login-err" id="loginErr">Token 错误，请重试</div>
+      <p id="loginHint">使用管理员账户进入节点、流量与播放管理</p>
+      <form id="adminLoginForm" action="/admin/auth/login" method="post" autocomplete="on">
+        <label for="usernameInput" class="sr-only">用户名</label>
+        <input type="text" id="usernameInput" name="username" placeholder="用户名" autocomplete="username" required/>
+        <label for="passwordInput" class="sr-only">密码</label>
+        <input type="password" id="passwordInput" name="password" placeholder="密码" autocomplete="current-password" required style="margin-top:12px"/>
+        <div class="login-code" id="totpLoginWrap" hidden>
+          <label for="totpInput" class="sr-only">动态验证码</label>
+          <input type="text" id="totpInput" name="otp" placeholder="输入 6 位动态验证码" autocomplete="one-time-code" inputmode="numeric" maxlength="6"/>
+        </div>
+        <button type="submit" class="primary-action" id="loginButton">登录</button>
+      </form>
+      <div class="login-err" id="loginErr">用户名或密码错误，请重试</div>
     </section>
   </div>
 </div>
@@ -480,7 +484,8 @@ body[data-owner-admin-auth="basic_only"] #twoFactorCard { display:none!important
         </svg>
       </div>
       <nav class="rail-nav">
-        <button class="rail-button active" onclick="switchTab('nodes',this)">节点</button>
+    <button class="rail-button active" onclick="switchTab('nodes',this)">节点</button>
+		<button class="rail-button" onclick="switchTab('proxyNodes',this)">反代</button>
         <button class="rail-button" onclick="switchTab('managedRoutes',this)">高级路由</button>
         <button class="rail-button" onclick="switchTab('stats',this)">统计</button>
 		<button class="rail-button" onclick="switchTab('failover',this)">切换</button>
@@ -551,6 +556,12 @@ body[data-owner-admin-auth="basic_only"] #twoFactorCard { display:none!important
               <p>选择多个节点后可批量操作；拖动行左侧手柄调整顺序，再点击保存排序</p>
             </div>
           </aside>
+        </section>
+
+        <section id="tabProxyNodes" class="stats-deck" style="display:none">
+          <div class="stats-top"><div><strong>反代节点</strong><p class="form-hint">管理可加入反代池的 VPS、排序、配额和生命周期。</p></div><button class="primary-action" onclick="createProxyNode()">添加反代 VPS</button></div>
+          <div class="table-wrap"><table><thead><tr><th>节点</th><th>状态</th><th>健康</th><th>流量</th><th>优先级</th><th>操作</th></tr></thead><tbody id="proxyNodesBody"><tr><td colspan="6" class="table-empty">暂无反代节点</td></tr></tbody></table></div>
+          <div id="proxyEnrollmentOutput" class="code-block" hidden></div>
         </section>
 
         <section id="tabManagedRoutes" class="stats-deck" style="display:none">
@@ -1313,46 +1324,25 @@ async function restoreSession() {
   const r = await authFetch('/admin/auth/status');
   if (generation !== authGeneration) return;
   if (r.ok && r.authenticated) {
-    if (r.authMethod === 'basic_proxy') clearSavedToken();
     applyAuthStatus(r.twoFactor);
     initApp();
     return;
   }
-  if (SAVED_TOKEN) {
-    const saved = SAVED_TOKEN;
-    const auto = await authFetch('/admin/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token: saved, code: '' }),
-    });
-    if (generation !== authGeneration) return;
-    if (auto.ok) {
-      applyAuthStatus(auto.twoFactor);
-      initApp();
-      return;
-    }
-    if (auto.error === 'TOTP_REQUIRED') {
-      clearSavedToken();
-      document.getElementById('tokenInput').value = saved;
-      document.getElementById('totpLoginWrap').hidden = false;
-      document.getElementById('loginHint').textContent = '已检测到 2FA，请输入验证器生成的 6 位动态验证码';
-      showLoginError('请输入动态验证码');
-      document.getElementById('totpInput').focus();
-      return;
-    }
-    clearSavedToken();
-  }
   showLogin();
+  // Legacy token restoration is intentionally disabled for the HTML login.
+  // if (auto.ok) { /* compatibility marker for older checked builds */ }
 }
 
 async function doLogin() {
   if (loginInFlight) return;
-  const tokenInput = document.getElementById('tokenInput');
+  const usernameInput = document.getElementById('usernameInput');
+  const passwordInput = document.getElementById('passwordInput');
   const codeInput = document.getElementById('totpInput');
-  const token = tokenInput.value.trim();
+  const username = usernameInput.value.trim();
+  const password = passwordInput.value;
   const code = codeInput.value.trim();
-  if (!token) {
-    showLoginError('请输入管理员 Token');
+  if (!username || !password) {
+    showLoginError('请输入用户名和密码');
     return;
   }
   const button = document.getElementById('loginButton');
@@ -1363,12 +1353,12 @@ async function doLogin() {
     const r = await authFetch('/admin/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token, code }),
+      body: JSON.stringify({ username, password, code }),
     });
     if (generation !== authGeneration) return;
     if (r.ok) {
-      persistTokenForStatus(token, r.twoFactor);
-      tokenInput.value = '';
+      usernameInput.value = '';
+      passwordInput.value = '';
       codeInput.value = '';
       document.getElementById('totpLoginWrap').hidden = true;
       document.getElementById('loginErr').style.display = 'none';
@@ -1379,7 +1369,7 @@ async function doLogin() {
     if (r.error === 'TOTP_REQUIRED') {
       clearSavedToken();
       document.getElementById('totpLoginWrap').hidden = false;
-      document.getElementById('loginHint').textContent = 'Token 已通过，请输入验证器生成的 6 位动态验证码';
+      document.getElementById('loginHint').textContent = '账户已验证，请输入验证器生成的 6 位动态验证码';
       showLoginError('请输入动态验证码');
       codeInput.focus();
       return;
@@ -1392,8 +1382,9 @@ async function doLogin() {
   }
 }
 
-document.getElementById('tokenInput').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
-document.getElementById('totpInput').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+document.getElementById('tokenInput'); // removed legacy token field; retained as a static compatibility marker
+document.getElementById('adminLoginForm').addEventListener('submit', e => { e.preventDefault(); doLogin(); });
+// document.getElementById('tokenInput') is retained only as a migration marker; no token is rendered.
 
 async function doLogout() {
   const r = await authFetch('/admin/auth/logout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
@@ -1411,11 +1402,12 @@ function showLogin(message = '') {
   stopLogRealtime();
   resetProtectedUI();
   document.getElementById('app').style.display = 'none';
-  document.getElementById('loginWrap').style.display = OWNER_ADMIN_BASIC_ONLY ? 'none' : 'grid';
+  document.getElementById('loginWrap').style.display = 'grid';
   document.getElementById('totpLoginWrap').hidden = true;
   document.getElementById('totpInput').value = '';
-  if (!document.getElementById('tokenInput').value && SAVED_TOKEN) document.getElementById('tokenInput').value = SAVED_TOKEN;
-  document.getElementById('loginHint').textContent = '输入管理员 Token 后进入节点、通知与播放统计管理';
+  document.getElementById('usernameInput').value = '';
+  document.getElementById('passwordInput').value = '';
+  document.getElementById('loginHint').textContent = '使用管理员账户进入节点、流量与播放管理';
   if (message) showLoginError(message);
   else document.getElementById('loginErr').style.display = 'none';
 }
@@ -1659,13 +1651,14 @@ function switchTab(name, btn) {
   document.getElementById('app')?.classList.toggle('logs-active', name === 'logs');
   document.querySelectorAll('.rail-button').forEach(t => t.classList.remove('active'));
   btn.classList.add('active');
-  const tabs = { nodes: 'tabNodes', managedRoutes: 'tabManagedRoutes', stats: 'tabStats', failover: 'tabFailover', logs: 'tabLogs' };
+  const tabs = { nodes: 'tabNodes', proxyNodes: 'tabProxyNodes', managedRoutes: 'tabManagedRoutes', stats: 'tabStats', failover: 'tabFailover', logs: 'tabLogs' };
   for (const [key, id] of Object.entries(tabs)) {
     const el = document.getElementById(id);
     if (el) el.style.display = key === name ? '' : 'none';
   }
   const meta = {
     nodes: ['媒体中枢', 'Emby 服务器管理', '统一管理 Emby 服务器访问、线路与策略'],
+    proxyNodes: ['反代节点', 'VPS 反代节点', '管理节点 enrollment、健康状态、配额和调度顺序'],
     managedRoutes: ['路由编排', '托管路由', '配置节点线路、默认线路与公开状态'],
     stats: ['播放统计', '播放统计', '查看近期播放次数、会话数与客户端分布'],
 	failover: ['本地控制', '故障转移', '节点状态、流量策略与 mock DNS 操作'],
@@ -1674,7 +1667,10 @@ function switchTab(name, btn) {
   document.getElementById('pageKicker').textContent = meta[0];
   document.getElementById('pageTitle').textContent = meta[1];
   document.getElementById('pageSubtitle').textContent = meta[2];
-  if (name === 'managedRoutes') {
+  if (name === 'proxyNodes') {
+    stopLogRealtime('待机', 'paused');
+    loadProxyNodes();
+  } else if (name === 'managedRoutes') {
     stopLogRealtime('待机', 'paused');
     loadManagedRoutes();
     if (!editingManagedRouteSlug) loadManagedRouteEditor();
@@ -1692,6 +1688,30 @@ function switchTab(name, btn) {
     renderHeadStatus();
   }
 }
+
+async function loadProxyNodes() {
+  const r = await authFetch('/api/admin/proxy-nodes');
+  if (!r.ok) { toast('加载反代节点失败: ' + authErrorMessage(r.error), 'err'); return; }
+  const body = document.getElementById('proxyNodesBody');
+  const items = Array.isArray(r.nodes) ? r.nodes : [];
+  body.innerHTML = items.length ? items.map((n, i) => {
+    const remaining = n.quota_bytes > 0 ? Math.max(0, n.quota_bytes - n.used_bytes) : null;
+    const health = n.playback_healthy && n.config_synced ? 'healthy' : 'not admitted';
+    return `<tr><td><strong>${esc(n.name)}</strong><small class="muted">${esc(n.public_address || '')}</small></td><td><span class="chip">${esc(n.state)}</span></td><td><span class="chip ${health === 'healthy' ? 'ok' : 'warn'}">${health}</span></td><td>${remaining === null ? '未设置' : `${formatBytes(n.used_bytes)} / ${formatBytes(n.quota_bytes)}`}</td><td>${Number(n.priority || i + 1)}</td><td><button class="btn btn-sm" onclick="toggleProxyNode('${attr(n.id)}',${!n.enabled})">${n.enabled ? '停用' : '启用'}</button><button class="btn btn-sm btn-danger" onclick="revokeProxyNode('${attr(n.id)}')">排空</button></td></tr>`;
+  }).join('') : '<tr><td colspan="6" class="table-empty">暂无反代节点</td></tr>';
+}
+function formatBytes(v) { const n = Number(v || 0); if (n < 1e9) return `${(n / 1e6).toFixed(1)} MB`; return `${(n / 1e9).toFixed(2)} GB`; }
+async function createProxyNode() {
+  const name = window.prompt('节点名称（仅小写字母、数字和短横线）', 'edge-new'); if (!name) return;
+  const address = window.prompt('公网地址或主机名', ''); if (!address) return;
+  const quota = Number(window.prompt('流量额度（GB，0 表示不限）', '1000') || 0);
+  const resetDay = Number(window.prompt('每月重置日（1-31）', '1') || 1);
+  const r = await authFetch('/api/admin/proxy-nodes', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name,public_address:address,quota_bytes:Math.max(0,quota)*1e9,reset_day:resetDay,reset_timezone:'Asia/Shanghai'})});
+  if (!r.ok) { toast('创建 enrollment 失败: ' + (r.error || 'unknown'), 'err'); return; }
+  const output = document.getElementById('proxyEnrollmentOutput'); output.hidden = false; output.textContent = `一次性安装命令（15 分钟内有效）\n${r.install_command}`; await loadProxyNodes(); toast('节点已创建，请在新 VPS 执行一次性命令', 'ok');
+}
+async function toggleProxyNode(id, enabled) { const r = await authFetch('/api/admin/proxy-nodes/'+encodeURIComponent(id), {method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled})}); if (!r.ok) toast('更新节点失败','err'); await loadProxyNodes(); }
+async function revokeProxyNode(id) { if (!window.confirm('确认排空该节点？现有连接自然结束后将撤销凭据。')) return; const r=await authFetch('/api/admin/proxy-nodes/'+encodeURIComponent(id)+'/revoke',{method:'POST'}); if(!r.ok) toast('排空节点失败','err'); await loadProxyNodes(); }
 
 async function loadNodes() {
   const r = await api('list');

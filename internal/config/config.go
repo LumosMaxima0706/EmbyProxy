@@ -30,6 +30,8 @@ type Config struct {
 	ListenAddr             string
 	AdminListenAddr        string
 	AdminToken             string
+	AdminUsername          string
+	AdminPasswordHash      string
 	Admin2FADisabled       bool
 	OwnerAdminAuthMode     string
 	OwnerAdminHost         string
@@ -100,6 +102,8 @@ func Load() (Config, error) {
 		ListenAddr:                listenAddr,
 		AdminListenAddr:           adminListenAddr,
 		AdminToken:                os.Getenv("ADMIN_TOKEN"),
+		AdminUsername:             strings.TrimSpace(os.Getenv("ADMIN_USERNAME")),
+		AdminPasswordHash:         strings.TrimSpace(os.Getenv("ADMIN_PASSWORD_HASH")),
 		Admin2FADisabled:          envBool("ADMIN_2FA_DISABLED", false),
 		OwnerAdminAuthMode:        strings.ToLower(strings.TrimSpace(os.Getenv("OWNER_ADMIN_AUTH_MODE"))),
 		OwnerAdminHost:            strings.ToLower(strings.TrimSpace(os.Getenv("OWNER_ADMIN_HOST"))),

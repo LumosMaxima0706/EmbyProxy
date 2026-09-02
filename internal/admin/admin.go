@@ -140,6 +140,10 @@ func New(cfg config.Config, store *storage.Store, checker *auth.Checker, tg *tel
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimSuffix(r.URL.Path, "/")
+	if strings.HasPrefix(path, "/api/edge/") {
+		h.handleEdgeEnrollment(w, r, path)
+		return
+	}
 	if r.Method == http.MethodGet && (path == "/admin" || path == "") {
 		capture.SetMeta(r, map[string]any{"mode": "admin", "stage": "admin-page"})
 		if errText := auth.ValidateAdminToken(h.cfg.AdminToken); errText != "" {
@@ -173,6 +177,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if path == "/api/admin/managed-routes" || strings.HasPrefix(path, "/api/admin/managed-routes/") {
 		h.handleManagedRoutesAPI(w, r, path)
+		return
+	}
+	if path == "/api/admin/proxy-nodes" || strings.HasPrefix(path, "/api/admin/proxy-nodes/") {
+		h.handleProxyNodesAPI(w, r, path)
 		return
 	}
 	if strings.HasPrefix(path, "/api/admin/emby-servers/") {
@@ -229,13 +237,22 @@ func (h *Handler) handleAuth(w http.ResponseWriter, r *http.Request, path string
 	switch {
 	case r.Method == http.MethodPost && path == "/admin/auth/login":
 		var body struct {
-			Token string `json:"token"`
-			Code  string `json:"code"`
+			Token    string `json:"token"`
+			Username string `json:"username"`
+			Password string `json:"password"`
+			Code     string `json:"code"`
 		}
 		if !decodeAuthJSON(w, r, &body) {
 			return
 		}
-		session, status, res := h.checker.Login(r, body.Token, body.Code)
+		var session auth.Session
+		var status auth.TwoFactorStatus
+		var res auth.Result
+		if body.Username != "" || body.Password != "" {
+			session, status, res = h.checker.LoginPassword(r, body.Username, body.Password, body.Code)
+		} else {
+			session, status, res = h.checker.Login(r, body.Token, body.Code)
+		}
 		if !res.OK {
 			writeJSON(w, res.Status, map[string]any{"ok": false, "error": res.Error, "twoFactor": status})
 			return
@@ -1237,19 +1254,36 @@ func (h *Handler) save(ctx context.Context, uid string, body map[string]any) map
 	}
 	if prevOK {
 		if prevNode, ok := storage.UnpackNode(prevName, prevPacked); ok {
+			var publishedTargetUpdate bool
+			var previousNode storage.Node
+			previousNode = prevNode
 			publication, statusErr := h.publicationStatus(ctx, uid, prevName)
 			if statusErr != nil {
 				return fail("PUBLICATION_STATUS_FAILED")
 			}
 			if publication.Status != storage.PublicationSavedUnpublished &&
 				(prevName != node.Name || strings.TrimSpace(prevNode.Target) != strings.TrimSpace(node.Target)) {
-				return fail("PUBLISHED_REQUIRES_UNPUBLISH")
+				if publication.Status != storage.PublicationPublished || prevName != node.Name {
+					return fail("PUBLISHED_REQUIRES_UNPUBLISH")
+				}
+				oldTargets, newTargets := storage.SplitTargets(prevNode.Target), storage.SplitTargets(node.Target)
+				if len(oldTargets) == 0 || len(newTargets) == 0 || oldTargets[0] != newTargets[0] {
+					return fail("PUBLISHED_PRIMARY_UPSTREAM_CANNOT_CHANGE")
+				}
+				publishedTargetUpdate = true
 			}
 			if _, hasFav := raw["fav"]; !hasFav {
 				node.Fav = prevNode.Fav
 			}
 			if _, hasRank := raw["rank"]; !hasRank {
 				node.Rank = prevNode.Rank
+			}
+			if publishedTargetUpdate {
+				if err := h.syncPublishedNodeTargets(ctx, uid, previousNode, node); err != nil {
+					return fail(err.Error())
+				}
+				h.reset(uid, node.Name)
+				return map[string]any{"ok": true, "node": node, "publication_sync": "synced"}
 			}
 		}
 	}

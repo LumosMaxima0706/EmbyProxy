@@ -21,6 +21,7 @@ import (
 	"embyproxy/internal/storage"
 
 	"github.com/pquerna/otp/totp"
+	"golang.org/x/crypto/bcrypt"
 )
 
 func TestAuthRoutesLoginStatusAndLogout(t *testing.T) {
@@ -70,6 +71,22 @@ func TestAuthRoutesLoginStatusAndLogout(t *testing.T) {
 	handler.ServeHTTP(statusRec, statusReq)
 	if statusRec.Code != http.StatusUnauthorized {
 		t.Fatalf("status after logout = %d body=%s", statusRec.Code, statusRec.Body.String())
+	}
+}
+
+func TestPasswordLoginUsesStandardApplicationCredential(t *testing.T) {
+	hash, err := bcrypt.GenerateFromPassword([]byte("correct horse battery staple"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := newAuthTestHandler(t, config.Config{AdminToken: "strong-admin-token", AdminUsername: "admin", AdminPasswordHash: string(hash)})
+	bad := serveAdminJSON(t, handler, http.MethodPost, "/admin/auth/login", map[string]any{"username": "admin", "password": "wrong"}, nil)
+	if bad.Code != http.StatusUnauthorized {
+		t.Fatalf("bad status=%d body=%s", bad.Code, bad.Body.String())
+	}
+	good := serveAdminJSON(t, handler, http.MethodPost, "/admin/auth/login", map[string]any{"username": "admin", "password": "correct horse battery staple"}, nil)
+	if good.Code != http.StatusOK || len(good.Result().Cookies()) != 2 {
+		t.Fatalf("good status=%d cookies=%v body=%s", good.Code, good.Result().Cookies(), good.Body.String())
 	}
 }
 
@@ -641,12 +658,10 @@ func TestAdminIndexLoginGuards(t *testing.T) {
 	loginBlock := indexFunctionBlock(t, `async function doLogin()`, "\n}\n\ndocument.getElementById('tokenInput')")
 
 	t.Run("stale session restoration", func(t *testing.T) {
-		assertContainsAll(t, restoreBlock, `const generation = ++authGeneration;`, `if (auto.ok)`)
-		if strings.Count(restoreBlock, `if (generation !== authGeneration) return;`) < 2 {
-			t.Fatalf("restoreSession() does not guard both asynchronous responses:\n%s", restoreBlock)
-		}
-		if strings.Contains(restoreBlock, `auto.ok &&`) {
-			t.Fatalf("restoreSession() does not accept a successful emergency-mode login:\n%s", restoreBlock)
+		assertContainsAll(t, restoreBlock, `const generation = ++authGeneration;`, `if (generation !== authGeneration) return;`)
+		assertContainsAll(t, indexHTML, `<form id="adminLoginForm"`, `name="username"`, `autocomplete="username"`, `name="password"`, `type="password"`, `autocomplete="current-password"`)
+		if strings.Contains(indexHTML, `id="tokenInput"`) {
+			t.Fatal("HTML login must not render a token input")
 		}
 		assertContainsAll(t, loginBlock, `const generation = ++authGeneration;`, `if (generation !== authGeneration) return;`)
 	})

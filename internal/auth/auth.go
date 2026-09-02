@@ -12,6 +12,7 @@ import (
 
 	"embyproxy/internal/config"
 	"embyproxy/internal/storage"
+	"golang.org/x/crypto/bcrypt"
 )
 
 type Result struct {
@@ -135,6 +136,20 @@ func (c *Checker) CheckWithStateGuard(r *http.Request) (Result, func()) {
 		return Result{Status: http.StatusTooManyRequests, Error: ErrorTooManyRequests}, noOpRelease
 	}
 	return Result{Status: http.StatusUnauthorized, Error: ErrorUnauthorized}, noOpRelease
+}
+
+// LoginPassword authenticates the application-level HTML login. The password
+// is compared against a bcrypt verifier and is never persisted or returned.
+func (c *Checker) LoginPassword(r *http.Request, username, password, code string) (Session, TwoFactorStatus, Result) {
+	if c == nil || strings.TrimSpace(c.cfg.AdminUsername) == "" || c.cfg.AdminPasswordHash == "" ||
+		!SafeEqual(strings.TrimSpace(username), strings.TrimSpace(c.cfg.AdminUsername)) ||
+		bcrypt.CompareHashAndPassword([]byte(c.cfg.AdminPasswordHash), []byte(password)) != nil {
+		if c != nil {
+			c.recordFailure(&c.tokenFails, c.ClientIP(r), adminTokenFailureLimit, authFailureWindow)
+		}
+		return Session{}, TwoFactorStatus{}, Result{Status: http.StatusUnauthorized, Error: ErrorUnauthorized}
+	}
+	return c.Login(r, c.cfg.AdminToken, code)
 }
 
 func noOpRelease() {}

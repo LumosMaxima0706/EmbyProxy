@@ -1,0 +1,63 @@
+package storage
+
+import (
+	"context"
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+func TestProxyNodeEnrollmentIsSingleUseAndCredentialScoped(t *testing.T) {
+	store, err := New(filepath.Join(t.TempDir(), "proxy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	enrollment, token, err := store.CreateProxyNode(context.Background(), ProxyNode{Name: "edge-a", QuotaBytes: 1000, ResetDay: 1}, 15*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	node, credential, err := store.CompleteEnrollment(context.Background(), enrollment.ID, token, "v1", "abc")
+	if err != nil || node.State != "installing" || credential == "" {
+		t.Fatalf("node=%+v credential=%v err=%v", node, credential, err)
+	}
+	if _, _, err = store.CompleteEnrollment(context.Background(), enrollment.ID, token, "v1", "abc"); err == nil {
+		t.Fatal("reused enrollment token accepted")
+	}
+	if err = store.HeartbeatProxyNode(context.Background(), node.ID, credential, "v1", "abc", "healthy", true, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.HeartbeatProxyNode(context.Background(), node.ID, "wrong", "v1", "abc", "healthy", true, true, ""); err == nil {
+		t.Fatal("wrong node credential accepted")
+	}
+}
+
+func TestProxyNodeOrderAndRevokePersist(t *testing.T) {
+	store, err := New(filepath.Join(t.TempDir(), "proxy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	a, _, err := store.CreateProxyNode(context.Background(), ProxyNode{Name: "edge-a", ResetDay: 1}, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _, err := store.CreateProxyNode(context.Background(), ProxyNode{Name: "edge-b", ResetDay: 1}, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.ReorderProxyNodes(context.Background(), []string{b.NodeID, a.NodeID}); err != nil {
+		t.Fatal(err)
+	}
+	list, err := store.ListProxyNodes(context.Background())
+	if err != nil || list[0].ID != b.NodeID {
+		t.Fatalf("list=%+v err=%v", list, err)
+	}
+	if err = store.RevokeProxyNode(context.Background(), b.NodeID, false); err != nil {
+		t.Fatal(err)
+	}
+	n, err := store.GetProxyNode(context.Background(), b.NodeID)
+	if err != nil || n.State != "draining" || n.Enabled {
+		t.Fatalf("node=%+v err=%v", n, err)
+	}
+}

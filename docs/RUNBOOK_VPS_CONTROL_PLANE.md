@@ -1,6 +1,6 @@
 # VPS Control Plane Runbook
 
-Status: `PHASE 0 COMPLETE - WAITING FOR PHASE 1 APPROVAL`
+Status: `CONTROL-PLANE FOUNDATION DEPLOYED; REAL NEW-EDGE ACCEPTANCE BLOCKED`
 
 Last updated: 2026-09-02 (Asia/Shanghai)
 
@@ -32,23 +32,23 @@ work planned by the current task.
 
 ## Phase Gate
 
-Only Phase 0 was executed in this session. It was read-only against both VPSs,
-apart from this local runbook addition. Do not begin Phase 1 until the user
-explicitly approves it.
+Phases are engineering milestones, not approval gates. Production changes are
+performed only with a scoped backup, an exact rollback path and post-change
+validation.
 
 | Phase | Scope | State |
 | --- | --- | --- |
 | 0 | Repository, Git, deployment and production inventory; architecture map | DONE |
-| 1 | Schema/API/enrollment/auth-migration design and local implementation plan | WAITING APPROVAL |
-| 2 | Application HTML login | NOT STARTED |
-| 3 | Generic proxy-node model, API and Admin UI | NOT STARTED |
-| 4 | One-time enrollment/bootstrap and edge-agent identity | NOT STARTED |
-| 5 | Heartbeat, health and playback-canary admission | NOT STARTED |
-| 6 | Persistent traffic quota and reset accounting | NOT STARTED |
-| 7 | Manual ordering and explainable smart scheduling | NOT STARTED |
-| 8 | Drain, revoke and removal | NOT STARTED |
-| 9 | Local test and acceptance matrix | NOT STARTED |
-| 10-12 | Controlled BWG upgrade, BWG/NOSLA regression, optional extra VPS | NOT STARTED |
+| 1 | Schema/API/enrollment/auth-migration design and local implementation | DONE |
+| 2 | Application HTML login | DEPLOYED AND VERIFIED |
+| 3 | Generic proxy-node model, API and Admin UI | LOCAL FOUNDATION DONE |
+| 4 | One-time enrollment/bootstrap and edge-agent identity | API FOUNDATION DONE; REAL HOST BLOCKED |
+| 5 | Heartbeat, health and playback-canary admission | HEARTBEAT FOUNDATION DONE; REAL HOST BLOCKED |
+| 6 | Persistent traffic quota and reset accounting | MODEL FOUNDATION DONE |
+| 7 | Manual ordering and explainable smart scheduling | SELECTOR FOUNDATION DONE |
+| 8 | Drain, revoke and removal | API FOUNDATION DONE |
+| 9 | Local test and acceptance matrix | GO TEST/VET DONE |
+| 10-12 | Controlled BWG upgrade, BWG/NOSLA regression, optional extra VPS | BWG AUTH DEPLOYED; EXTRA VPS BLOCKED |
 
 ## Repository And Git Inventory
 
@@ -324,3 +324,74 @@ migration design, including:
 
 It must not touch BWG, NOSLA, DNS, Nginx, firewall, certificates or production
 database until the next phase is separately approved.
+
+## 2026-09-02 Implementation And Production Record
+
+### Changes
+
+- Added additive `proxy_nodes` and `proxy_node_enrollments` SQLite tables.
+  Enrollment tokens are SHA-256 verifiers at rest, have a 15-minute TTL, are
+  single-use, and are revoked together with a node credential.
+- Added generic node CRUD, reorder, enable/disable, drain/revoke, enrollment,
+  and credential-scoped heartbeat APIs. No node name is special-cased.
+- Added selector tests for manual priority and smart mode hard exclusions
+  (stale heartbeat, draining, exhausted quota, missing playback/config health).
+- Added bcrypt application-password authentication with standard HTML form
+  fields for password managers. The old `ADMIN_TOKEN` is retained as a
+  loopback/recovery API compatibility mechanism, but is not rendered or saved
+  in browser storage by the owner-admin page.
+- Restored the existing atomic published-backup-line update behavior required
+  by the main branch's publication tests; published primary upstream changes
+  remain rejected.
+
+### BWG deployment
+
+- Pre-change backup:
+  `/var/backups/embyproxy-vps-control-plane/20260902T003519Z`.
+- New release:
+  `/opt/embyproxy-gsy-sidecar/releases/20260902T0045-vps-control-plane`.
+- Deployed binary SHA-256:
+  `a95f4fd8be3d42c08b651723c8a2a445d4bdc246da621e106772a96c3a1f6ba3`.
+- The temporary root-only helper converted the existing root-only recovery
+  password into `ADMIN_PASSWORD_HASH` directly on BWG. It printed neither the
+  password nor the hash and was removed after use.
+- Only the dedicated `owner-admin.149077530.xyz` Nginx file was changed. Its
+  `auth_basic` directives and trusted Basic-success header injection were
+  removed. `nginx -t` passed before reload. Only the Go sidecar was restarted.
+
+### Production verification
+
+- `embyproxy-gsy-sidecar.service`: active, `NRestarts=0`.
+- Unauthenticated `https://owner-admin.149077530.xyz/admin`: HTTP 200 HTML,
+  no `WWW-Authenticate` header, standard `username` and password-manager
+  autocomplete attributes present.
+- A real login using the existing root-only recovery password returned
+  `authenticated:true`; the authenticated proxy-node API returned HTTP 200.
+- `stream.149077530.xyz/health` and its small Emby System Info endpoint both
+  returned HTTP 200 after deployment.
+- No authenticated media object was replayed. The existing runtime
+  VideoStream/Range canary has not been re-run in this session, so real
+  1111/younoyes regression acceptance remains open rather than claimed.
+
+### Current blockers
+
+1. No reachable, authorized third VPS with a public DNS/publication route is
+   available in this session. A genuine one-command enrollment, agent install,
+   Nginx publication and authenticated VideoStream/206/byte-growth test cannot
+   be honestly completed without it.
+2. The controller API foundation has no final bootstrap artifact endpoint yet;
+   it cannot safely invent an edge data-plane installation because the new
+   host's DNS/certificate/publication route must be provisioned without
+   disturbing current edges.
+3. Existing production artifacts predate the new source commit. The BWG Admin
+   release is traceable by release directory and SHA-256; NOSLA has not been
+   upgraded in this change.
+
+### Rollback
+
+Restore only the snapshot files from the listed backup root: set `current` to
+the recorded prior target, restore `embyproxy.env`, the owner-admin Nginx file,
+and `proxy.db`; run `nginx -t`, restart only `embyproxy-gsy-sidecar.service`,
+then reload Nginx. The snapshot's stored unit and state evidence identify the
+exact pre-change version. Do not delete the new release, any certificate,
+media container, publication fragment, rathole or unrelated service.
