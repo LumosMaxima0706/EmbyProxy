@@ -7,6 +7,14 @@ import (
 	"time"
 )
 
+func TestNextMonthlyResetUsesExplicitTimezone(t *testing.T) {
+	now := time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC)
+	got, err := NextMonthlyReset(now, 1, "Asia/Shanghai")
+	if err != nil || got.Location().String() != "Asia/Shanghai" || got.Day() != 1 || got.Month() != time.October {
+		t.Fatalf("reset=%v err=%v", got, err)
+	}
+}
+
 func TestProxyNodeEnrollmentIsSingleUseAndCredentialScoped(t *testing.T) {
 	store, err := New(filepath.Join(t.TempDir(), "proxy.db"))
 	if err != nil {
@@ -59,5 +67,22 @@ func TestProxyNodeOrderAndRevokePersist(t *testing.T) {
 	n, err := store.GetProxyNode(context.Background(), b.NodeID)
 	if err != nil || n.State != "draining" || n.Enabled {
 		t.Fatalf("node=%+v err=%v", n, err)
+	}
+	if err = store.RevokeProxyNode(context.Background(), b.NodeID, true); err != nil {
+		t.Fatal(err)
+	}
+	n, err = store.GetProxyNode(context.Background(), b.NodeID)
+	if err != nil || n.State != "revoked" || n.Enabled {
+		t.Fatalf("node=%+v err=%v", n, err)
+	}
+	if err = store.RecordProxyNodeUsage(context.Background(), a.NodeID, 500, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.RecordProxyNodeUsage(context.Background(), a.NodeID, 100, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	n, err = store.GetProxyNode(context.Background(), a.NodeID)
+	if err != nil || n.UsedBytes != 500 {
+		t.Fatalf("usage=%+v err=%v", n, err)
 	}
 }

@@ -23,21 +23,22 @@ type Defaults struct {
 }
 
 type Config struct {
-	CWD                    string
-	DBPath                 string
-	GlobalStatsDBPath      string
-	Port                   int
-	ListenAddr             string
-	AdminListenAddr        string
-	AdminToken             string
-	AdminUsername          string
-	AdminPasswordHash      string
-	Admin2FADisabled       bool
-	OwnerAdminAuthMode     string
-	OwnerAdminHost         string
-	PublicMediaBaseURL     string
-	PublicMediaNodePaths   map[string]string
-	PublicationAgentSocket string
+	CWD                     string
+	DBPath                  string
+	GlobalStatsDBPath       string
+	Port                    int
+	ListenAddr              string
+	AdminListenAddr         string
+	AdminToken              string
+	AdminUsername           string
+	AdminPasswordHash       string
+	EnrollmentControllerURL string
+	Admin2FADisabled        bool
+	OwnerAdminAuthMode      string
+	OwnerAdminHost          string
+	PublicMediaBaseURL      string
+	PublicMediaNodePaths    map[string]string
+	PublicationAgentSocket  string
 	// PlaybackCredentialDir stores per-publication Emby tokens outside SQLite.
 	// It is intentionally a local runtime directory, never a Git path.
 	PlaybackCredentialDir     string
@@ -104,6 +105,7 @@ func Load() (Config, error) {
 		AdminToken:                os.Getenv("ADMIN_TOKEN"),
 		AdminUsername:             strings.TrimSpace(os.Getenv("ADMIN_USERNAME")),
 		AdminPasswordHash:         strings.TrimSpace(os.Getenv("ADMIN_PASSWORD_HASH")),
+		EnrollmentControllerURL:   strings.TrimRight(strings.TrimSpace(os.Getenv("ENROLLMENT_CONTROLLER_URL")), "/"),
 		Admin2FADisabled:          envBool("ADMIN_2FA_DISABLED", false),
 		OwnerAdminAuthMode:        strings.ToLower(strings.TrimSpace(os.Getenv("OWNER_ADMIN_AUTH_MODE"))),
 		OwnerAdminHost:            strings.ToLower(strings.TrimSpace(os.Getenv("OWNER_ADMIN_HOST"))),

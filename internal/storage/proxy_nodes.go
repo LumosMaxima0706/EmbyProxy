@@ -12,6 +12,38 @@ import (
 	"time"
 )
 
+// NextMonthlyReset returns the next reset instant for the requested billing
+// day in the supplied IANA timezone. Invalid timezone/day values are rejected
+// instead of silently using the host timezone.
+func NextMonthlyReset(now time.Time, resetDay int, timezone string) (time.Time, error) {
+	if resetDay < 1 || resetDay > 31 {
+		return time.Time{}, errors.New("invalid_reset_day")
+	}
+	loc, err := time.LoadLocation(strings.TrimSpace(timezone))
+	if err != nil {
+		return time.Time{}, err
+	}
+	local := now.In(loc)
+	for monthOffset := 0; monthOffset < 2; monthOffset++ {
+		month := local.Month() + time.Month(monthOffset)
+		year := local.Year()
+		for month > 12 {
+			month -= 12
+			year++
+		}
+		day := resetDay
+		last := time.Date(year, month+1, 0, 0, 0, 0, 0, loc).Day()
+		if day > last {
+			day = last
+		}
+		candidate := time.Date(year, month, day, 0, 0, 0, 0, loc)
+		if candidate.After(local) {
+			return candidate, nil
+		}
+	}
+	return time.Time{}, errors.New("reset_date_unavailable")
+}
+
 // ProxyNode is an independently enrolled data-plane node. Secrets never leave
 // this package after enrollment and are stored only as SHA-256 verifiers.
 type ProxyNode struct {
@@ -167,6 +199,36 @@ func (s *Store) UpdateProxyNode(ctx context.Context, n ProxyNode) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE proxy_nodes SET name=?,public_address=?,enabled=?,state=?,priority=?,quota_bytes=?,used_bytes=?,reset_day=?,reset_timezone=?,next_reset_at=?,playback_healthy=?,config_synced=?,last_error=?,updated_at=? WHERE id=?`, n.Name, n.PublicAddress, boolInt(n.Enabled), n.State, n.Priority, n.QuotaBytes, n.UsedBytes, n.ResetDay, n.ResetTimezone, n.NextResetAt, boolInt(n.PlaybackHealthy), boolInt(n.ConfigSynced), redactFailoverStorageText(n.LastError), time.Now().Unix(), n.ID)
 	return err
 }
+
+// RecordProxyNodeUsage is the single write path for node traffic accounting.
+// Values are monotonic within a billing cycle so an agent restart cannot erase
+// previously observed usage.
+func (s *Store) RecordProxyNodeUsage(ctx context.Context, id string, usedBytes int64, sampledAt time.Time) error {
+	if usedBytes < 0 {
+		return errors.New("invalid_usage")
+	}
+	result, err := s.db.ExecContext(ctx, `UPDATE proxy_nodes SET used_bytes=CASE WHEN used_bytes>? THEN used_bytes ELSE ? END,updated_at=? WHERE id=? AND state!='revoked'`, usedBytes, usedBytes, sampledAt.Unix(), id)
+	if err != nil {
+		return err
+	}
+	changed, _ := result.RowsAffected()
+	if changed != 1 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (s *Store) ResetProxyNodeUsage(ctx context.Context, id string, now time.Time) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE proxy_nodes SET used_bytes=0,updated_at=? WHERE id=? AND state!='revoked'`, now.Unix(), id)
+	if err != nil {
+		return err
+	}
+	changed, _ := result.RowsAffected()
+	if changed != 1 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
 func (s *Store) ReorderProxyNodes(ctx context.Context, ids []string) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -181,9 +243,9 @@ func (s *Store) ReorderProxyNodes(ctx context.Context, ids []string) error {
 	return tx.Commit()
 }
 func (s *Store) RevokeProxyNode(ctx context.Context, id string, force bool) error {
-	state := "draining"
-	if force {
-		state = "revoked"
+	state := "revoked"
+	if !force {
+		return s.DrainProxyNode(ctx, id)
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -197,6 +259,20 @@ func (s *Store) RevokeProxyNode(ctx context.Context, id string, force bool) erro
 		return err
 	}
 	return tx.Commit()
+}
+
+// DrainProxyNode removes a node from new-session eligibility while preserving
+// its credential so existing streams and a later finalization can complete.
+func (s *Store) DrainProxyNode(ctx context.Context, id string) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE proxy_nodes SET enabled=0,state='draining',updated_at=? WHERE id=? AND state!='revoked'`, time.Now().Unix(), id)
+	if err != nil {
+		return err
+	}
+	changed, _ := result.RowsAffected()
+	if changed != 1 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 func (s *Store) CompleteEnrollment(ctx context.Context, enrollmentID, token, version, commit string) (ProxyNode, string, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -231,6 +307,22 @@ func (s *Store) CompleteEnrollment(ctx context.Context, enrollmentID, token, ver
 		return ProxyNode{}, "", fmt.Errorf("node_read_failed: %w", e)
 	}
 	return *n, credential, nil
+}
+
+// ValidateEnrollment verifies a bootstrap request without consuming it. The
+// token is consumed only by CompleteEnrollment, so a transient download
+// failure can be retried until the short expiry window closes.
+func (s *Store) ValidateEnrollment(ctx context.Context, enrollmentID, token string) error {
+	var hash string
+	var expires, used, revoked int64
+	err := s.db.QueryRowContext(ctx, `SELECT token_hash,expires_at,consumed_at,revoked FROM proxy_node_enrollments WHERE id=?`, enrollmentID).Scan(&hash, &expires, &used, &revoked)
+	if err != nil {
+		return err
+	}
+	if used != 0 || revoked != 0 || expires <= time.Now().Unix() || nodeHash(token) != hash {
+		return errors.New("enrollment_denied")
+	}
+	return nil
 }
 func (s *Store) HeartbeatProxyNode(ctx context.Context, id, credential, version, commit, state string, playback, synced bool, lastError string) error {
 	if state != "online" && state != "healthy" && state != "degraded" {

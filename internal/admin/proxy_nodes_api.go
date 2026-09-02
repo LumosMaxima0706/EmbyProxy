@@ -1,11 +1,14 @@
 package admin
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
+	"embyproxy/internal/buildinfo"
 	"embyproxy/internal/storage"
 )
 
@@ -37,7 +40,7 @@ func (h *Handler) handleProxyNodesAPI(w http.ResponseWriter, r *http.Request, pa
 			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "INVALID_NODE"})
 			return
 		}
-		writeJSON(w, http.StatusCreated, map[string]any{"ok": true, "enrollment": enrollment, "install_command": buildEnrollmentCommand(enrollment.ID, token)})
+		writeJSON(w, http.StatusCreated, map[string]any{"ok": true, "enrollment": enrollment, "install_command": buildEnrollmentCommand(h.cfg.EnrollmentControllerURL, enrollment.ID, token)})
 		return
 	}
 	if r.Method == http.MethodPost && path == "/api/admin/proxy-nodes/reorder" {
@@ -72,7 +75,7 @@ func (h *Handler) handleProxyNodesAPI(w http.ResponseWriter, r *http.Request, pa
 				writeJSON(w, 404, map[string]any{"ok": false, "error": "NODE_NOT_FOUND"})
 				return
 			}
-			writeJSON(w, 200, map[string]any{"ok": true, "state": map[bool]string{true: "revoked", false: "draining"}[force]})
+			writeJSON(w, 200, map[string]any{"ok": true, "state": map[bool]string{true: "revoked", false: "draining"}[force], "force": force})
 			return
 		}
 		if r.Method == http.MethodPatch && len(parts) == 1 {
@@ -100,6 +103,12 @@ func (h *Handler) handleProxyNodesAPI(w http.ResponseWriter, r *http.Request, pa
 			if v, ok := body["reset_timezone"].(string); ok {
 				n.ResetTimezone = v
 			}
+			if v, ok := body["used_bytes"].(float64); ok && v >= 0 {
+				n.UsedBytes = int64(v)
+			}
+			if v, ok := body["next_reset_at"].(float64); ok && v >= 0 {
+				n.NextResetAt = int64(v)
+			}
 			if err := h.store.UpdateProxyNode(ctx, *n); err != nil {
 				writeJSON(w, 400, map[string]any{"ok": false, "error": "INVALID_NODE"})
 				return
@@ -107,15 +116,119 @@ func (h *Handler) handleProxyNodesAPI(w http.ResponseWriter, r *http.Request, pa
 			writeJSON(w, 200, map[string]any{"ok": true, "node": n})
 			return
 		}
+		if r.Method == http.MethodPost && len(parts) == 2 && parts[1] == "usage" {
+			var body struct {
+				UsedBytes int64 `json:"used_bytes"`
+			}
+			if !decodeAuthJSON(w, r, &body) {
+				return
+			}
+			if err := h.store.RecordProxyNodeUsage(ctx, id, body.UsedBytes, time.Now()); err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "USAGE_UPDATE_FAILED"})
+				return
+			}
+			n, _ := h.store.GetProxyNode(ctx, id)
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "node": n})
+			return
+		}
 	}
 	http.NotFound(w, r)
 }
 
-func buildEnrollmentCommand(id, token string) string {
-	return "curl --fail --silent --show-error --proto '=https' --tlsv1.2 https://OWNER_CONTROLLER/enroll/" + url.PathEscape(id) + "/" + url.PathEscape(token) + " | sudo sh"
+func buildEnrollmentCommand(controllerURL, id, token string) string {
+	controllerURL = strings.TrimRight(strings.TrimSpace(controllerURL), "/")
+	if controllerURL == "" {
+		controllerURL = "https://OWNER_CONTROLLER"
+	}
+	return "curl --fail --silent --show-error --proto '=https' --tlsv1.2 " + controllerURL + "/api/edge/bootstrap/" + url.PathEscape(id) + "/" + url.PathEscape(token) + " | sudo sh"
+}
+
+// handleBootstrap returns a guarded, self-contained installer. It intentionally
+// contains no administrator credential; the one-time enrollment token is
+// exchanged by the installer over TLS and is never persisted by the server.
+func (h *Handler) handleBootstrap(w http.ResponseWriter, r *http.Request, enrollmentID, token string) {
+	if r.Method != http.MethodGet || enrollmentID == "" || token == "" {
+		http.NotFound(w, r)
+		return
+	}
+	if err := h.store.ValidateEnrollment(r.Context(), enrollmentID, token); err != nil {
+		// Treat expired, consumed and unknown enrollment records alike.
+		http.NotFound(w, r)
+		return
+	}
+	// Do not disclose enrollment state in the generated script. The script
+	// performs environment checks and posts the token only to the edge API.
+	controller := strings.TrimRight(strings.TrimSpace(h.cfg.EnrollmentControllerURL), "/")
+	if controller == "" {
+		controller = "https://OWNER_CONTROLLER"
+	}
+	payload := map[string]string{"version": buildinfo.Current().Version, "commit": buildinfo.Current().Commit}
+	body, _ := json.Marshal(payload)
+	script := fmt.Sprintf(`#!/bin/sh
+set -eu
+command -v curl >/dev/null 2>&1 || { echo 'curl is required' >&2; exit 1; }
+command -v systemctl >/dev/null 2>&1 || { echo 'systemd is required' >&2; exit 1; }
+umask 077
+install -d -m 0700 /etc/embyproxy-edge /var/lib/embyproxy-edge
+	response=$(curl --fail --silent --show-error --proto '=https' --tlsv1.2 -H 'Content-Type: application/json' --data '%s' '%s/api/edge/enroll/%s/%s')
+credential=$(printf '%%s' "$response" | sed -n 's/.*"credential":"\([^"]*\)".*/\1/p')
+node_id=$(printf '%%s' "$response" | sed -n 's/.*"node_id":"\([^"]*\)".*/\1/p')
+[ -n "$credential" ] && [ -n "$node_id" ] || { echo 'invalid enrollment response' >&2; exit 1; }
+printf 'NODE_ID=%%s\nCREDENTIAL=%%s\nCONTROLLER=%%s\n' "$node_id" "$credential" '%s' > /etc/embyproxy-edge/identity.env
+chmod 0600 /etc/embyproxy-edge/identity.env
+cat > /usr/local/lib/embyproxy-edge-heartbeat <<'HEARTBEAT'
+#!/bin/sh
+set -eu
+. /etc/embyproxy-edge/identity.env
+payload=$(printf '{"credential":"%%s","version":"bootstrap","commit":"%s","state":"online","playbackHealthy":false,"configSynced":false}' "$CREDENTIAL")
+curl --fail --silent --show-error --proto '=https' --tlsv1.2 -H 'Content-Type: application/json' --data "$payload" "$CONTROLLER/api/edge/heartbeat/$NODE_ID" >/dev/null
+HEARTBEAT
+chmod 0700 /usr/local/lib/embyproxy-edge-heartbeat
+cat > /etc/systemd/system/embyproxy-edge-heartbeat.service <<'UNIT'
+[Unit]
+Description=EmbyProxy enrolled edge heartbeat
+Wants=network-online.target
+After=network-online.target
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/embyproxy-edge-heartbeat
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/etc/embyproxy-edge
+UNIT
+cat > /etc/systemd/system/embyproxy-edge-heartbeat.timer <<'TIMER'
+[Unit]
+Description=EmbyProxy enrolled edge heartbeat timer
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=60s
+RandomizedDelaySec=10s
+[Install]
+WantedBy=timers.target
+TIMER
+systemctl daemon-reload
+systemctl enable --now embyproxy-edge-heartbeat.timer
+/usr/local/lib/embyproxy-edge-heartbeat || true
+echo 'Edge identity enrolled. This host remains unadmitted until its separately provisioned data-plane configuration reports a passing playback canary.'
+	`, string(body), controller, url.PathEscape(enrollmentID), url.PathEscape(token), controller, buildinfo.Current().Commit)
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(script))
 }
 
 func (h *Handler) handleEdgeEnrollment(w http.ResponseWriter, r *http.Request, path string) {
+	if r.Method == http.MethodGet && strings.HasPrefix(path, "/api/edge/bootstrap/") {
+		parts := strings.Split(strings.TrimPrefix(path, "/api/edge/bootstrap/"), "/")
+		if len(parts) != 2 {
+			http.NotFound(w, r)
+			return
+		}
+		h.handleBootstrap(w, r, parts[0], parts[1])
+		return
+	}
 	if r.Method == http.MethodPost && strings.HasPrefix(path, "/api/edge/enroll/") {
 		parts := strings.Split(strings.TrimPrefix(path, "/api/edge/enroll/"), "/")
 		if len(parts) != 2 {

@@ -13,6 +13,14 @@ type Decision struct {
 	Reason string  `json:"reason"`
 }
 
+type Policy struct {
+	Mode            string
+	CurrentID       string
+	CurrentSince    time.Time
+	MinimumDwell    time.Duration
+	HysteresisScore float64
+}
+
 const heartbeatFreshness = 5 * time.Minute
 
 func Eligible(node storage.ProxyNode, now time.Time) bool {
@@ -54,6 +62,37 @@ func Select(nodes []storage.ProxyNode, mode, currentID string, now time.Time) (D
 	return best, true
 }
 
+// SelectWithPolicy applies the same hard eligibility gates as Select and adds
+// bounded hysteresis. A healthy current assignment is retained during its
+// minimum dwell and when a replacement only marginally improves the score.
+// Hard failures still fail over immediately.
+func SelectWithPolicy(nodes []storage.ProxyNode, policy Policy, now time.Time) (Decision, bool) {
+	decision, ok := Select(nodes, policy.Mode, policy.CurrentID, now)
+	if !ok || policy.CurrentID == "" {
+		return decision, ok
+	}
+	var current storage.ProxyNode
+	for _, node := range nodes {
+		if node.ID == policy.CurrentID {
+			current = node
+			break
+		}
+	}
+	if current.ID == "" || !Eligible(current, now) || decision.NodeID == current.ID {
+		return decision, ok
+	}
+	if policy.MinimumDwell > 0 && !policy.CurrentSince.IsZero() && now.Sub(policy.CurrentSince) < policy.MinimumDwell {
+		return Decision{NodeID: current.ID, Score: 0, Reason: "minimum_dwell"}, true
+	}
+	if policy.Mode == "smart" {
+		currentScore := quotaScore(current, now) - float64(current.Priority)*0.001 + 0.03
+		if decision.Score-currentScore < policy.HysteresisScore {
+			return Decision{NodeID: current.ID, Score: currentScore, Reason: "hysteresis"}, true
+		}
+	}
+	return decision, true
+}
+
 func quotaScore(node storage.ProxyNode, now time.Time) float64 {
 	if node.QuotaBytes <= 0 {
 		return 0.5
@@ -64,7 +103,7 @@ func quotaScore(node storage.ProxyNode, now time.Time) float64 {
 	}
 	timeRatio := 0.5
 	if node.NextResetAt > 0 {
-		until := time.Until(time.Unix(node.NextResetAt, 0))
+		until := time.Unix(node.NextResetAt, 0).Sub(now)
 		if until < 0 {
 			until = 0
 		}

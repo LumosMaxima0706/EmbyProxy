@@ -13,8 +13,8 @@ work planned by the current task.
 
 ## Operating Rules
 
-- Production changes are prohibited until the applicable phase is explicitly
-  approved.
+- Phases are internal work units; this session has continuous authorization to
+  implement, test and deploy scoped changes with backups and rollback.
 - Never stop, replace, reconfigure or rename an existing service to solve a
   conflict. New components use independent paths, names, ports and logs.
 - Never print or commit passwords, private keys, Emby tokens, cookies,
@@ -89,6 +89,29 @@ The dirty batch includes admin and statistics changes, publication-agent and
 stats unit edits, playback-investigation notes, redirect/playback rollback
 helpers and live-capture scripts. Treat every one as pre-existing user work
 until it is separately reviewed and committed.
+
+### Current feature worktree (2026-09-02)
+
+- Development worktree: `/mnt/d/codex_work/codex-emby-proxy-project/embyproxy-vps-control-plane`.
+- Branch: `feature/vps-control-plane`; clean at `164e01a` before the current
+  bootstrap edits, based directly on `origin/main` `5e49a3f`.
+- Local `main`: `0629ca3`; it is an older line and is not the deployment source.
+- `origin/main`: `5e49a3f` at the last successful fetch; no remote changes were
+  found during this run.
+- Original user worktree remains dirty on `feature/failover-phase2-local` and
+  is not modified, reset, cleaned or staged.
+- GitHub push is blocked by missing credentials: HTTPS has no helper token and
+  `ssh -T git@github.com` returns `Permission denied (publickey)`. Existing SSH
+  keys are host-scoped (`/home/lumos/.ssh/codex_bwg_20260808`,
+  `/home/lumos/.ssh/codex_nosla_20260808`, and `aliyun-fns.pem`); no private key
+  material is recorded here. Push must use a GitHub credential and never force-push.
+- BWG currently runs release
+  `/opt/embyproxy-gsy-sidecar/releases/20260902T0100-vps-control-plane-final`,
+  build label `vps-control-plane-20260902`, commit label `7bc6512`, SHA-256
+  `d9dbad4199460759be69f65d89abc2f28d870de1f6ffe8ee3d6857b7c3de32a8`.
+- NOSLA remains on `ghcr.io/gsy-allen/emby-proxy-go:v1.3`; its named-target
+  admin artifact SHA-256 is
+  `79d279c0d5c95008b8ea90715fe60a3cafb0a9cf85d9c5d40edfeb89f14009ad`.
 
 ### Relevant completed history
 

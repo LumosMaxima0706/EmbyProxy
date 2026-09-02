@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -51,4 +52,35 @@ func TestProxyNodeAPICreatesOneTimeEnrollmentAndHeartbeat(t *testing.T) {
 	if err != nil || len(list) != 1 || !list[0].PlaybackHealthy {
 		t.Fatalf("list=%+v err=%v", list, err)
 	}
+}
+
+func TestProxyNodeBootstrapIsNoStoreAndDoesNotExposeAdminSecret(t *testing.T) {
+	h := newAuthTestHandler(t, config.Config{AdminToken: "strong-admin-token", EnrollmentControllerURL: "https://admin.example"})
+	login := serveAdminJSON(t, h, http.MethodPost, "/admin/auth/login", map[string]any{"token": "strong-admin-token"}, nil)
+	cookie := login.Result().Cookies()[0]
+	created := serveAdminJSON(t, h, http.MethodPost, "/api/admin/proxy-nodes", map[string]any{"name": "edge-bootstrap", "public_address": "edge.example", "reset_day": 1}, cookie)
+	var body map[string]any
+	if err := json.Unmarshal(created.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	enrollment := body["enrollment"].(map[string]any)
+	command := body["install_command"].(string)
+	if !strings.Contains(command, "https://admin.example/api/edge/bootstrap/") || strings.Contains(command, "strong-admin-token") {
+		t.Fatalf("unsafe command: %s", command)
+	}
+	parts := strings.Split(strings.TrimPrefix(command, "curl --fail --silent --show-error --proto '=https' --tlsv1.2 https://admin.example/api/edge/bootstrap/"), " | sudo sh")
+	if len(parts) != 2 {
+		t.Fatalf("unexpected command format: %s", command)
+	}
+	path := "/api/edge/bootstrap/" + strings.TrimSpace(parts[0])
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || rec.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("bootstrap=%d headers=%v", rec.Code, rec.Header())
+	}
+	if strings.Contains(rec.Body.String(), "strong-admin-token") || !strings.Contains(rec.Body.String(), "api/edge/enroll/") {
+		t.Fatal("bootstrap leaked secret or omitted enrollment endpoint")
+	}
+	_ = enrollment
 }

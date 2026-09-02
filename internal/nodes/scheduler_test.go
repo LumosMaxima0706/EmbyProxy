@@ -32,3 +32,21 @@ func TestSelectSmartExcludesExhaustedAndStale(t *testing.T) {
 		t.Fatalf("got=%+v ok=%v", got, ok)
 	}
 }
+
+func TestSelectWithPolicyHysteresisAndImmediateFailover(t *testing.T) {
+	now := time.Unix(1700000000, 0)
+	base := func(id string) storage.ProxyNode {
+		return storage.ProxyNode{ID: id, Name: id, Enabled: true, State: "healthy", LastHeartbeatAt: now.Unix(), PlaybackHealthy: true, ConfigSynced: true, QuotaBytes: 100, UsedBytes: 10}
+	}
+	a, b := base("a"), base("b")
+	a.UsedBytes = 90
+	decision, ok := SelectWithPolicy([]storage.ProxyNode{a, b}, Policy{Mode: "smart", CurrentID: "a", CurrentSince: now, MinimumDwell: time.Hour, HysteresisScore: 0.1}, now.Add(time.Minute))
+	if !ok || decision.NodeID != "a" || decision.Reason != "minimum_dwell" {
+		t.Fatalf("decision=%+v ok=%v", decision, ok)
+	}
+	a.PlaybackHealthy = false
+	decision, ok = SelectWithPolicy([]storage.ProxyNode{a, b}, Policy{Mode: "smart", CurrentID: "a", CurrentSince: now, MinimumDwell: time.Hour}, now.Add(time.Minute))
+	if !ok || decision.NodeID != "b" {
+		t.Fatalf("failover decision=%+v ok=%v", decision, ok)
+	}
+}
