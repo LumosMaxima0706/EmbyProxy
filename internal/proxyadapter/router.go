@@ -37,6 +37,10 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "Not Found", http.StatusNotFound)
 		return
 	}
+	if req.Header.Get(selectedNodeHeader) == "1" {
+		req = req.WithContext(MarkSelectedNodeRequest(req.Context()))
+		req.Header.Set(selectedNodeHeader, "2")
+	}
 	rawPath, err := requestPath(req)
 	if err != nil {
 		http.Error(w, "Not Found", http.StatusNotFound)

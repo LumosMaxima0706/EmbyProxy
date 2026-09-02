@@ -474,6 +474,36 @@ media container, publication fragment, rathole or unrelated service.
 
 ## Continuous-session addendum (2026-09-02)
 
+### Data-plane control-plane wiring (2026-09-02)
+
+The managed-route runtime now consults the persisted `proxy_nodes` table before
+forwarding `/s/<slug>/...` requests. `StorageResolver` applies the configured
+`PROXY_NODE_SCHEDULER_MODE` (`manual` by default, `smart` when explicitly set)
+and the shared eligibility gates (enabled, fresh heartbeat, healthy playback,
+synced config, available quota). Assignments are retained per admin/slug with
+two-minute minimum dwell and smart hysteresis. A node's `public_address` is
+parsed as a strict HTTP(S) origin plus optional safe base path; credentials,
+query strings, fragments and invalid targets are rejected. The selected edge
+marker is consumed by the router and stripped before an Emby upstream request,
+preventing routing loops and credential/header leakage. When no eligible node
+has a usable address, the original managed-route target remains the compatibility
+fallback, preserving legacy `/https/...`, 1111 and younoyes behavior.
+
+Each selected request increments a persistent `proxy_node_connections` counter
+and decrements it when the response completes. Draining nodes reject new
+connections; the final connection completion transitions the node to `revoked`
+and revokes its enrollment/credential. Response bytes are added through the
+atomic `AddProxyNodeUsage` store method, so concurrent streams cannot lose
+traffic increments and restarts do not reset usage. Migration markers are
+`proxy_nodes_v1` and `proxy_nodes_v2_connections`.
+
+Local verification added a two-edge HTTP integration: manual priority selected
+edge A, then playback-health failure immediately selected edge B, with no hit
+to the origin. Storage tests cover drain waiting for an active connection and
+automatic final revoke. Full `go test ./...`, `go vet ./...`, and `git diff
+--check` pass after this wiring. Production deployment is intentionally pending
+the normal backup/release switch and will retain the existing route fallback.
+
 Phases are internal work units in this session, not approval gates. The
 development worktree is clean at `f958ebc`; it is nine commits ahead of
 `origin/main` `5e49a3f` and can be merged normally once remote authentication is

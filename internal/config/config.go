@@ -33,6 +33,7 @@ type Config struct {
 	AdminUsername           string
 	AdminPasswordHash       string
 	EnrollmentControllerURL string
+	ProxyNodeSchedulerMode  string
 	Admin2FADisabled        bool
 	OwnerAdminAuthMode      string
 	OwnerAdminHost          string
@@ -106,6 +107,7 @@ func Load() (Config, error) {
 		AdminUsername:             strings.TrimSpace(os.Getenv("ADMIN_USERNAME")),
 		AdminPasswordHash:         strings.TrimSpace(os.Getenv("ADMIN_PASSWORD_HASH")),
 		EnrollmentControllerURL:   strings.TrimRight(strings.TrimSpace(os.Getenv("ENROLLMENT_CONTROLLER_URL")), "/"),
+		ProxyNodeSchedulerMode:    strings.ToLower(strings.TrimSpace(envString("PROXY_NODE_SCHEDULER_MODE", "manual"))),
 		Admin2FADisabled:          envBool("ADMIN_2FA_DISABLED", false),
 		OwnerAdminAuthMode:        strings.ToLower(strings.TrimSpace(os.Getenv("OWNER_ADMIN_AUTH_MODE"))),
 		OwnerAdminHost:            strings.ToLower(strings.TrimSpace(os.Getenv("OWNER_ADMIN_HOST"))),
@@ -131,6 +133,9 @@ func Load() (Config, error) {
 	}
 	if cfg.OwnerAdminAuthMode != "" && cfg.OwnerAdminAuthMode != "basic_only" {
 		return Config{}, fmt.Errorf("OWNER_ADMIN_AUTH_MODE must be empty or basic_only")
+	}
+	if cfg.ProxyNodeSchedulerMode != "manual" && cfg.ProxyNodeSchedulerMode != "smart" {
+		return Config{}, fmt.Errorf("PROXY_NODE_SCHEDULER_MODE must be manual or smart")
 	}
 	if cfg.OwnerAdminAuthMode == "basic_only" &&
 		(cfg.OwnerAdminHost == "" || strings.ContainsAny(cfg.OwnerAdminHost, " /\\:\t\r\n")) {

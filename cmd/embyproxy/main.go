@@ -390,7 +390,7 @@ func proxyRouteHandler(cfg config.Config, store *storage.Store, fallback http.Ha
 	}
 	mediaConfig := mediaproxy.Config{TrustProxyEnv: true}
 	return proxyadapter.NewProductionRouter(
-		proxyadapter.NewStorageResolver(store, "admin"),
+		proxyadapter.NewStorageResolver(store, "admin", cfg.ProxyNodeSchedulerMode),
 		mediaproxy.NewExecutor(mediaConfig),
 		mediaConfig,
 		fallback,
