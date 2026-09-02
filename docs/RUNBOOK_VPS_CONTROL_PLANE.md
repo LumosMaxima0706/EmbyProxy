@@ -851,3 +851,50 @@ This addendum supersedes older provisional statements above where they differ.
   before any test-include reload, and retaining the approved test roots for
   evidence. Production release, DNS, firewall and public route rollback are
   not part of this phase.
+
+### Real two-host acceptance after recovery (2026-09-03)
+
+- NOSLA's existing isolated edge unit was inspected before recovery. Its
+  journal contained only a normal `systemd stop` at 21:39:40; there was no
+  crash, non-zero exit, or reboot correlation. The existing binary, config,
+  credential path and edge database were intact. The named test unit was
+  started without re-enrollment or key generation and is active with zero
+  restarts.
+- The persisted BWG-to-NOSLA tunnel and NOSLA test Nginx were unchanged. After
+  recovery, direct NOSLA edge and BWG `18180 -> tunnel -> NOSLA Nginx` probes
+  both returned HTTP 206 with `Accept-Ranges`,
+  `Content-Range: bytes 0-1023/102400`, and 1024 response bytes.
+- The controller database simultaneously reported the enabled BWG bootstrap
+  test node and the enabled NOSLA `edge-nosla-isolated-e2e2` node as
+  `healthy`, with fresh heartbeats, `playback_healthy=true`, and
+  `config_synced=true`; both had distinct persisted public addresses in the
+  same isolated node pool.
+- Real manual routing evidence used the existing isolated managed route: with
+  BWG priority first, a Range request increased BWG usage by 1024 bytes; with
+  NOSLA priority first, the next request increased NOSLA usage by 1024 bytes.
+  Real smart routing first selected BWG and increased its usage by 4096 bytes;
+  after the configured two-minute dwell, setting BWG to 99% quota selected
+  NOSLA and increased NOSLA usage by 4096 bytes.
+- Real cross-host failover disabled only the isolated NOSLA node through the
+  controller API. The next request returned 206 through BWG and increased BWG
+  usage by 1024 bytes. Re-enabling the existing NOSLA node and restoring its
+  test quota/priority returned the next request to NOSLA; no enrollment or
+  credential operation was repeated.
+- The real NOSLA path therefore passed 206, `Content-Range`,
+  `Accept-Ranges`, and byte-growth checks. Persistent per-node usage updates
+  were observed for both hosts. Drain/revoke was not run against either live
+  enrolled node: idle revoke would destroy an existing credential and require
+  a prohibited re-enrollment to restore the pool. Unit/storage drain and final
+  revoke tests remain the non-destructive evidence for that boundary.
+- The protected BWG Admin canary was re-run with stored runtime credentials
+  only. `1111` passed 2/2 samples (`PlaybackInfo=200`, `VideoStream=302`,
+  final 206, `Content-Range=true`, byte growth); `younoyes` passed 3/3
+  samples (`PlaybackInfo=200`, `VideoStream=206`, final 206,
+  `Content-Range=true`, byte growth). No credential was exported or changed;
+  the earlier 403/500 result was not reproduced and is not a current code
+  regression.
+- Recovery source validation passed `gofmt`, `go test ./...`, `go vet ./...`,
+  and `git diff --check`. This section intentionally distinguishes these
+  real two-host results from earlier local, unit, fixture, and synthetic-node
+  checks. Production Nginx, routes, DNS, firewall, 80/443, publication-agent
+  keys, 3x-ui/xray and protected media services were not changed.

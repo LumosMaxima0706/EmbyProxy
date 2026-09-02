@@ -374,12 +374,19 @@ func (h *Handler) handleEdgeEnrollment(w http.ResponseWriter, r *http.Request, p
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false})
 			return
 		}
+		nodes, err := h.store.ListProxyNodes(r.Context())
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false})
+			return
+		}
 		response := struct {
+			NodeID string              `json:"node_id"`
+			Nodes  []storage.ProxyNode `json:"nodes"`
 			Routes []struct {
 				Route storage.ManagedRoute       `json:"route"`
 				Lines []storage.ManagedRouteLine `json:"lines"`
 			} `json:"routes"`
-		}{Routes: make([]struct {
+		}{NodeID: id, Nodes: nodes, Routes: make([]struct {
 			Route storage.ManagedRoute       `json:"route"`
 			Lines []storage.ManagedRouteLine `json:"lines"`
 		}, 0, len(routes))}

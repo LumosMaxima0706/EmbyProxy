@@ -313,6 +313,50 @@ func (s *Store) ListProxyNodes(ctx context.Context) ([]ProxyNode, error) {
 	}
 	return out, nil
 }
+
+// ReplaceProxyNodeSnapshot stores the controller's redacted scheduling view on
+// an edge. Node credentials are intentionally not part of ProxyNode and never
+// cross this boundary.
+func (s *Store) ReplaceProxyNodeSnapshot(ctx context.Context, nodes []ProxyNode) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	seen := make(map[string]struct{}, len(nodes))
+	for _, n := range nodes {
+		if n.ID == "" || !validNodeName(n.Name) || n.ResetDay < 1 || n.ResetDay > 31 {
+			return errors.New("invalid_proxy_node_snapshot")
+		}
+		seen[n.ID] = struct{}{}
+		_, err = tx.ExecContext(ctx, `INSERT INTO proxy_nodes (id,name,public_address,enabled,state,priority,quota_bytes,used_bytes,reset_day,reset_timezone,next_reset_at,last_heartbeat_at,playback_healthy,config_synced,agent_version,agent_commit,credential_hash,last_error,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,public_address=excluded.public_address,enabled=excluded.enabled,state=excluded.state,priority=excluded.priority,quota_bytes=excluded.quota_bytes,used_bytes=excluded.used_bytes,reset_day=excluded.reset_day,reset_timezone=excluded.reset_timezone,next_reset_at=excluded.next_reset_at,last_heartbeat_at=excluded.last_heartbeat_at,playback_healthy=excluded.playback_healthy,config_synced=excluded.config_synced,agent_version=excluded.agent_version,agent_commit=excluded.agent_commit,last_error=excluded.last_error,updated_at=excluded.updated_at`, n.ID, n.Name, n.PublicAddress, boolInt(n.Enabled), n.State, n.Priority, n.QuotaBytes, n.UsedBytes, n.ResetDay, n.ResetTimezone, n.NextResetAt, n.LastHeartbeatAt, boolInt(n.PlaybackHealthy), boolInt(n.ConfigSynced), n.AgentVersion, n.AgentCommit, "", redactFailoverStorageText(n.LastError), n.CreatedAt, n.UpdatedAt)
+		if err != nil {
+			return err
+		}
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT id FROM proxy_nodes`)
+	if err != nil {
+		return err
+	}
+	var stale []string
+	for rows.Next() {
+		var id string
+		if err = rows.Scan(&id); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		if _, ok := seen[id]; !ok {
+			stale = append(stale, id)
+		}
+	}
+	_ = rows.Close()
+	for _, id := range stale {
+		if _, err = tx.ExecContext(ctx, `DELETE FROM proxy_nodes WHERE id=?`, id); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
 func (s *Store) GetProxyNode(ctx context.Context, id string) (*ProxyNode, error) {
 	n, err := scanProxyNode(s.db.QueryRowContext(ctx, `SELECT `+proxyNodeFields+` FROM proxy_nodes WHERE id=?`, id))
 	if errors.Is(err, sql.ErrNoRows) {

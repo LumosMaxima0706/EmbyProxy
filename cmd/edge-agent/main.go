@@ -31,6 +31,8 @@ type config struct {
 }
 
 type snapshot struct {
+	NodeID string              `json:"node_id"`
+	Nodes  []storage.ProxyNode `json:"nodes"`
 	Routes []struct {
 		Route storage.ManagedRoute       `json:"route"`
 		Lines []storage.ManagedRouteLine `json:"lines"`
@@ -73,6 +75,12 @@ func main() {
 		}
 		var body snapshot
 		if err = json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(&body); err != nil {
+			return err
+		}
+		if body.NodeID != cfg.NodeID {
+			return fmt.Errorf("snapshot node mismatch")
+		}
+		if err = store.ReplaceProxyNodeSnapshot(ctx, body.Nodes); err != nil {
 			return err
 		}
 		seen := make(map[string]struct{}, len(body.Routes))
