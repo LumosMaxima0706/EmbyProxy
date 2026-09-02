@@ -536,3 +536,11 @@ invalidates node credentials.
   positive growth. Younoyes was attempted with its existing credential; the
   upstream returned `403` and canary `PlaybackInfo=500` (`timeout_or_upstream_5xx`).
   No credential was changed or exposed, so younoyes is not claimed as passed.
+
+- Final production provenance check: `origin/main`, local feature and BWG
+  integration `main` are all `4dc0dd812633c5d3e83a78cb34f21fa01fd94046`.
+  BWG current points to `/opt/embyproxy-gsy-sidecar/releases/20260902T0315-main-4dc0dd8`
+  with binary SHA-256
+  `0803d151c53ba0dd5ee559bae5dfbde9c2b324e42528911fa44e93f8f8617921`.
+  The binary bytes match the tested `ec5d121` source build because the final
+  commit only changes this Runbook.
