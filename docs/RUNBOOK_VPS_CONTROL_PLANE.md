@@ -512,3 +512,27 @@ nodes remain out of the proxy pool until the existing authenticated playback
 canary and publication sync pass. Publication-agent route selection and active
 connection drain accounting are also follow-up work, while force revoke already
 invalidates node credentials.
+
+### Main consolidation and final production release (2026-09-02)
+
+- BWG's existing GitHub deploy key authenticated through the
+  `github.com-embyproxy-fusion` SSH alias. Its public fingerprint is recorded
+  only as `SHA256:4yHJaOzwdnYGQdGZ/B7E6JZKt85j0JS88/kvJdpqkXk`.
+- The complete feature history was imported into the independent BWG clone
+  `/root/embyproxy-control-plane-integration`, fast-forwarded onto the latest
+  `origin/main`, and pushed without force. `origin/main` is now
+  `670d0b47196562c127fd43676d9ac9410f9889f5`.
+- Final main release:
+  `/opt/embyproxy-gsy-sidecar/releases/20260902T0245-main-670d0b4`, SHA-256
+  `12988b9c850d3f9fecb5efa3f5c6492a419875221466517cdf5d9514615022af`.
+  Backup: `/var/backups/embyproxy-vps-control-plane/20260902T023111Z`.
+  Nginx test passed; service active with zero restarts; current points to this
+  release.
+- Final smoke checks: owner Admin is HTML 200 without `WWW-Authenticate`,
+  password-manager autocomplete fields are present, stream health is `ok`, BWG
+  publication-agent is active, and NOSLA Nginx/edge health are active.
+- Final 1111 canary passed authenticated `PlaybackInfo=200`, `VideoStream=302`,
+  media `206`, `Content-Range=true`, `Accept-Ranges=true`, 65,536 bytes and
+  positive growth. Younoyes was attempted with its existing credential; the
+  upstream returned `403` and canary `PlaybackInfo=500` (`timeout_or_upstream_5xx`).
+  No credential was changed or exposed, so younoyes is not claimed as passed.
