@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"embyproxy/internal/buildinfo"
+	"embyproxy/internal/capture"
+	"embyproxy/internal/requestlog"
 	"embyproxy/internal/storage"
 )
 
@@ -220,6 +222,10 @@ echo 'Edge identity enrolled. This host remains unadmitted until its separately 
 }
 
 func (h *Handler) handleEdgeEnrollment(w http.ResponseWriter, r *http.Request, path string) {
+	// Enrollment and heartbeat payloads contain short-lived or long-lived node
+	// credentials; keep them out of traffic capture and access logs.
+	capture.Suppress(r)
+	requestlog.SuppressAccessLog(r.Context())
 	if r.Method == http.MethodGet && strings.HasPrefix(path, "/api/edge/bootstrap/") {
 		parts := strings.Split(strings.TrimPrefix(path, "/api/edge/bootstrap/"), "/")
 		if len(parts) != 2 {
