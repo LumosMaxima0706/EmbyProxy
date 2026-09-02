@@ -351,7 +351,8 @@ database until the next phase is separately approved.
 - New release:
   `/opt/embyproxy-gsy-sidecar/releases/20260902T0045-vps-control-plane`.
 - Deployed binary SHA-256:
-  `a95f4fd8be3d42c08b651723c8a2a445d4bdc246da621e106772a96c3a1f6ba3`.
+  final release `d9dbad4199460759be69f65d89abc2f28d870de1f6ffe8ee3d6857b7c3de32a8`;
+  build commit `7bc6512`.
 - The temporary root-only helper converted the existing root-only recovery
   password into `ADMIN_PASSWORD_HASH` directly on BWG. It printed neither the
   password nor the hash and was removed after use.
