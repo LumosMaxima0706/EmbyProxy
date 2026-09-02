@@ -461,3 +461,44 @@ and `proxy.db`; run `nginx -t`, restart only `embyproxy-gsy-sidecar.service`,
 then reload Nginx. The snapshot's stored unit and state evidence identify the
 exact pre-change version. Do not delete the new release, any certificate,
 media container, publication fragment, rathole or unrelated service.
+
+## Continuous-session addendum (2026-09-02)
+
+Phases are internal work units in this session, not approval gates. The
+development worktree is clean at `f958ebc`; it is nine commits ahead of
+`origin/main` `5e49a3f` and can be merged normally once remote authentication is
+available. Local `main` remains `0629ca3` and was not moved. The original dirty
+user worktree is untouched.
+
+Commits `0b06d55`, `695a266`, and `3a469fa` add guarded bootstrap, persistent
+usage/reset helpers, scheduler dwell/hysteresis, migration marker
+`proxy_nodes_v1`, auth audit events, and suppression of credential-bearing edge
+requests from logs. Local `go test ./...`, `go vet ./...`, and `git diff --check`
+pass.
+
+Final BWG release is
+`/opt/embyproxy-gsy-sidecar/releases/20260902T0215-vps-control-plane-3a469fa`
+with SHA-256
+`8e6b79822ab8903769e600a570f7310544e67254c977fc7f653700b7d591952e`.
+`nginx -t` passed; service is active with zero restarts; `/admin` returns HTML
+200 without `WWW-Authenticate`; stream health is `ok`. NOSLA's existing media
+service and Nginx configuration remain active and unchanged.
+
+Two SSH publish sessions closed before output; read-only checks showed the old
+release remained active, then the final release was switched and verified. This
+was an SSH transport issue, not a production outage.
+
+GitHub push is the remaining external blocker. HTTPS has no credential helper or
+token; all available local keys are host-scoped BWG/NOSLA/aliyun keys and fail
+GitHub public-key authentication. Do not print or invent credentials. After a
+credential becomes available: `git fetch origin`, verify no new main commit,
+merge/fast-forward without force, push `main`, and redeploy that exact commit.
+
+Fresh third-VPS enrollment and authenticated VideoStream/206/byte-growth
+acceptance remain unclaimed because no authorized third VPS/publication route is
+available. The generated bootstrap intentionally installs only an isolated
+heartbeat identity/timer and never overwrites unknown Nginx or media services;
+nodes remain out of the proxy pool until the existing authenticated playback
+canary and publication sync pass. Publication-agent route selection and active
+connection drain accounting are also follow-up work, while force revoke already
+invalidates node credentials.
