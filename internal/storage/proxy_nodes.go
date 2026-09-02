@@ -96,12 +96,81 @@ CREATE TABLE IF NOT EXISTS proxy_node_enrollments (
 );
 CREATE INDEX IF NOT EXISTS idx_proxy_nodes_priority ON proxy_nodes(enabled, state, priority);
 CREATE INDEX IF NOT EXISTS idx_proxy_node_enrollments_node ON proxy_node_enrollments(node_id);
+CREATE TABLE IF NOT EXISTS proxy_node_connections (
+ node_id TEXT PRIMARY KEY, active INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL,
+ FOREIGN KEY(node_id) REFERENCES proxy_nodes(id) ON DELETE CASCADE
+);
 `)
 	if err != nil {
 		return err
 	}
 	_, err = s.db.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES ('proxy_nodes_v1', ?)`, time.Now().Unix())
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES ('proxy_nodes_v2_connections', ?)`, time.Now().Unix())
 	return err
+}
+
+// BeginProxyNodeConnection reserves one active request for drain accounting.
+// Draining/revoked nodes are rejected so no new stream can race a removal.
+func (s *Store) BeginProxyNodeConnection(ctx context.Context, id string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var state string
+	if err = tx.QueryRowContext(ctx, `SELECT state FROM proxy_nodes WHERE id=?`, id).Scan(&state); err != nil {
+		return err
+	}
+	if state == "draining" || state == "revoked" {
+		return errors.New("node_draining")
+	}
+	now := time.Now().Unix()
+	if _, err = tx.ExecContext(ctx, `INSERT INTO proxy_node_connections(node_id,active,updated_at) VALUES(?,?,?) ON CONFLICT(node_id) DO UPDATE SET active=active+1,updated_at=excluded.updated_at`, id, 1, now); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// EndProxyNodeConnection decrements the active count. A drained node is
+// revoked automatically once its final response has completed.
+func (s *Store) EndProxyNodeConnection(ctx context.Context, id string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := time.Now().Unix()
+	if _, err = tx.ExecContext(ctx, `UPDATE proxy_node_connections SET active=CASE WHEN active>0 THEN active-1 ELSE 0 END,updated_at=? WHERE node_id=?`, now, id); err != nil {
+		return err
+	}
+	var active int
+	if err = tx.QueryRowContext(ctx, `SELECT active FROM proxy_node_connections WHERE node_id=?`, id).Scan(&active); err != nil {
+		return err
+	}
+	if active == 0 {
+		var state string
+		if err = tx.QueryRowContext(ctx, `SELECT state FROM proxy_nodes WHERE id=?`, id).Scan(&state); err == nil && state == "draining" {
+			if _, err = tx.ExecContext(ctx, `UPDATE proxy_nodes SET enabled=0,state='revoked',credential_hash='',updated_at=? WHERE id=?`, now, id); err != nil {
+				return err
+			}
+			if _, err = tx.ExecContext(ctx, `UPDATE proxy_node_enrollments SET revoked=1 WHERE node_id=?`, id); err != nil {
+				return err
+			}
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *Store) ProxyNodeActiveConnections(ctx context.Context, id string) (int, error) {
+	var active int
+	err := s.db.QueryRowContext(ctx, `SELECT active FROM proxy_node_connections WHERE node_id=?`, id).Scan(&active)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	return active, err
 }
 
 func randomNodeToken() (string, error) {
@@ -215,6 +284,23 @@ func (s *Store) RecordProxyNodeUsage(ctx context.Context, id string, usedBytes i
 		return errors.New("invalid_usage")
 	}
 	result, err := s.db.ExecContext(ctx, `UPDATE proxy_nodes SET used_bytes=CASE WHEN used_bytes>? THEN used_bytes ELSE ? END,updated_at=? WHERE id=? AND state!='revoked'`, usedBytes, usedBytes, sampledAt.Unix(), id)
+	if err != nil {
+		return err
+	}
+	changed, _ := result.RowsAffected()
+	if changed != 1 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+// AddProxyNodeUsage atomically adds bytes observed by the local proxy. This
+// avoids lost updates when concurrent streams finish at the same time.
+func (s *Store) AddProxyNodeUsage(ctx context.Context, id string, bytes int64, sampledAt time.Time) error {
+	if bytes < 0 {
+		return errors.New("invalid_usage")
+	}
+	result, err := s.db.ExecContext(ctx, `UPDATE proxy_nodes SET used_bytes=used_bytes+?,updated_at=? WHERE id=? AND state!='revoked'`, bytes, sampledAt.Unix(), id)
 	if err != nil {
 		return err
 	}

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"embyproxy/internal/mediaproxy"
 	"embyproxy/internal/requestlog"
@@ -165,6 +166,62 @@ func TestProductionSlugRequiresEnabledPublicRoute(t *testing.T) {
 	router.ServeHTTP(unknown, httptest.NewRequest(http.MethodGet, "/s/missing/item", nil))
 	if unknown.Code != http.StatusTeapot || fallbackHits.Load() != 1 {
 		t.Fatalf("unknown slug status=%d fallbackHits=%d", unknown.Code, fallbackHits.Load())
+	}
+}
+
+func TestProductionSlugSelectsEligibleProxyNodeAndFailsOver(t *testing.T) {
+	var edgeAHits, edgeBHits, originHits atomic.Int32
+	newEdge := func(counter *atomic.Int32, marker string) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			counter.Add(1)
+			if r.URL.Path != "/edge/demo/video" {
+				t.Errorf("%s path=%q", marker, r.URL.Path)
+			}
+			w.Header().Set("Content-Range", "bytes 0-2/3")
+			w.WriteHeader(http.StatusPartialContent)
+			_, _ = w.Write([]byte(marker))
+		}))
+	}
+	edgeA := newEdge(&edgeAHits, "a")
+	defer edgeA.Close()
+	edgeB := newEdge(&edgeBHits, "b")
+	defer edgeB.Close()
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		originHits.Add(1)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("origin"))
+	}))
+	defer origin.Close()
+	store := newRouteStore(t)
+	seedManagedRoute(t, store, "demo", origin.URL, true, true)
+	now := time.Now().Unix()
+	for _, node := range []struct {
+		id, name, address string
+		priority          int
+	}{
+		{"node-a", "edge-a", edgeA.URL + "/edge/demo", 1},
+		{"node-b", "edge-b", edgeB.URL + "/edge/demo", 2},
+	} {
+		if _, err := store.DB().Exec(`INSERT INTO proxy_nodes
+			(id,name,public_address,enabled,state,priority,quota_bytes,used_bytes,reset_day,reset_timezone,next_reset_at,last_heartbeat_at,playback_healthy,config_synced,agent_version,agent_commit,credential_hash,last_error,created_at,updated_at)
+			VALUES (?,?,?,1,'healthy',?,?,0,1,'UTC',0,?,1,1,'v1','test','hash','',?,?)`,
+			node.id, node.name, node.address, node.priority, 0, now, now, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	router := NewProductionRouter(NewStorageResolver(store, "admin"), mediaproxy.NewExecutor(mediaproxy.Config{AllowPrivateTargets: true}), mediaproxy.Config{}, http.NotFoundHandler())
+	first := httptest.NewRecorder()
+	router.ServeHTTP(first, httptest.NewRequest(http.MethodGet, "/s/demo/video", nil))
+	if first.Code != http.StatusPartialContent || first.Body.String() != "a" || edgeAHits.Load() != 1 || edgeBHits.Load() != 0 || originHits.Load() != 0 {
+		t.Fatalf("first status=%d body=%q edgeA=%d edgeB=%d origin=%d", first.Code, first.Body.String(), edgeAHits.Load(), edgeBHits.Load(), originHits.Load())
+	}
+	if _, err := store.DB().Exec(`UPDATE proxy_nodes SET playback_healthy=0 WHERE id='node-a'`); err != nil {
+		t.Fatal(err)
+	}
+	second := httptest.NewRecorder()
+	router.ServeHTTP(second, httptest.NewRequest(http.MethodGet, "/s/demo/video", nil))
+	if second.Code != http.StatusPartialContent || second.Body.String() != "b" || edgeBHits.Load() != 1 || originHits.Load() != 0 {
+		t.Fatalf("second status=%d body=%q edgeA=%d edgeB=%d origin=%d", second.Code, second.Body.String(), edgeAHits.Load(), edgeBHits.Load(), originHits.Load())
 	}
 }
 

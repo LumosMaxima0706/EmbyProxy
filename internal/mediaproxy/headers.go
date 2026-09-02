@@ -22,6 +22,11 @@ func cloneHeaders(in http.Header) http.Header {
 
 func outboundHeaders(in http.Header, target Target, preserveHost bool) http.Header {
 	out := cloneHeaders(in)
+	// Internal routing markers are consumed by the edge router and must never
+	// be forwarded to an upstream Emby server.
+	if out.Get("X-EmbyProxy-Selected-Node") == "2" {
+		out.Del("X-EmbyProxy-Selected-Node")
+	}
 	removeHopByHopHeaders(out, false)
 	if !preserveHost {
 		out.Set("Host", netHost(target))
