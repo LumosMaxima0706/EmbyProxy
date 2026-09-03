@@ -898,3 +898,24 @@ This addendum supersedes older provisional statements above where they differ.
   real two-host results from earlier local, unit, fixture, and synthetic-node
   checks. Production Nginx, routes, DNS, firewall, 80/443, publication-agent
   keys, 3x-ui/xray and protected media services were not changed.
+
+### Reversible real drain and rejoin (2026-09-03)
+
+- A long-lived request was opened through the isolated managed route so the
+  NOSLA test node had one active connection. The existing non-force drain API
+  was then used; the node entered `draining` with its credential preserved and
+  `enabled=false`.
+- A new real Range request during drain was served by BWG, returned HTTP 206
+  with `Accept-Ranges` and `Content-Range`, and increased BWG's persistent test
+  usage. No new traffic was sent to the drained NOSLA node.
+- The same existing NOSLA enrollment was undrained by setting `enabled=true`;
+  the already-running edge heartbeat reported fresh `healthy`,
+  `playback_healthy=true`, and `config_synced=true` state. A subsequent real
+  Range request returned to NOSLA with HTTP 206 and the expected range headers.
+- No revoke, enrollment deletion, credential rotation, tunnel/key cleanup, or
+  isolated service cleanup was performed. This is the accepted reversible
+  drain/rejoin baseline; destructive revoke remains intentionally untested.
+- A clean disposable third VPS is not available in this session. No current
+  NOSLA/BWG node was repurposed or cleared to simulate one. The clean-VPS
+  one-command install, reboot recovery, and repeated-command idempotency gate
+  remains pending a genuinely fresh authorized disposable host.
