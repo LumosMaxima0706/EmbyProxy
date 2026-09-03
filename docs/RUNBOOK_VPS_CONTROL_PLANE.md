@@ -919,3 +919,18 @@ This addendum supersedes older provisional statements above where they differ.
   NOSLA/BWG node was repurposed or cleared to simulate one. The clean-VPS
   one-command install, reboot recovery, and repeated-command idempotency gate
   remains pending a genuinely fresh authorized disposable host.
+
+### Clean-VPS bootstrap command recovery (2026-09-03)
+
+- The Admin VPS-node list now exposes `重新生成安装命令` for any node that is
+  not admitted (`playback_healthy=false` or `config_synced=false`) while in
+  `registered` or `revoked` state. This keeps `enabled` (scheduler eligibility)
+  separate from enrollment and health admission.
+- `POST /api/admin/proxy-nodes/<id>/bootstrap` revokes older unconsumed
+  enrollments and issues a new 15-minute token. A revoked, not-yet-admitted
+  node is returned to `registered` with its old credential and health fields
+  cleared; no agent bootstrap or enrollment is performed by the controller.
+- The response contains one complete shell-quoted command. Its controller
+  origin is the validated canonical public HTTPS URL, and no token is written
+  to request logs. The command must be copied and executed by the operator on
+  the disposable VPS; this phase does not execute it.

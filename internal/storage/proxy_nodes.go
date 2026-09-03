@@ -302,8 +302,13 @@ func (s *Store) RegenerateProxyNodeEnrollment(ctx context.Context, nodeID string
 	if err := tx.QueryRowContext(ctx, `SELECT state FROM proxy_nodes WHERE id=?`, nodeID).Scan(&state); err != nil {
 		return Enrollment{}, "", err
 	}
-	if state != "registered" {
+	if state != "registered" && state != "revoked" {
 		return Enrollment{}, "", errors.New("node_not_registered")
+	}
+	if state == "revoked" {
+		if _, err := tx.ExecContext(ctx, `UPDATE proxy_nodes SET state='registered',credential_hash='',last_heartbeat_at=0,playback_healthy=0,config_synced=0,last_error='',updated_at=? WHERE id=?`, now, nodeID); err != nil {
+			return Enrollment{}, "", err
+		}
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE proxy_node_enrollments SET revoked=1 WHERE node_id=? AND consumed_at=0 AND revoked=0`, nodeID); err != nil {
 		return Enrollment{}, "", err

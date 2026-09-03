@@ -69,6 +69,33 @@ func TestRegenerateProxyNodeEnrollmentRevokesPreviousUnconsumedToken(t *testing.
 	}
 }
 
+func TestRegenerateProxyNodeEnrollmentReopensRevokedUnadmittedNode(t *testing.T) {
+	ctx := context.Background()
+	store, err := New(filepath.Join(t.TempDir(), "proxy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	enrollment, _, err := store.CreateProxyNode(ctx, ProxyNode{Name: "edge-revoked-regen", ResetDay: 1}, 15*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RevokeProxyNode(ctx, enrollment.NodeID, true); err != nil {
+		t.Fatal(err)
+	}
+	fresh, token, err := store.RegenerateProxyNodeEnrollment(ctx, enrollment.NodeID, 15*time.Minute)
+	if err != nil || token == "" {
+		t.Fatalf("fresh=%+v token=%q err=%v", fresh, token, err)
+	}
+	node, err := store.GetProxyNode(ctx, enrollment.NodeID)
+	if err != nil || node == nil || node.State != "registered" || node.PlaybackHealthy || node.ConfigSynced {
+		t.Fatalf("node=%+v err=%v", node, err)
+	}
+	if err := store.ValidateEnrollment(ctx, fresh.ID, token); err != nil {
+		t.Fatalf("fresh enrollment invalid: %v", err)
+	}
+}
+
 func TestProxyNodeOrderAndRevokePersist(t *testing.T) {
 	store, err := New(filepath.Join(t.TempDir(), "proxy.db"))
 	if err != nil {

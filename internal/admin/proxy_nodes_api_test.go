@@ -137,6 +137,46 @@ func TestBuildEnrollmentCommandQuotesURLAndRejectsPlaceholders(t *testing.T) {
 	}
 }
 
+func TestProxyNodeBootstrapRegenerationWorksForRevokedUnadmittedNode(t *testing.T) {
+	h := newAuthTestHandler(t, config.Config{AdminToken: "strong-admin-token", EnrollmentControllerURL: "https://owner-admin.149077530.xyz"})
+	login := serveAdminJSON(t, h, http.MethodPost, "/admin/auth/login", map[string]any{"token": "strong-admin-token"}, nil)
+	cookie := login.Result().Cookies()[0]
+	created := serveAdminJSON(t, h, http.MethodPost, "/api/admin/proxy-nodes", map[string]any{"name": "edge-revoked-bootstrap", "reset_day": 1}, cookie)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create=%d %s", created.Code, created.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(created.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	nodeID := body["enrollment"].(map[string]any)["node_id"].(string)
+	if revoked := serveAdminJSON(t, h, http.MethodPost, "/api/admin/proxy-nodes/"+nodeID+"/revoke?force=true", nil, cookie); revoked.Code != http.StatusOK {
+		t.Fatalf("revoke=%d %s", revoked.Code, revoked.Body.String())
+	}
+	first := serveAdminJSON(t, h, http.MethodPost, "/api/admin/proxy-nodes/"+nodeID+"/bootstrap", nil, cookie)
+	second := serveAdminJSON(t, h, http.MethodPost, "/api/admin/proxy-nodes/"+nodeID+"/bootstrap", nil, cookie)
+	if first.Code != http.StatusOK || second.Code != http.StatusOK {
+		t.Fatalf("first=%d second=%d", first.Code, second.Code)
+	}
+	var firstBody, secondBody map[string]any
+	_ = json.Unmarshal(first.Body.Bytes(), &firstBody)
+	_ = json.Unmarshal(second.Body.Bytes(), &secondBody)
+	firstEnrollment := firstBody["enrollment"].(map[string]any)
+	secondEnrollment := secondBody["enrollment"].(map[string]any)
+	if firstEnrollment["id"] == secondEnrollment["id"] || firstBody["install_command"] == secondBody["install_command"] {
+		t.Fatal("consecutive regeneration reused enrollment token")
+	}
+	for _, value := range []string{firstBody["install_command"].(string), secondBody["install_command"].(string)} {
+		if !strings.Contains(value, "https://owner-admin.149077530.xyz/api/edge/bootstrap/") || strings.Contains(value, "OWNER_CONTROLLER") || strings.Contains(value, "localhost") || strings.Contains(value, "127.0.0.1") || strings.Contains(value, ".example") {
+			t.Fatalf("unsafe command: %s", value)
+		}
+	}
+	node, err := h.store.GetProxyNode(context.Background(), nodeID)
+	if err != nil || node == nil || node.State != "registered" || node.Enabled || node.PlaybackHealthy || node.ConfigSynced {
+		t.Fatalf("node=%+v err=%v", node, err)
+	}
+}
+
 func TestEdgeArtifactAndSnapshotRequireNodeCredential(t *testing.T) {
 	artifact := filepath.Join(t.TempDir(), "edge-agent")
 	payload := []byte("edge-agent-test-artifact")
