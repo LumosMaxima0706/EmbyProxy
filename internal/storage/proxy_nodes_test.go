@@ -40,6 +40,35 @@ func TestProxyNodeEnrollmentIsSingleUseAndCredentialScoped(t *testing.T) {
 	}
 }
 
+func TestRegenerateProxyNodeEnrollmentRevokesPreviousUnconsumedToken(t *testing.T) {
+	ctx := context.Background()
+	store, err := New(filepath.Join(t.TempDir(), "proxy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	first, firstToken, err := store.CreateProxyNode(ctx, ProxyNode{Name: "edge-regen", ResetDay: 1}, 15*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, secondToken, err := store.RegenerateProxyNodeEnrollment(ctx, first.NodeID, 15*time.Minute)
+	if err != nil || second.ID == first.ID || firstToken == secondToken {
+		t.Fatalf("first=%+v second=%+v err=%v", first, second, err)
+	}
+	if err := store.ValidateEnrollment(ctx, first.ID, firstToken); err == nil {
+		t.Fatal("superseded enrollment remained valid")
+	}
+	if err := store.ValidateEnrollment(ctx, second.ID, secondToken); err != nil {
+		t.Fatalf("new enrollment rejected: %v", err)
+	}
+	if _, _, err := store.RegenerateProxyNodeEnrollment(ctx, first.NodeID, 15*time.Minute); err != nil {
+		t.Fatalf("second regeneration: %v", err)
+	}
+	if _, _, err := store.RegenerateProxyNodeEnrollment(ctx, first.NodeID, 15*time.Minute); err != nil {
+		t.Fatalf("third regeneration: %v", err)
+	}
+}
+
 func TestProxyNodeOrderAndRevokePersist(t *testing.T) {
 	store, err := New(filepath.Join(t.TempDir(), "proxy.db"))
 	if err != nil {

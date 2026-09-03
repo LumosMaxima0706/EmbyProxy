@@ -57,6 +57,54 @@ type Config struct {
 	Defaults                  Defaults
 }
 
+// NormalizeEnrollmentControllerURL validates the canonical controller origin
+// embedded in edge bootstrap artifacts and commands. Public enrollment must
+// use an HTTPS origin; loopback HTTP is retained only for explicitly isolated
+// controller tests.
+func NormalizeEnrollmentControllerURL(raw string, allowInsecureLoopback bool) (string, error) {
+	raw = strings.TrimRight(strings.TrimSpace(raw), "/")
+	if raw == "" || strings.ContainsAny(raw, "\x00\r\n\t <>{}") {
+		return "", fmt.Errorf("ENROLLMENT_CONTROLLER_URL must be a configured public origin")
+	}
+	upper := strings.ToUpper(raw)
+	for _, marker := range []string{"OWNER_CONTROLLER", "PLACEHOLDER", "REPLACE_ME", "REPLACE-WITH"} {
+		if strings.Contains(upper, marker) {
+			return "", fmt.Errorf("ENROLLMENT_CONTROLLER_URL contains a placeholder")
+		}
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") {
+		return "", fmt.Errorf("ENROLLMENT_CONTROLLER_URL must be an origin without credentials, path, query, or fragment")
+	}
+	host := parsed.Hostname()
+	if host == "" {
+		return "", fmt.Errorf("ENROLLMENT_CONTROLLER_URL must include a host")
+	}
+	hostLower := strings.ToLower(strings.TrimSuffix(host, "."))
+	for _, suffix := range []string{".example", ".invalid", ".test", ".localhost"} {
+		if strings.HasSuffix(hostLower, suffix) || hostLower == strings.TrimPrefix(suffix, ".") {
+			return "", fmt.Errorf("ENROLLMENT_CONTROLLER_URL must not use a placeholder host")
+		}
+	}
+	loopback := isLoopbackHost(host)
+	scheme := strings.ToLower(parsed.Scheme)
+	if scheme == "http" {
+		if !allowInsecureLoopback || !loopback {
+			return "", fmt.Errorf("ENROLLMENT_CONTROLLER_URL must use HTTPS")
+		}
+	} else if scheme != "https" {
+		return "", fmt.Errorf("ENROLLMENT_CONTROLLER_URL must use HTTPS")
+	}
+	if !loopback {
+		if ip := net.ParseIP(host); ip != nil && (ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified()) {
+			return "", fmt.Errorf("ENROLLMENT_CONTROLLER_URL must be publicly reachable")
+		}
+	} else if scheme == "https" {
+		return "", fmt.Errorf("ENROLLMENT_CONTROLLER_URL must not use a loopback host")
+	}
+	return scheme + "://" + parsed.Host, nil
+}
+
 type ProxyEnv struct {
 	CORSAllowOrigin    string
 	CapyStripEmby      string
@@ -101,6 +149,21 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	ownerAdminHost := strings.ToLower(strings.TrimSpace(os.Getenv("OWNER_ADMIN_HOST")))
+	enrollmentControllerURL := strings.TrimSpace(os.Getenv("ENROLLMENT_CONTROLLER_URL"))
+	if enrollmentControllerURL == "" && ownerAdminHost != "" {
+		// OWNER_ADMIN_HOST is the explicitly configured canonical public
+		// controller hostname for deployments that do not set the more
+		// specific enrollment URL variable.
+		enrollmentControllerURL = "https://" + ownerAdminHost
+	}
+	allowInsecureLoopbackEnrollment := envBool("ALLOW_INSECURE_LOOPBACK_ENROLLMENT", false)
+	if enrollmentControllerURL != "" {
+		enrollmentControllerURL, err = NormalizeEnrollmentControllerURL(enrollmentControllerURL, allowInsecureLoopbackEnrollment)
+		if err != nil {
+			return Config{}, err
+		}
+	}
 	cfg := Config{
 		CWD:                             cwd,
 		DBPath:                          envString("DB_PATH", filepath.Join(cwd, "data", "proxy.db")),
@@ -111,14 +174,14 @@ func Load() (Config, error) {
 		AdminToken:                      os.Getenv("ADMIN_TOKEN"),
 		AdminUsername:                   strings.TrimSpace(os.Getenv("ADMIN_USERNAME")),
 		AdminPasswordHash:               strings.TrimSpace(os.Getenv("ADMIN_PASSWORD_HASH")),
-		EnrollmentControllerURL:         strings.TrimRight(strings.TrimSpace(os.Getenv("ENROLLMENT_CONTROLLER_URL")), "/"),
+		EnrollmentControllerURL:         enrollmentControllerURL,
 		EdgeAgentBinaryPath:             strings.TrimSpace(os.Getenv("EDGE_AGENT_BINARY_PATH")),
-		AllowInsecureLoopbackEnrollment: envBool("ALLOW_INSECURE_LOOPBACK_ENROLLMENT", false),
+		AllowInsecureLoopbackEnrollment: allowInsecureLoopbackEnrollment,
 		IsolatedTestMedia:               envBool("ISOLATED_TEST_MEDIA", false),
 		ProxyNodeSchedulerMode:          strings.ToLower(strings.TrimSpace(envString("PROXY_NODE_SCHEDULER_MODE", "manual"))),
 		Admin2FADisabled:                envBool("ADMIN_2FA_DISABLED", false),
 		OwnerAdminAuthMode:              strings.ToLower(strings.TrimSpace(os.Getenv("OWNER_ADMIN_AUTH_MODE"))),
-		OwnerAdminHost:                  strings.ToLower(strings.TrimSpace(os.Getenv("OWNER_ADMIN_HOST"))),
+		OwnerAdminHost:                  ownerAdminHost,
 		PublicMediaBaseURL:              publicMediaBaseURL,
 		PublicMediaNodePaths:            publicMediaNodePaths,
 		PublicationAgentSocket:          strings.TrimSpace(os.Getenv("PUBLICATION_AGENT_SOCKET")),

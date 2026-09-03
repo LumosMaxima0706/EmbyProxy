@@ -18,7 +18,7 @@ import (
 )
 
 func TestProxyNodeAPICreatesOneTimeEnrollmentAndHeartbeat(t *testing.T) {
-	h := newAuthTestHandler(t, config.Config{AdminToken: "strong-admin-token"})
+	h := newAuthTestHandler(t, config.Config{AdminToken: "strong-admin-token", EnrollmentControllerURL: "https://controller.149077530.xyz"})
 	login := serveAdminJSON(t, h, http.MethodPost, "/admin/auth/login", map[string]any{"token": "strong-admin-token"}, nil)
 	cookie := login.Result().Cookies()[0]
 	created := serveAdminJSON(t, h, http.MethodPost, "/api/admin/proxy-nodes", map[string]any{"name": "edge-test", "public_address": "edge.example", "quota_bytes": 1000, "reset_day": 1, "reset_timezone": "Asia/Shanghai"}, cookie)
@@ -33,8 +33,9 @@ func TestProxyNodeAPICreatesOneTimeEnrollmentAndHeartbeat(t *testing.T) {
 	command := body["install_command"].(string)
 	commandURL := ""
 	for _, field := range strings.Fields(command) {
-		if strings.HasPrefix(field, "https://") {
-			commandURL = field
+		candidate := strings.Trim(field, "'")
+		if strings.HasPrefix(candidate, "https://") {
+			commandURL = candidate
 			break
 		}
 	}
@@ -61,7 +62,7 @@ func TestProxyNodeAPICreatesOneTimeEnrollmentAndHeartbeat(t *testing.T) {
 }
 
 func TestProxyNodeAPIPersistsPublicAddressUpdate(t *testing.T) {
-	h := newAuthTestHandler(t, config.Config{AdminToken: "strong-admin-token"})
+	h := newAuthTestHandler(t, config.Config{AdminToken: "strong-admin-token", EnrollmentControllerURL: "https://controller.149077530.xyz"})
 	login := serveAdminJSON(t, h, http.MethodPost, "/admin/auth/login", map[string]any{"token": "strong-admin-token"}, nil)
 	cookie := login.Result().Cookies()[0]
 	created := serveAdminJSON(t, h, http.MethodPost, "/api/admin/proxy-nodes", map[string]any{"name": "edge-address", "public_address": "http://127.0.0.1:18181", "reset_day": 1}, cookie)
@@ -81,7 +82,7 @@ func TestProxyNodeAPIPersistsPublicAddressUpdate(t *testing.T) {
 }
 
 func TestProxyNodeBootstrapIsNoStoreAndDoesNotExposeAdminSecret(t *testing.T) {
-	h := newAuthTestHandler(t, config.Config{AdminToken: "strong-admin-token", EnrollmentControllerURL: "https://admin.example"})
+	h := newAuthTestHandler(t, config.Config{AdminToken: "strong-admin-token", EnrollmentControllerURL: "https://owner-admin.149077530.xyz"})
 	login := serveAdminJSON(t, h, http.MethodPost, "/admin/auth/login", map[string]any{"token": "strong-admin-token"}, nil)
 	cookie := login.Result().Cookies()[0]
 	created := serveAdminJSON(t, h, http.MethodPost, "/api/admin/proxy-nodes", map[string]any{"name": "edge-bootstrap", "public_address": "edge.example", "reset_day": 1}, cookie)
@@ -91,10 +92,10 @@ func TestProxyNodeBootstrapIsNoStoreAndDoesNotExposeAdminSecret(t *testing.T) {
 	}
 	enrollment := body["enrollment"].(map[string]any)
 	command := body["install_command"].(string)
-	if !strings.Contains(command, "https://admin.example/api/edge/bootstrap/") || strings.Contains(command, "strong-admin-token") {
+	if !strings.Contains(command, "https://owner-admin.149077530.xyz/api/edge/bootstrap/") || strings.Contains(command, "strong-admin-token") {
 		t.Fatalf("unsafe command: %s", command)
 	}
-	parts := strings.Split(strings.TrimPrefix(command, "curl --fail --silent --show-error --proto '=https' --tlsv1.2 https://admin.example/api/edge/bootstrap/"), " | sudo sh")
+	parts := strings.Split(strings.TrimPrefix(command, "curl --fail --silent --show-error --proto '=https' --tlsv1.2 'https://owner-admin.149077530.xyz/api/edge/bootstrap/"), "' | sudo sh")
 	if len(parts) != 2 {
 		t.Fatalf("unexpected command format: %s", command)
 	}
@@ -109,6 +110,31 @@ func TestProxyNodeBootstrapIsNoStoreAndDoesNotExposeAdminSecret(t *testing.T) {
 		t.Fatal("bootstrap leaked secret or omitted enrollment endpoint")
 	}
 	_ = enrollment
+}
+
+func TestProxyNodeCreationFailsClosedWithoutPublicControllerURL(t *testing.T) {
+	h := newAuthTestHandler(t, config.Config{AdminToken: "strong-admin-token"})
+	login := serveAdminJSON(t, h, http.MethodPost, "/admin/auth/login", map[string]any{"token": "strong-admin-token"}, nil)
+	cookie := login.Result().Cookies()[0]
+	created := serveAdminJSON(t, h, http.MethodPost, "/api/admin/proxy-nodes", map[string]any{"name": "edge-missing-controller", "reset_day": 1}, cookie)
+	if created.Code != http.StatusServiceUnavailable || !strings.Contains(created.Body.String(), "CONTROLLER_PUBLIC_URL_NOT_CONFIGURED") {
+		t.Fatalf("created=%d %s", created.Code, created.Body.String())
+	}
+	nodes, err := h.store.ListProxyNodes(context.Background())
+	if err != nil || len(nodes) != 0 {
+		t.Fatalf("nodes=%+v err=%v", nodes, err)
+	}
+}
+
+func TestBuildEnrollmentCommandQuotesURLAndRejectsPlaceholders(t *testing.T) {
+	if got := buildEnrollmentCommand("https://controller.149077530.xyz", "node/id", "token value"); !strings.Contains(got, "'https://controller.149077530.xyz/api/edge/bootstrap/node%2Fid/token%20value'") {
+		t.Fatalf("command=%s", got)
+	}
+	for _, raw := range []string{"", "https://OWNER_CONTROLLER", "https://localhost", "https://controller.example", "http://10.0.0.1"} {
+		if _, err := config.NormalizeEnrollmentControllerURL(raw, false); err == nil {
+			t.Fatalf("accepted unsafe controller URL %q", raw)
+		}
+	}
 }
 
 func TestEdgeArtifactAndSnapshotRequireNodeCredential(t *testing.T) {

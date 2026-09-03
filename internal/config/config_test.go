@@ -57,18 +57,18 @@ func TestLoadReadsMediaProxyRoutesFlag(t *testing.T) {
 
 func TestLoadReadsOwnerAdminBasicOnlyMode(t *testing.T) {
 	t.Setenv("OWNER_ADMIN_AUTH_MODE", "BASIC_ONLY")
-	t.Setenv("OWNER_ADMIN_HOST", "Owner-Admin.Example")
+	t.Setenv("OWNER_ADMIN_HOST", "Owner-Admin.149077530.xyz")
 	cfg, err := Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.OwnerAdminAuthMode != "basic_only" || cfg.OwnerAdminHost != "owner-admin.example" {
+	if cfg.OwnerAdminAuthMode != "basic_only" || cfg.OwnerAdminHost != "owner-admin.149077530.xyz" {
 		t.Fatalf("owner Admin mode=%q host=%q", cfg.OwnerAdminAuthMode, cfg.OwnerAdminHost)
 	}
 }
 
 func TestOwnerAdminBasicOnlyRequiresExactHost(t *testing.T) {
-	for _, host := range []string{"", "owner-admin.example:443", "owner-admin.example/path"} {
+	for _, host := range []string{"", "owner-admin.149077530.xyz:443", "owner-admin.149077530.xyz/path"} {
 		t.Run(host, func(t *testing.T) {
 			t.Setenv("OWNER_ADMIN_AUTH_MODE", "basic_only")
 			t.Setenv("OWNER_ADMIN_HOST", host)
@@ -118,10 +118,53 @@ func TestPublicMediaURLConfigurationFailsClosed(t *testing.T) {
 
 func TestPublicMediaBaseRejectsOwnerAdminHost(t *testing.T) {
 	t.Setenv("OWNER_ADMIN_AUTH_MODE", "basic_only")
-	t.Setenv("OWNER_ADMIN_HOST", "owner-admin.example")
-	t.Setenv("PUBLIC_MEDIA_BASE_URL", "https://owner-admin.example")
+	t.Setenv("OWNER_ADMIN_HOST", "owner-admin.149077530.xyz")
+	t.Setenv("PUBLIC_MEDIA_BASE_URL", "https://owner-admin.149077530.xyz")
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() accepted owner Admin as the public media base")
+	}
+}
+
+func TestNormalizeEnrollmentControllerURLRequiresPublicHTTPSOrigin(t *testing.T) {
+	for _, raw := range []string{"", "https://OWNER_CONTROLLER", "http://localhost", "https://127.0.0.1", "https://10.0.0.4", "https://controller.example/path"} {
+		if _, err := NormalizeEnrollmentControllerURL(raw, false); err == nil {
+			t.Fatalf("accepted unsafe controller URL %q", raw)
+		}
+	}
+	got, err := NormalizeEnrollmentControllerURL("https://controller.149077530.xyz/", false)
+	if err != nil || got != "https://controller.149077530.xyz" {
+		t.Fatalf("normalized=%q err=%v", got, err)
+	}
+}
+
+func TestNormalizeEnrollmentControllerURLAllowsExplicitIsolatedLoopback(t *testing.T) {
+	got, err := NormalizeEnrollmentControllerURL("http://127.0.0.1:18180/", true)
+	if err != nil || got != "http://127.0.0.1:18180" {
+		t.Fatalf("normalized=%q err=%v", got, err)
+	}
+}
+
+func TestLoadDerivesEnrollmentURLFromExplicitOwnerAdminHost(t *testing.T) {
+	t.Setenv("ENROLLMENT_CONTROLLER_URL", "")
+	t.Setenv("OWNER_ADMIN_HOST", "Owner-Admin.149077530.xyz")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.EnrollmentControllerURL != "https://owner-admin.149077530.xyz" {
+		t.Fatalf("controller URL=%q", cfg.EnrollmentControllerURL)
+	}
+}
+
+func TestLoadPrefersExplicitEnrollmentURL(t *testing.T) {
+	t.Setenv("ENROLLMENT_CONTROLLER_URL", "https://enroll.149077530.xyz/")
+	t.Setenv("OWNER_ADMIN_HOST", "owner-admin.149077530.xyz")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.EnrollmentControllerURL != "https://enroll.149077530.xyz" {
+		t.Fatalf("controller URL=%q", cfg.EnrollmentControllerURL)
 	}
 }
 

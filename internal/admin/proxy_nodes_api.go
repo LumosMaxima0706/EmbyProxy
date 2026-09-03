@@ -13,6 +13,7 @@ import (
 
 	"embyproxy/internal/buildinfo"
 	"embyproxy/internal/capture"
+	"embyproxy/internal/config"
 	"embyproxy/internal/requestlog"
 	"embyproxy/internal/storage"
 )
@@ -40,12 +41,17 @@ func (h *Handler) handleProxyNodesAPI(w http.ResponseWriter, r *http.Request, pa
 		if !decodeAuthJSON(w, r, &body) {
 			return
 		}
+		controllerURL, err := config.NormalizeEnrollmentControllerURL(h.cfg.EnrollmentControllerURL, false)
+		if err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "error": "CONTROLLER_PUBLIC_URL_NOT_CONFIGURED"})
+			return
+		}
 		enrollment, token, err := h.store.CreateProxyNode(ctx, storage.ProxyNode{Name: body.Name, PublicAddress: body.PublicAddress, QuotaBytes: body.QuotaBytes, ResetDay: body.ResetDay, ResetTimezone: body.ResetTimezone, Priority: body.Priority}, 15*time.Minute)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "INVALID_NODE"})
 			return
 		}
-		writeJSON(w, http.StatusCreated, map[string]any{"ok": true, "enrollment": enrollment, "install_command": buildEnrollmentCommand(h.cfg.EnrollmentControllerURL, enrollment.ID, token)})
+		writeJSON(w, http.StatusCreated, map[string]any{"ok": true, "enrollment": enrollment, "install_command": buildEnrollmentCommand(controllerURL, enrollment.ID, token)})
 		return
 	}
 	if r.Method == http.MethodPost && path == "/api/admin/proxy-nodes/reorder" {
@@ -81,6 +87,20 @@ func (h *Handler) handleProxyNodesAPI(w http.ResponseWriter, r *http.Request, pa
 				return
 			}
 			writeJSON(w, 200, map[string]any{"ok": true, "state": map[bool]string{true: "revoked", false: "draining"}[force], "force": force})
+			return
+		}
+		if r.Method == http.MethodPost && len(parts) == 2 && parts[1] == "bootstrap" {
+			controllerURL, err := config.NormalizeEnrollmentControllerURL(h.cfg.EnrollmentControllerURL, false)
+			if err != nil {
+				writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "error": "CONTROLLER_PUBLIC_URL_NOT_CONFIGURED"})
+				return
+			}
+			enrollment, token, err := h.store.RegenerateProxyNodeEnrollment(ctx, id, 15*time.Minute)
+			if err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "BOOTSTRAP_REGENERATION_FAILED"})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "enrollment": enrollment, "install_command": buildEnrollmentCommand(controllerURL, enrollment.ID, token)})
 			return
 		}
 		if r.Method == http.MethodPatch && len(parts) == 1 {
@@ -144,11 +164,11 @@ func (h *Handler) handleProxyNodesAPI(w http.ResponseWriter, r *http.Request, pa
 }
 
 func buildEnrollmentCommand(controllerURL, id, token string) string {
-	controllerURL = strings.TrimRight(strings.TrimSpace(controllerURL), "/")
-	if controllerURL == "" {
-		controllerURL = "https://OWNER_CONTROLLER"
-	}
-	return "curl --fail --silent --show-error --proto '=https' --tlsv1.2 " + controllerURL + "/api/edge/bootstrap/" + url.PathEscape(id) + "/" + url.PathEscape(token) + " | sudo sh"
+	return "curl --fail --silent --show-error --proto '=https' --tlsv1.2 " + shellQuote(controllerURL+"/api/edge/bootstrap/"+url.PathEscape(id)+"/"+url.PathEscape(token)) + " | sudo sh"
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
 // handleBootstrap returns a guarded, self-contained installer. It intentionally
@@ -166,9 +186,10 @@ func (h *Handler) handleBootstrap(w http.ResponseWriter, r *http.Request, enroll
 	}
 	// Do not disclose enrollment state in the generated script. The script
 	// performs environment checks and posts the token only to the edge API.
-	controller := strings.TrimRight(strings.TrimSpace(h.cfg.EnrollmentControllerURL), "/")
-	if controller == "" {
-		controller = "https://OWNER_CONTROLLER"
+	controller, err := config.NormalizeEnrollmentControllerURL(h.cfg.EnrollmentControllerURL, h.cfg.AllowInsecureLoopbackEnrollment)
+	if err != nil {
+		http.Error(w, "controller public URL is not configured", http.StatusServiceUnavailable)
+		return
 	}
 	curlProtocol := "=https"
 	if strings.HasPrefix(controller, "http://") && h.cfg.AllowInsecureLoopbackEnrollment {

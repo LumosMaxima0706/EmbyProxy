@@ -1697,7 +1697,7 @@ async function loadProxyNodes() {
   body.innerHTML = items.length ? items.map((n, i) => {
     const remaining = n.quota_bytes > 0 ? Math.max(0, n.quota_bytes - n.used_bytes) : null;
     const health = n.playback_healthy && n.config_synced ? 'healthy' : 'not admitted';
-    return `<tr><td><strong>${esc(n.name)}</strong><small class="muted">${esc(n.public_address || '')}</small></td><td><span class="chip">${esc(n.state)}</span></td><td><span class="chip ${health === 'healthy' ? 'ok' : 'warn'}">${health}</span></td><td>${remaining === null ? '未设置' : `${formatBytes(n.used_bytes)} / ${formatBytes(n.quota_bytes)}`}</td><td>${Number(n.priority || i + 1)}</td><td><button class="btn btn-sm" onclick="toggleProxyNode('${attr(n.id)}',${!n.enabled})">${n.enabled ? '停用' : '启用'}</button><button class="btn btn-sm btn-danger" onclick="revokeProxyNode('${attr(n.id)}')">排空</button></td></tr>`;
+    return `<tr><td><strong>${esc(n.name)}</strong><small class="muted">${esc(n.public_address || '')}</small></td><td><span class="chip">${esc(n.state)}</span></td><td><span class="chip ${health === 'healthy' ? 'ok' : 'warn'}">${health}</span></td><td>${remaining === null ? '未设置' : `${formatBytes(n.used_bytes)} / ${formatBytes(n.quota_bytes)}`}</td><td>${Number(n.priority || i + 1)}</td><td><button class="btn btn-sm" onclick="toggleProxyNode('${attr(n.id)}',${!n.enabled})">${n.enabled ? '停用' : '启用'}</button>${n.state === 'registered' ? `<button class="btn btn-sm" onclick="regenerateProxyBootstrap('${attr(n.id)}')">重生成命令</button>` : ''}<button class="btn btn-sm btn-danger" onclick="revokeProxyNode('${attr(n.id)}')">排空</button></td></tr>`;
   }).join('') : '<tr><td colspan="6" class="table-empty">暂无反代节点</td></tr>';
 }
 function formatBytes(v) { const n = Number(v || 0); if (n < 1e9) return `${(n / 1e6).toFixed(1)} MB`; return `${(n / 1e9).toFixed(2)} GB`; }
@@ -1711,6 +1711,7 @@ async function createProxyNode() {
   const output = document.getElementById('proxyEnrollmentOutput'); output.hidden = false; output.textContent = `一次性安装命令（15 分钟内有效）\n${r.install_command}`; await loadProxyNodes(); toast('节点已创建，请在新 VPS 执行一次性命令', 'ok');
 }
 async function toggleProxyNode(id, enabled) { const r = await authFetch('/api/admin/proxy-nodes/'+encodeURIComponent(id), {method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled})}); if (!r.ok) toast('更新节点失败','err'); await loadProxyNodes(); }
+async function regenerateProxyBootstrap(id) { const r = await authFetch('/api/admin/proxy-nodes/'+encodeURIComponent(id)+'/bootstrap',{method:'POST'}); if (!r.ok) { toast('重新生成安装命令失败: ' + authErrorMessage(r.error), 'err'); return; } const output = document.getElementById('proxyEnrollmentOutput'); output.hidden = false; output.textContent = `一次性安装命令（15 分钟内有效）\n${r.install_command}`; toast('已生成新的短期安装命令', 'ok'); }
 async function revokeProxyNode(id) { if (!window.confirm('确认排空该节点？现有连接自然结束后将撤销凭据。')) return; const r=await authFetch('/api/admin/proxy-nodes/'+encodeURIComponent(id)+'/revoke',{method:'POST'}); if(!r.ok) toast('排空节点失败','err'); await loadProxyNodes(); }
 
 async function loadNodes() {

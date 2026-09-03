@@ -280,6 +280,43 @@ func (s *Store) CreateProxyNode(ctx context.Context, node ProxyNode, enrollmentT
 	return enrollment, token, nil
 }
 
+// RegenerateProxyNodeEnrollment issues a fresh short-lived bootstrap token for
+// an existing, not-yet-enrolled node. Older unconsumed enrollments are revoked
+// so the operator never has multiple valid commands for the same node.
+func (s *Store) RegenerateProxyNodeEnrollment(ctx context.Context, nodeID string, enrollmentTTL time.Duration) (Enrollment, string, error) {
+	if strings.TrimSpace(nodeID) == "" || enrollmentTTL <= 0 || enrollmentTTL > 24*time.Hour {
+		return Enrollment{}, "", errors.New("invalid_enrollment")
+	}
+	token, err := randomNodeToken()
+	if err != nil {
+		return Enrollment{}, "", err
+	}
+	now := time.Now().Unix()
+	enrollment := Enrollment{ID: nodeID + "-" + token[:12], NodeID: nodeID, ExpiresAt: time.Now().Add(enrollmentTTL).Unix()}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Enrollment{}, "", err
+	}
+	defer tx.Rollback()
+	var state string
+	if err := tx.QueryRowContext(ctx, `SELECT state FROM proxy_nodes WHERE id=?`, nodeID).Scan(&state); err != nil {
+		return Enrollment{}, "", err
+	}
+	if state != "registered" {
+		return Enrollment{}, "", errors.New("node_not_registered")
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE proxy_node_enrollments SET revoked=1 WHERE node_id=? AND consumed_at=0 AND revoked=0`, nodeID); err != nil {
+		return Enrollment{}, "", err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO proxy_node_enrollments (id,node_id,token_hash,expires_at,created_at) VALUES (?,?,?,?,?)`, enrollment.ID, nodeID, nodeHash(token), enrollment.ExpiresAt, now); err != nil {
+		return Enrollment{}, "", err
+	}
+	if err := tx.Commit(); err != nil {
+		return Enrollment{}, "", err
+	}
+	return enrollment, token, nil
+}
+
 func scanProxyNode(row interface{ Scan(...any) error }) (ProxyNode, error) {
 	var n ProxyNode
 	var enabled, playback, synced int
