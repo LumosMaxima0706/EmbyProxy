@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -21,7 +22,7 @@ func TestProxyNodeAPICreatesOneTimeEnrollmentAndHeartbeat(t *testing.T) {
 	h := newAuthTestHandler(t, config.Config{AdminToken: "strong-admin-token", EnrollmentControllerURL: "https://controller.149077530.xyz"})
 	login := serveAdminJSON(t, h, http.MethodPost, "/admin/auth/login", map[string]any{"token": "strong-admin-token"}, nil)
 	cookie := login.Result().Cookies()[0]
-	created := serveAdminJSON(t, h, http.MethodPost, "/api/admin/proxy-nodes", map[string]any{"name": "edge-test", "public_address": "edge.example", "quota_bytes": 1000, "reset_day": 1, "reset_timezone": "Asia/Shanghai"}, cookie)
+	created := serveAdminJSON(t, h, http.MethodPost, "/api/admin/proxy-nodes", map[string]any{"name": "edge-test", "public_address": "https://edge.example.net", "quota_bytes": 1000, "reset_day": 1, "reset_timezone": "Asia/Shanghai"}, cookie)
 	if created.Code != http.StatusCreated || !strings.Contains(created.Body.String(), `"install_command"`) {
 		t.Fatalf("created=%d %s", created.Code, created.Body.String())
 	}
@@ -56,7 +57,7 @@ func TestProxyNodeAPICreatesOneTimeEnrollmentAndHeartbeat(t *testing.T) {
 		t.Fatalf("heartbeat=%d %s", beat.Code, beat.Body.String())
 	}
 	list, err := h.store.ListProxyNodes(context.Background())
-	if err != nil || len(list) != 1 || !list[0].PlaybackHealthy {
+	if err != nil || len(list) != 1 || !list[0].PlaybackHealthy || list[0].IngressHealthy {
 		t.Fatalf("list=%+v err=%v", list, err)
 	}
 }
@@ -65,18 +66,18 @@ func TestProxyNodeAPIPersistsPublicAddressUpdate(t *testing.T) {
 	h := newAuthTestHandler(t, config.Config{AdminToken: "strong-admin-token", EnrollmentControllerURL: "https://controller.149077530.xyz"})
 	login := serveAdminJSON(t, h, http.MethodPost, "/admin/auth/login", map[string]any{"token": "strong-admin-token"}, nil)
 	cookie := login.Result().Cookies()[0]
-	created := serveAdminJSON(t, h, http.MethodPost, "/api/admin/proxy-nodes", map[string]any{"name": "edge-address", "public_address": "http://127.0.0.1:18181", "reset_day": 1}, cookie)
+	created := serveAdminJSON(t, h, http.MethodPost, "/api/admin/proxy-nodes", map[string]any{"name": "edge-address", "public_address": "https://edge-address.example.net", "reset_day": 1}, cookie)
 	var body map[string]any
 	if err := json.Unmarshal(created.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
 	nodeID := body["enrollment"].(map[string]any)["node_id"].(string)
-	updated := serveAdminJSON(t, h, http.MethodPatch, "/api/admin/proxy-nodes/"+nodeID, map[string]any{"public_address": "http://127.0.0.1:28180"}, cookie)
-	if updated.Code != http.StatusOK || !strings.Contains(updated.Body.String(), "127.0.0.1:28180") {
+	updated := serveAdminJSON(t, h, http.MethodPatch, "/api/admin/proxy-nodes/"+nodeID, map[string]any{"public_address": "https://edge-address-2.example.net"}, cookie)
+	if updated.Code != http.StatusOK || !strings.Contains(updated.Body.String(), "edge-address-2.example.net") {
 		t.Fatalf("update=%d %s", updated.Code, updated.Body.String())
 	}
 	node, err := h.store.GetProxyNode(context.Background(), nodeID)
-	if err != nil || node == nil || node.PublicAddress != "http://127.0.0.1:28180" {
+	if err != nil || node == nil || node.PublicAddress != "https://edge-address-2.example.net" {
 		t.Fatalf("node=%+v err=%v", node, err)
 	}
 }
@@ -85,7 +86,7 @@ func TestProxyNodeBootstrapIsNoStoreAndDoesNotExposeAdminSecret(t *testing.T) {
 	h := newAuthTestHandler(t, config.Config{AdminToken: "strong-admin-token", EnrollmentControllerURL: "https://owner-admin.149077530.xyz"})
 	login := serveAdminJSON(t, h, http.MethodPost, "/admin/auth/login", map[string]any{"token": "strong-admin-token"}, nil)
 	cookie := login.Result().Cookies()[0]
-	created := serveAdminJSON(t, h, http.MethodPost, "/api/admin/proxy-nodes", map[string]any{"name": "edge-bootstrap", "public_address": "edge.example", "reset_day": 1}, cookie)
+	created := serveAdminJSON(t, h, http.MethodPost, "/api/admin/proxy-nodes", map[string]any{"name": "edge-bootstrap", "public_address": "https://edge.example.net", "reset_day": 1}, cookie)
 	var body map[string]any
 	if err := json.Unmarshal(created.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
@@ -109,6 +110,116 @@ func TestProxyNodeBootstrapIsNoStoreAndDoesNotExposeAdminSecret(t *testing.T) {
 	if strings.Contains(rec.Body.String(), "strong-admin-token") || !strings.Contains(rec.Body.String(), "api/edge/enroll/") || !strings.Contains(rec.Body.String(), "EMBYPROXY_INSTALL_ROOT") || !strings.Contains(rec.Body.String(), "sha256sum") || !strings.Contains(rec.Body.String(), "edge agent checksum verification failed") || !strings.Contains(rec.Body.String(), `\$CREDENTIAL`) || !strings.Contains(rec.Body.String(), `\$payload`) {
 		t.Fatal("bootstrap leaked secret or omitted enrollment endpoint")
 	}
+	if !strings.Contains(rec.Body.String(), "edge_isolated_media=${EMBYPROXY_ISOLATED_TEST_MEDIA:-true}") || !strings.Contains(rec.Body.String(), "edge_canary='/__isolated-media/canary'") {
+		t.Fatal("bootstrap does not provide the built-in playback canary by default")
+	}
+	if strings.Index(rec.Body.String(), "invalid playback health configuration") > strings.Index(rec.Body.String(), "api/edge/enroll/") {
+		t.Fatal("playback configuration validation must precede enrollment")
+	}
+	if !strings.Contains(rec.Body.String(), "edge_listen=${EMBYPROXY_EDGE_LISTEN_ADDR:-127.0.0.1:18080}") || !strings.Contains(rec.Body.String(), "edge_probe=${EMBYPROXY_EDGE_PROBE_ADDR:-127.0.0.1:18080}") {
+		t.Fatal("bootstrap does not separate the loopback listener and probe addresses")
+	}
+	script := rec.Body.String()
+	if !strings.Contains(script, "PERSISTED_EDGE_PUBLIC='https://edge.example.net'") || !strings.Contains(script, "EMBYPROXY_EDGE_INGRESS_MODE") || !strings.Contains(script, "systemctl enable caddy.service") || !strings.Contains(script, "systemctl restart caddy.service") || !strings.Contains(script, "respond @isolated 404") || !strings.Contains(script, "systemctl cat caddy.service") || !strings.Contains(script, "wait_http_200 'HTTPS edge ingress'") {
+		t.Fatal("bootstrap does not bind to the persisted HTTPS edge ingress")
+	}
+	for _, required := range []string{
+		"caddy_before_installed=false",
+		"caddy_postinst_active=false",
+		"caddy_unit_before=false",
+		"caddy_config_before=false",
+		"caddy_marker=\"$state_dir/caddy-managed\"",
+		"caddy_managed=false",
+		"managed_by=embyproxy-edge",
+		"unmanaged Caddy/configuration already exists",
+		"ports 80/443 are already occupied",
+		"apt-get update",
+		"DEBIAN_FRONTEND=noninteractive apt-get install -y caddy",
+		"systemctl stop caddy.service",
+		"failed to stop caddy.service before configuration replacement",
+		"caddy_tmp=$(mktemp \"$caddy_root/Caddyfile.embyproxy.XXXXXX\")",
+		"caddy_backup=\"$caddy_marker.previous\"",
+		"caddy_restore()",
+		"systemctl stop caddy.service || true",
+		"chown root:caddy \"$caddy_tmp\"",
+		"chmod 0640 \"$caddy_tmp\"",
+		"\"$caddy_bin\" validate --config \"$caddy_tmp\" --adapter caddyfile",
+		"cp -p \"$caddy_root/Caddyfile\" \"$caddy_backup\"",
+		"mv -f \"$caddy_tmp\" \"$caddy_root/Caddyfile\"",
+		"caddy_marker_tmp=$(mktemp \"$state_dir/caddy-managed.XXXXXX\")",
+		"mv -f \"$caddy_marker_tmp\" \"$caddy_marker\"",
+		"systemctl status caddy.service --no-pager",
+		"journalctl -u caddy.service -n 80 --no-pager",
+	} {
+		if !strings.Contains(script, required) {
+			t.Fatalf("bootstrap omitted Caddy safety branch %q", required)
+		}
+	}
+	if strings.Contains(script, "embyproxy-edge-caddy.service") {
+		t.Fatal("bootstrap must not create a competing Caddy service")
+	}
+	if strings.Index(script, "cat > \"$caddy_tmp\"") > strings.Index(script, "\"$caddy_bin\" validate --config \"$caddy_tmp\" --adapter caddyfile") {
+		t.Fatal("temporary Caddyfile must be validated after generation")
+	}
+	permissionIndex := strings.Index(script, "chmod 0640 \"$caddy_tmp\"")
+	replaceIndex := strings.Index(script, "mv -f \"$caddy_tmp\" \"$caddy_root/Caddyfile\"")
+	if permissionIndex < 0 || replaceIndex < 0 || permissionIndex > replaceIndex {
+		t.Fatal("Caddy service-readable permissions must be set before atomic replacement")
+	}
+	if strings.Index(script, "\"$caddy_bin\" validate --config \"$caddy_tmp\" --adapter caddyfile") > strings.Index(script, "systemctl stop caddy.service || {") {
+		t.Fatal("Caddy must be stopped only after temporary config validation")
+	}
+	if strings.Index(script, "DEBIAN_FRONTEND=noninteractive apt-get install -y caddy") > strings.Index(script, "systemctl stop caddy.service") {
+		t.Fatal("postinst Caddy must be stopped after installation")
+	}
+	if strings.Index(script, "systemctl stop caddy.service") > strings.Index(script, "mv -f \"$caddy_tmp\" \"$caddy_root/Caddyfile\"") {
+		t.Fatal("Caddy must be stopped before atomic replacement")
+	}
+	restartIndex := strings.Index(script, "systemctl restart caddy.service || {")
+	if strings.Index(script, "mv -f \"$caddy_tmp\" \"$caddy_root/Caddyfile\"") > restartIndex {
+		t.Fatal("atomic Caddy replacement must precede restart")
+	}
+	if restartIndex > strings.Index(script, "printf 'managed_by=embyproxy-edge") {
+		t.Fatal("managed marker must be written only after restart")
+	}
+	if strings.Index(script, "printf 'managed_by=embyproxy-edge") > strings.Index(script, "mv -f \"$caddy_marker_tmp\" \"$caddy_marker\"") {
+		t.Fatal("managed marker contents must be prepared before atomic marker replacement")
+	}
+	if strings.Index(script, "mv -f \"$caddy_marker_tmp\" \"$caddy_marker\"") > strings.Index(script, "systemctl enable --now embyproxy-edge.service") {
+		t.Fatal("edge agent must start only after managed marker replacement")
+	}
+	if strings.Index(script, "\"$caddy_bin\" validate --config \"$caddy_tmp\" --adapter caddyfile") > restartIndex {
+		t.Fatal("Caddy must be validated before restart")
+	}
+	if strings.Index(script, "systemctl restart caddy.service") > strings.LastIndex(script, "systemctl is-active --quiet caddy.service") {
+		t.Fatal("Caddy must be active-checked after restart")
+	}
+	if strings.Index(script, "systemctl is-active --quiet caddy.service") > strings.Index(script, "systemctl enable --now embyproxy-edge.service") {
+		t.Fatal("edge agent must start only after managed Caddy is active")
+	}
+	if strings.Index(script, "wait_http_200 'HTTPS edge ingress'") > strings.Index(script, "systemctl enable --now embyproxy-edge-heartbeat.timer") {
+		t.Fatal("heartbeat timer must start only after public ingress health")
+	}
+	for _, retry := range []string{"wait_http_200()", "wait_attempts=\"$3\"", "wait_connect_timeout=\"$4\"", "wait_max_time=\"$5\"", "wait_http_200 'edge agent local' \"http://$edge_probe/health\" 5 2 3 4 http", "wait_http_200 'HTTPS edge ingress' \"$edge_public/health\" 9 5 5 5 https", "--proto '=https' --tlsv1.2"} {
+		if !strings.Contains(script, retry) {
+			t.Fatalf("bootstrap omitted readiness retry contract %q", retry)
+		}
+	}
+	if strings.Contains(script, "systemctl enable --now caddy.service") {
+		t.Fatal("bootstrap must not use an unvalidated Caddy start")
+	}
+	for _, diagnostic := range []string{"failed to restart caddy.service", "Caddy configuration validation failed", "failed to enable caddy.service"} {
+		if !strings.Contains(script, diagnostic) {
+			t.Fatalf("bootstrap omitted Caddy failure diagnostic %q", diagnostic)
+		}
+	}
+	scriptPath := filepath.Join(t.TempDir(), "bootstrap.sh")
+	if err := os.WriteFile(scriptPath, rec.Body.Bytes(), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("sh", "-n", scriptPath).CombinedOutput(); err != nil {
+		t.Fatalf("bootstrap shell syntax: %v: %s", err, out)
+	}
 	_ = enrollment
 }
 
@@ -116,7 +227,7 @@ func TestProxyNodeCreationFailsClosedWithoutPublicControllerURL(t *testing.T) {
 	h := newAuthTestHandler(t, config.Config{AdminToken: "strong-admin-token"})
 	login := serveAdminJSON(t, h, http.MethodPost, "/admin/auth/login", map[string]any{"token": "strong-admin-token"}, nil)
 	cookie := login.Result().Cookies()[0]
-	created := serveAdminJSON(t, h, http.MethodPost, "/api/admin/proxy-nodes", map[string]any{"name": "edge-missing-controller", "reset_day": 1}, cookie)
+	created := serveAdminJSON(t, h, http.MethodPost, "/api/admin/proxy-nodes", map[string]any{"name": "edge-missing-controller", "public_address": "https://edge-missing.example.net", "reset_day": 1}, cookie)
 	if created.Code != http.StatusServiceUnavailable || !strings.Contains(created.Body.String(), "CONTROLLER_PUBLIC_URL_NOT_CONFIGURED") {
 		t.Fatalf("created=%d %s", created.Code, created.Body.String())
 	}
@@ -141,7 +252,7 @@ func TestProxyNodeBootstrapRegenerationWorksForRevokedUnadmittedNode(t *testing.
 	h := newAuthTestHandler(t, config.Config{AdminToken: "strong-admin-token", EnrollmentControllerURL: "https://owner-admin.149077530.xyz"})
 	login := serveAdminJSON(t, h, http.MethodPost, "/admin/auth/login", map[string]any{"token": "strong-admin-token"}, nil)
 	cookie := login.Result().Cookies()[0]
-	created := serveAdminJSON(t, h, http.MethodPost, "/api/admin/proxy-nodes", map[string]any{"name": "edge-revoked-bootstrap", "reset_day": 1}, cookie)
+	created := serveAdminJSON(t, h, http.MethodPost, "/api/admin/proxy-nodes", map[string]any{"name": "edge-revoked-bootstrap", "public_address": "https://edge-revoked.example.net", "reset_day": 1}, cookie)
 	if created.Code != http.StatusCreated {
 		t.Fatalf("create=%d %s", created.Code, created.Body.String())
 	}
@@ -174,6 +285,23 @@ func TestProxyNodeBootstrapRegenerationWorksForRevokedUnadmittedNode(t *testing.
 	node, err := h.store.GetProxyNode(context.Background(), nodeID)
 	if err != nil || node == nil || node.State != "registered" || node.Enabled || node.PlaybackHealthy || node.ConfigSynced {
 		t.Fatalf("node=%+v err=%v", node, err)
+	}
+}
+
+func TestBootstrapAllowsCleanHostToChooseHTTPSIngressAtInstallTime(t *testing.T) {
+	h := newAuthTestHandler(t, config.Config{AdminToken: "strong-admin-token", EnrollmentControllerURL: "https://owner-admin.149077530.xyz"})
+	enrollment, token, err := h.store.CreateProxyNode(context.Background(), storage.ProxyNode{Name: "edge-no-ingress", PublicAddress: "https://edge-no-ingress.example.net", ResetDay: 1}, 15*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/edge/bootstrap/"+enrollment.ID+"/"+token, nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "EMBYPROXY_EDGE_DOMAIN") || !strings.Contains(rec.Body.String(), "edge ingress") {
+		t.Fatalf("bootstrap status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	if err := h.store.ValidateEnrollment(context.Background(), enrollment.ID, token); err != nil {
+		t.Fatalf("preflight failure consumed enrollment: %v", err)
 	}
 }
 

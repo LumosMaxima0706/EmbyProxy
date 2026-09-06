@@ -40,6 +40,44 @@ func TestProxyNodeEnrollmentIsSingleUseAndCredentialScoped(t *testing.T) {
 	}
 }
 
+func TestProxyNodeIngressHealthIsIndependentFromPlayback(t *testing.T) {
+	ctx := context.Background()
+	store, err := New(filepath.Join(t.TempDir(), "proxy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	enrollment, token, err := store.CreateProxyNode(ctx, ProxyNode{Name: "edge-ingress", PublicAddress: "https://edge.example.net", ResetDay: 1}, 15*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	node, credential, err := store.CompleteEnrollment(ctx, enrollment.ID, token, "v1", "abc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.HeartbeatProxyNode(ctx, node.ID, credential, "v1", "abc", "healthy", true, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	nodeView, err := store.GetProxyNode(ctx, node.ID)
+	if err != nil || nodeView.PlaybackHealthy != true || nodeView.IngressHealthy {
+		t.Fatalf("before ingress probe node=%+v err=%v", node, err)
+	}
+	if err := store.SetProxyNodeIngressHealth(ctx, node.ID, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	nodeView, err = store.GetProxyNode(ctx, node.ID)
+	if err != nil || !nodeView.PlaybackHealthy || !nodeView.IngressHealthy || nodeView.State != "healthy" {
+		t.Fatalf("after ingress probe node=%+v err=%v", node, err)
+	}
+	if err := store.SetProxyNodeIngressHealth(ctx, node.ID, false, "ingress_probe_unreachable"); err != nil {
+		t.Fatal(err)
+	}
+	nodeView, err = store.GetProxyNode(ctx, node.ID)
+	if err != nil || !nodeView.PlaybackHealthy || nodeView.IngressHealthy || nodeView.State != "degraded" {
+		t.Fatalf("after ingress failure node=%+v err=%v", node, err)
+	}
+}
+
 func TestRegenerateProxyNodeEnrollmentRevokesPreviousUnconsumedToken(t *testing.T) {
 	ctx := context.Background()
 	store, err := New(filepath.Join(t.TempDir(), "proxy.db"))

@@ -728,3 +728,47 @@ the retry will repeat bundle, path, ff-only, feature-only, and cleanup checks.
   was replayed from logs and no media file was fetched automatically. Final
   playback-transfer and statistics evidence awaits one owner-triggered small
   video using the owner's existing authenticated Yamby session.
+
+## 2026-09-04 | Edge playback canary bootstrap correction
+
+- Root cause was an invalid generated configuration: `isolated_test_media=false`
+  with an empty `canary_path`, which made the edge checker return false without
+  issuing a request.
+- Bootstrap now defaults to the built-in `/__isolated-media/canary` Range canary
+  with `isolated_test_media=true`, validates the combination before consuming
+  enrollment, and rejects an empty external canary explicitly.
+- The edge agent validates the same contract at startup and records
+  `playback_canary_failed` for an actual failed probe. New tests cover built-in
+  and external 206 responses, missing Content-Range, 200 responses, and shell
+  syntax. The clean-VPS listener default is `127.0.0.1:18080`, with a separate
+  loopback probe address; approved HTTPS reverse proxy or TLS tunnel/LB is
+  required for public clients because the agent does not terminate TLS.
+- `gofmt`, `go test ./...`, `go vet ./...`, and `git diff --check` passed. The
+  clean installer now separates bind and probe addresses and keeps the agent
+  on loopback by default because it has no TLS server; HTTPS reverse proxy or
+  TLS tunnel/LB remains required for public clients. No host, service,
+  database, enrollment, token, tunnel, or protected ingress was modified.
+- Address audit: new node origins must be complete HTTPS origins. Existing bare
+  `proxy_nodes.public_address` values such as `161.114.13.231` are migration-
+  only and rejected by the production resolver rather than silently converted
+  to cleartext HTTP. Final client URLs come from publication
+  `PUBLIC_MEDIA_BASE_URL` (HTTPS ingress), not from that node field. No
+  clean-VPS public E2E was run:
+  the authorized disposable host was unavailable and must not be accessed as a
+  diagnostic substitute.
+- The installer now defaults to automatic Caddy HTTPS ingress: it validates
+  `EMBYPROXY_EDGE_DOMAIN`, reuses the distribution `caddy.service` reverse-
+  proxying to loopback, rejects the
+  isolated media path publicly, and requires
+  public `/health` to return 200. Explicit external-ingress mode skips Caddy
+  but performs the same HTTPS health check. No real clean-VPS E2E was run.
+- Caddy bootstrap now records pre-install ownership state and a separate
+  `$state_dir/caddy-managed` marker. Unknown Caddy/configuration or occupied
+  80/443 fails closed with the external-ingress escape hatch. A package
+  post-install auto-start is stopped before the managed Caddyfile is written;
+  `caddy validate` must pass before the official `caddy.service` is restarted.
+  Existing EmbyProxy-managed installs can repeat bootstrap idempotently, and
+  validation/restart failures print systemd status and journal diagnostics.
+- There is currently no approved DNS provider/API integration. Admins must
+  provision the edge hostname and DNS A/AAAA record before generating the
+  command; the installer derives `EDGE_DOMAIN` from the persisted HTTPS origin.

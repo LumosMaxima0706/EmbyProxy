@@ -2,7 +2,6 @@ package admin
 
 import (
 	"crypto/sha256"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -39,6 +38,18 @@ func (h *Handler) handleProxyNodesAPI(w http.ResponseWriter, r *http.Request, pa
 			Priority      int    `json:"priority"`
 		}
 		if !decodeAuthJSON(w, r, &body) {
+			return
+		}
+		if strings.TrimSpace(body.PublicAddress) != "" {
+			if normalized, normalizeErr := config.NormalizeEdgePublicOrigin(body.PublicAddress); normalizeErr != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "INVALID_EDGE_PUBLIC_ORIGIN"})
+				return
+			} else {
+				body.PublicAddress = normalized
+			}
+		}
+		if strings.TrimSpace(body.PublicAddress) == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "EDGE_PUBLIC_HTTPS_ORIGIN_REQUIRED"})
 			return
 		}
 		controllerURL, err := config.NormalizeEnrollmentControllerURL(h.cfg.EnrollmentControllerURL, false)
@@ -117,7 +128,17 @@ func (h *Handler) handleProxyNodesAPI(w http.ResponseWriter, r *http.Request, pa
 				n.Enabled = v
 			}
 			if v, ok := body["public_address"].(string); ok {
-				n.PublicAddress = strings.TrimSpace(v)
+				if strings.TrimSpace(v) == "" {
+					writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "EDGE_PUBLIC_HTTPS_ORIGIN_REQUIRED"})
+					return
+				}
+				normalized, normalizeErr := config.NormalizeEdgePublicOrigin(v)
+				if normalizeErr != nil {
+					writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "INVALID_EDGE_PUBLIC_ORIGIN"})
+					return
+				}
+				n.PublicAddress = normalized
+				n.IngressHealthy = false
 			}
 			if v, ok := body["priority"].(float64); ok {
 				n.Priority = int(v)
@@ -184,6 +205,16 @@ func (h *Handler) handleBootstrap(w http.ResponseWriter, r *http.Request, enroll
 		http.NotFound(w, r)
 		return
 	}
+	node, err := h.store.GetProxyNodeForEnrollment(r.Context(), enrollmentID)
+	if err != nil || node == nil {
+		http.Error(w, "edge public HTTPS ingress is not configured", http.StatusServiceUnavailable)
+		return
+	}
+	persistedEdgePublic, normalizeErr := config.NormalizeEdgePublicOrigin(node.PublicAddress)
+	if normalizeErr != nil {
+		http.Error(w, "edge HTTPS origin is required before bootstrap; configure DNS and ingress first (no DNS provider is configured)", http.StatusServiceUnavailable)
+		return
+	}
 	// Do not disclose enrollment state in the generated script. The script
 	// performs environment checks and posts the token only to the edge API.
 	controller, err := config.NormalizeEnrollmentControllerURL(h.cfg.EnrollmentControllerURL, h.cfg.AllowInsecureLoopbackEnrollment)
@@ -195,8 +226,6 @@ func (h *Handler) handleBootstrap(w http.ResponseWriter, r *http.Request, enroll
 	if strings.HasPrefix(controller, "http://") && h.cfg.AllowInsecureLoopbackEnrollment {
 		curlProtocol = "=http,https"
 	}
-	payload := map[string]string{"version": buildinfo.Current().Version, "commit": buildinfo.Current().Commit}
-	body, _ := json.Marshal(payload)
 	script := fmt.Sprintf(`#!/bin/sh
 set -eu
 command -v curl >/dev/null 2>&1 || { echo 'curl is required' >&2; exit 1; }
@@ -210,22 +239,70 @@ else
 fi
 umask 077
 CONTROLLER='%s'
+PERSISTED_EDGE_PUBLIC='%s'
 cfg_dir="${install_root}/etc/embyproxy-edge"
 state_dir="${install_root}/var/lib/embyproxy-edge"
 lib_dir="${install_root}/usr/local/lib"
 bin_dir="${install_root}/usr/local/bin"
 unit_dir="${install_root}/etc/systemd/system"
 install -d -m 0700 "$cfg_dir" "$state_dir" "$lib_dir" "$bin_dir" "$unit_dir"
-	response=$(curl --fail --silent --show-error --proto '%s' --tlsv1.2 -H 'Content-Type: application/json' --data '%s' "$CONTROLLER/api/edge/enroll/%s/%s")
+# The edge agent has no TLS server. Keep the bind and local probe on loopback;
+# the default mode installs an isolated Caddy HTTPS ingress on clean hosts.
+edge_listen=${EMBYPROXY_EDGE_LISTEN_ADDR:-127.0.0.1:18080}
+edge_probe=${EMBYPROXY_EDGE_PROBE_ADDR:-127.0.0.1:18080}
+edge_canary=${EMBYPROXY_EDGE_CANARY_PATH-}
+edge_allow_private=${EMBYPROXY_EDGE_ALLOW_PRIVATE_TARGETS:-false}
+edge_isolated_media=${EMBYPROXY_ISOLATED_TEST_MEDIA:-true}
+case "$edge_isolated_media" in
+  true|false) ;;
+  *) echo 'EMBYPROXY_ISOLATED_TEST_MEDIA must be true or false' >&2; exit 1;;
+esac
+if [ "$edge_isolated_media" = true ] && [ -z "$edge_canary" ]; then
+  edge_canary='/__isolated-media/canary'
+fi
+if [ "$edge_isolated_media" = false ] && [ -z "$edge_canary" ]; then
+  echo 'invalid playback health configuration: no playback canary configured' >&2
+  exit 1
+fi
+case "$edge_canary" in
+  /*) ;;
+  *) echo 'EMBYPROXY_EDGE_CANARY_PATH must be an absolute URI path' >&2; exit 1;;
+esac
+case "$edge_canary" in
+  *"'"*|*'"'*|*'\\'*|*" "*|*'	'*|*'?'*|*'#'*) echo 'EMBYPROXY_EDGE_CANARY_PATH contains unsafe characters' >&2; exit 1;;
+esac
+ingress_mode=${EMBYPROXY_EDGE_INGRESS_MODE:-auto}
+case "$ingress_mode" in auto|external) ;; *) echo 'EMBYPROXY_EDGE_INGRESS_MODE must be auto or external' >&2; exit 1;; esac
+if [ "$ingress_mode" = external ]; then
+  edge_public=${EMBYPROXY_EDGE_EXTERNAL_INGRESS:-${PERSISTED_EDGE_PUBLIC}}
+  [ -n "$edge_public" ] || { echo 'external ingress URL is required' >&2; exit 1; }
+else
+  edge_domain=${EMBYPROXY_EDGE_DOMAIN:-}
+  if [ -z "$edge_domain" ]; then
+    edge_domain=$(printf '%%s' "$PERSISTED_EDGE_PUBLIC" | sed -n 's#^https://##p' | sed 's/:.*$//')
+  fi
+  case "$edge_domain" in
+    ''|*[!A-Za-z0-9.-]*) echo 'EMBYPROXY_EDGE_DOMAIN is required and must be a DNS name' >&2; exit 1;;
+  esac
+  edge_public="https://$edge_domain"
+  command -v getent >/dev/null 2>&1 || { echo 'getent is required for DNS preflight' >&2; exit 1; }
+  resolved_ips=$(getent ahosts "$edge_domain" | awk '{print $1}' | sort -u)
+  [ -n "$resolved_ips" ] || { echo "DNS for $edge_domain does not resolve to this host" >&2; exit 1; }
+  local_ip=$(curl --fail --silent --show-error --connect-timeout 10 --max-time 15 https://api.ipify.org || true)
+  [ -n "$local_ip" ] && printf '%%s\n' "$resolved_ips" | grep -Fx "$local_ip" >/dev/null || { echo "DNS for $edge_domain does not point to this VPS" >&2; exit 1; }
+  if command -v ss >/dev/null 2>&1 && ss -lnt '( sport = :80 or sport = :443 )' | tail -n +2 | grep -q .; then
+    echo 'ports 80/443 are already occupied; refusing to replace an existing ingress' >&2; exit 1
+  fi
+fi
+case "$edge_public" in https://?*) ;; *) echo 'edge ingress must be an HTTPS origin' >&2; exit 1;; esac
+case "$edge_public" in *' '*|*'?'*|*'#'*|*'@'*) echo 'edge ingress URL contains unsafe characters' >&2; exit 1;; esac
+enroll_payload=$(printf '{"version":"%%s","commit":"%%s","public_address":"%%s"}' '%s' '%s' "$edge_public")
+response=$(curl --fail --silent --show-error --proto '%s' --tlsv1.2 -H 'Content-Type: application/json' --data "$enroll_payload" "$CONTROLLER/api/edge/enroll/%s/%s")
 credential=$(printf '%%s' "$response" | sed -n 's/.*"credential":"\([^"]*\)".*/\1/p')
 node_id=$(printf '%%s' "$response" | sed -n 's/.*"node_id":"\([^"]*\)".*/\1/p')
 [ -n "$credential" ] && [ -n "$node_id" ] || { echo 'invalid enrollment response' >&2; exit 1; }
 printf 'NODE_ID=%%s\nCREDENTIAL=%%s\nCONTROLLER=%%s\n' "$node_id" "$credential" '%s' > "$cfg_dir/identity.env"
 chmod 0600 "$cfg_dir/identity.env"
-edge_listen=${EMBYPROXY_EDGE_LISTEN_ADDR:-127.0.0.1:18080}
-edge_canary=${EMBYPROXY_EDGE_CANARY_PATH:-}
-edge_allow_private=${EMBYPROXY_EDGE_ALLOW_PRIVATE_TARGETS:-false}
-edge_isolated_media=${EMBYPROXY_ISOLATED_TEST_MEDIA:-false}
 artifact_headers="$state_dir/edge-agent.headers"
 curl --fail --silent --show-error --proto '%s' --tlsv1.2 -D "$artifact_headers" -H "X-EmbyProxy-Node-Credential: $credential" "$CONTROLLER/api/edge/artifact/$node_id/edge-agent" -o "$bin_dir/embyproxy-edge-agent"
 artifact_sha=$(sed -n 's/^[Xx]-[Ee]mby[Pp]roxy-[Aa]rtifact-[Ss][Hh][Aa]256: *\([0-9a-fA-F]\{64\}\).*$/\1/p' "$artifact_headers" | tail -n 1)
@@ -233,7 +310,7 @@ actual_sha=$(sha256sum "$bin_dir/embyproxy-edge-agent" | awk '{print $1}')
 [ -n "$artifact_sha" ] && [ "$artifact_sha" = "$actual_sha" ] || { echo 'edge agent checksum verification failed' >&2; exit 1; }
 rm -f "$artifact_headers"
 chmod 0700 "$bin_dir/embyproxy-edge-agent"
-printf '{"listen_addr":"%%s","db_path":"%%s/edge.db","controller":"%%s","node_id":"%%s","credential":"%%s","version":"bootstrap","commit":"%s","canary_path":"%%s","allow_private_targets":%%s,"isolated_test_media":%%s}\n' "$edge_listen" "$state_dir" "$CONTROLLER" "$node_id" "$credential" "$edge_canary" "$edge_allow_private" "$edge_isolated_media" > "$cfg_dir/edge-agent.json"
+printf '{"listen_addr":"%%s","probe_addr":"%%s","db_path":"%%s/edge.db","controller":"%%s","node_id":"%%s","credential":"%%s","version":"bootstrap","commit":"%s","canary_path":"%%s","allow_private_targets":%%s,"isolated_test_media":%%s}\n' "$edge_listen" "$edge_probe" "$state_dir" "$CONTROLLER" "$node_id" "$credential" "$edge_canary" "$edge_allow_private" "$edge_isolated_media" > "$cfg_dir/edge-agent.json"
 chmod 0600 "$cfg_dir/edge-agent.json"
 cat > "$lib_dir/embyproxy-edge-heartbeat" <<HEARTBEAT
 #!/bin/sh
@@ -283,10 +360,178 @@ ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=$cfg_dir $state_dir
 UNIT
-if [ -z "$install_root" ]; then systemctl daemon-reload; systemctl enable --now embyproxy-edge-heartbeat.timer embyproxy-edge.service; fi
+if [ -z "$install_root" ]; then
+  if [ "$ingress_mode" = auto ]; then
+    caddy_root=/etc/caddy
+    caddy_marker="$state_dir/caddy-managed"
+    caddy_before_installed=false
+    command -v caddy >/dev/null 2>&1 && caddy_before_installed=true
+    caddy_postinst_active=false
+    caddy_unit_before=false
+    systemctl cat caddy.service >/dev/null 2>&1 && caddy_unit_before=true
+    caddy_config_before=false
+    [ -e "$caddy_root/Caddyfile" ] && caddy_config_before=true
+    caddy_managed=false
+    if [ -f "$caddy_marker" ] && grep -Fx 'managed_by=embyproxy-edge' "$caddy_marker" >/dev/null 2>&1; then
+      caddy_managed=true
+    fi
+    # Existing Caddy is reusable only when this installer previously claimed it.
+    # This prevents overwriting an unrelated package, service, or Caddyfile.
+    if [ "$caddy_managed" != true ] && { [ "$caddy_before_installed" = true ] || [ "$caddy_unit_before" = true ] || [ "$caddy_config_before" = true ]; }; then
+      echo 'unmanaged Caddy/configuration already exists; refusing to overwrite it' >&2
+      echo 'choose EMBYPROXY_EDGE_INGRESS_MODE=external with an existing HTTPS ingress' >&2
+      exit 1
+    fi
+    if [ "$caddy_managed" != true ] && command -v ss >/dev/null 2>&1 && ss -lnt '( sport = :80 or sport = :443 )' | tail -n +2 | grep -q .; then
+      echo 'ports 80/443 are already occupied; refusing to replace an existing ingress' >&2
+      echo 'choose EMBYPROXY_EDGE_INGRESS_MODE=external with an existing HTTPS ingress' >&2
+      exit 1
+    fi
+    if [ "$caddy_before_installed" != true ]; then
+      command -v apt-get >/dev/null 2>&1 || { echo 'caddy is not installed and apt-get is unavailable' >&2; exit 1; }
+      apt-get update
+      if [ -n "${EMBYPROXY_CADDY_VERSION:-}" ]; then
+        DEBIAN_FRONTEND=noninteractive apt-get install -y "caddy=${EMBYPROXY_CADDY_VERSION}"
+      else
+        DEBIAN_FRONTEND=noninteractive apt-get install -y caddy
+      fi
+      if systemctl is-active --quiet caddy.service; then
+        caddy_postinst_active=true
+      fi
+    fi
+    caddy_bin=$(command -v caddy)
+    id caddy >/dev/null 2>&1 || { echo 'trusted Caddy package did not create the caddy service user' >&2; exit 1; }
+    systemctl cat caddy.service >/dev/null 2>&1 || { echo 'trusted Caddy package did not provide caddy.service' >&2; exit 1; }
+    install -d -m 0750 "$caddy_root"
+    caddy_tmp=$(mktemp "$caddy_root/Caddyfile.embyproxy.XXXXXX")
+    caddy_backup="$caddy_marker.previous"
+    caddy_had_working=false
+    caddy_restore() {
+      if [ "$caddy_had_working" = true ]; then
+        cp -p "$caddy_backup" "$caddy_root/Caddyfile" || true
+        systemctl restart caddy.service || true
+      else
+        rm -f "$caddy_root/Caddyfile"
+        systemctl stop caddy.service || true
+      fi
+    }
+    cat > "$caddy_tmp" <<CADDY
+$edge_domain {
+  encode gzip
+  @isolated path /__isolated-media/*
+  respond @isolated 404
+  reverse_proxy 127.0.0.1:18080
+}
+CADDY
+    chown root:caddy "$caddy_tmp"
+    chmod 0640 "$caddy_tmp"
+    "$caddy_bin" validate --config "$caddy_tmp" --adapter caddyfile || {
+      echo 'Caddy configuration validation failed' >&2
+      rm -f "$caddy_tmp"
+      systemctl status caddy.service --no-pager || true
+      journalctl -u caddy.service -n 80 --no-pager || true
+      exit 1
+    }
+    if [ "$caddy_postinst_active" = true ] || systemctl is-active --quiet caddy.service; then
+      systemctl stop caddy.service || {
+        echo 'failed to stop caddy.service before configuration replacement' >&2
+        rm -f "$caddy_tmp"
+        systemctl status caddy.service --no-pager || true
+        journalctl -u caddy.service -n 80 --no-pager || true
+        exit 1
+      }
+    fi
+    if [ "$caddy_managed" = true ] && [ -f "$caddy_root/Caddyfile" ]; then
+      cp -p "$caddy_root/Caddyfile" "$caddy_backup" || {
+        echo 'failed to back up the managed Caddyfile' >&2
+        rm -f "$caddy_tmp"
+        systemctl restart caddy.service || true
+        systemctl status caddy.service --no-pager || true
+        journalctl -u caddy.service -n 80 --no-pager || true
+        exit 1
+      }
+      caddy_had_working=true
+    fi
+    mv -f "$caddy_tmp" "$caddy_root/Caddyfile" || {
+      echo 'failed to atomically install the Caddyfile' >&2
+      caddy_restore
+      systemctl status caddy.service --no-pager || true
+      journalctl -u caddy.service -n 80 --no-pager || true
+      exit 1
+    }
+    systemctl enable caddy.service || {
+      echo 'failed to enable caddy.service' >&2
+      caddy_restore
+      systemctl status caddy.service --no-pager || true
+      journalctl -u caddy.service -n 80 --no-pager || true
+      exit 1
+    }
+    systemctl restart caddy.service || {
+      echo 'failed to restart caddy.service' >&2
+      caddy_restore
+      systemctl status caddy.service --no-pager || true
+      journalctl -u caddy.service -n 80 --no-pager || true
+      exit 1
+    }
+    systemctl is-active --quiet caddy.service || {
+      echo 'caddy.service is not active after restart' >&2
+      caddy_restore
+      systemctl status caddy.service --no-pager || true
+      journalctl -u caddy.service -n 80 --no-pager || true
+      exit 1
+    }
+    caddy_marker_tmp=$(mktemp "$state_dir/caddy-managed.XXXXXX") || {
+      echo 'failed to create managed Caddy ownership marker' >&2
+      caddy_restore
+      systemctl status caddy.service --no-pager || true
+      journalctl -u caddy.service -n 80 --no-pager || true
+      exit 1
+    }
+    if ! printf 'managed_by=embyproxy-edge\ndomain=%%s\n' "$edge_domain" > "$caddy_marker_tmp" || ! chmod 0600 "$caddy_marker_tmp" || ! mv -f "$caddy_marker_tmp" "$caddy_marker"; then
+      echo 'failed to record managed Caddy ownership' >&2
+      rm -f "$caddy_marker_tmp"
+      caddy_restore
+      systemctl status caddy.service --no-pager || true
+      journalctl -u caddy.service -n 80 --no-pager || true
+      exit 1
+    fi
+  fi
+  systemctl daemon-reload
+  systemctl enable --now embyproxy-edge.service
+  wait_http_200() {
+    wait_label="$1"
+    wait_url="$2"
+    wait_attempts="$3"
+    wait_connect_timeout="$4"
+    wait_max_time="$5"
+    wait_delay="$6"
+    wait_protocol="$7"
+    wait_status=000
+    wait_attempt=1
+    while [ "$wait_attempt" -le "$wait_attempts" ]; do
+      if [ "$wait_protocol" = https ]; then
+        wait_status=$(curl --silent --show-error --proto '=https' --tlsv1.2 --connect-timeout "$wait_connect_timeout" --max-time "$wait_max_time" -o /dev/null -w '%%{http_code}' "$wait_url" || true)
+      else
+        wait_status=$(curl --silent --show-error --connect-timeout "$wait_connect_timeout" --max-time "$wait_max_time" -o /dev/null -w '%%{http_code}' "$wait_url" || true)
+      fi
+      [ "$wait_status" = 200 ] && return 0
+      if [ "$wait_attempt" -lt "$wait_attempts" ]; then sleep "$wait_delay"; fi
+      wait_attempt=$((wait_attempt + 1))
+    done
+    echo "$wait_label health check failed after $wait_attempts attempts (last HTTP status: $wait_status)" >&2
+    return 1
+  }
+  wait_http_200 'edge agent local' "http://$edge_probe/health" 5 2 3 4 http || exit 1
+  if [ "$ingress_mode" = external ]; then
+    wait_http_200 'external HTTPS ingress' "$edge_public/health" 9 5 5 5 https || exit 1
+  else
+    wait_http_200 'HTTPS edge ingress' "$edge_public/health" 9 5 5 5 https || exit 1
+  fi
+  systemctl enable --now embyproxy-edge-heartbeat.timer
+fi
 "$lib_dir/embyproxy-edge-heartbeat" || true
 echo 'Edge identity enrolled. This host remains unadmitted until its data-plane configuration reports a passing playback canary.'
-		`, controller, curlProtocol, string(body), url.PathEscape(enrollmentID), url.PathEscape(token), controller, curlProtocol, buildinfo.Current().Commit, curlProtocol, buildinfo.Current().Commit)
+		`, controller, persistedEdgePublic, buildinfo.Current().Version, buildinfo.Current().Commit, curlProtocol, url.PathEscape(enrollmentID), url.PathEscape(token), controller, curlProtocol, buildinfo.Current().Commit, buildinfo.Current().Commit, curlProtocol)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
@@ -314,13 +559,23 @@ func (h *Handler) handleEdgeEnrollment(w http.ResponseWriter, r *http.Request, p
 			return
 		}
 		var body struct {
-			Version string `json:"version"`
-			Commit  string `json:"commit"`
+			Version       string `json:"version"`
+			Commit        string `json:"commit"`
+			PublicAddress string `json:"public_address"`
 		}
 		if !decodeAuthJSON(w, r, &body) {
 			return
 		}
-		node, credential, err := h.store.CompleteEnrollment(r.Context(), parts[0], parts[1], body.Version, body.Commit)
+		publicAddress := strings.TrimSpace(body.PublicAddress)
+		if publicAddress != "" {
+			normalized, normalizeErr := config.NormalizeEdgePublicOrigin(publicAddress)
+			if normalizeErr != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "INVALID_EDGE_PUBLIC_ORIGIN"})
+				return
+			}
+			publicAddress = normalized
+		}
+		node, credential, err := h.store.CompleteEnrollmentWithPublicAddress(r.Context(), parts[0], parts[1], body.Version, body.Commit, publicAddress)
 		if err != nil {
 			writeJSON(w, 403, map[string]any{"ok": false, "error": "ENROLLMENT_DENIED"})
 			return

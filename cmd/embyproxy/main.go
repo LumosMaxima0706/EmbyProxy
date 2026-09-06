@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand"
 	"net"
 	"net/http"
 	"os"
@@ -207,6 +208,7 @@ func main() {
 		}
 		return map[string]any{"available": true, "dry_run": run.DryRun, "success": run.Success, "provider": run.ProviderKind, "propagation": run.PropagationResult, "rollback_ready": run.RollbackReady, "completed_at": run.CompletedAt}
 	})
+	startProxyNodeIngressProbe(ctx, store, log)
 
 	scheduler.New(log, tg, proxyHandler.CleanupTTLMaps).Start(ctx)
 
@@ -264,6 +266,90 @@ func main() {
 			log.Error("shutdown", "server shutdown failed", map[string]any{"event": "serverShutdownFailed", "error": err.Error()})
 		}
 	}
+}
+
+// startProxyNodeIngressProbe keeps controller-to-edge HTTPS reachability
+// independent from the agent's local playback canary. Nodes are admitted only
+// after this probe succeeds and are removed from scheduling on failure.
+func startProxyNodeIngressProbe(ctx context.Context, store *storage.Store, log *logging.Logger) {
+	if store == nil {
+		return
+	}
+	type probeState struct {
+		healthy             bool
+		successes, failures int
+	}
+	states := make(map[string]probeState)
+	client := &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
+	probe := func() {
+		nodes, err := store.ListProxyNodes(ctx)
+		if err != nil {
+			return
+		}
+		for _, node := range nodes {
+			if node.State == "registered" || node.State == "installing" || node.State == "revoked" {
+				continue
+			}
+			origin, err := config.NormalizeEdgePublicOrigin(node.PublicAddress)
+			state := states[node.ID]
+			if err != nil {
+				state.failures++
+				state.successes = 0
+			} else {
+				req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, origin+"/health", nil)
+				if reqErr == nil {
+					resp, doErr := client.Do(req)
+					if doErr == nil {
+						_ = resp.Body.Close()
+						if resp.StatusCode == http.StatusOK {
+							state.successes++
+							state.failures = 0
+						} else {
+							state.failures++
+							state.successes = 0
+						}
+					} else {
+						state.failures++
+						state.successes = 0
+					}
+				} else {
+					state.failures++
+					state.successes = 0
+				}
+			}
+			if state.failures >= 2 {
+				state.healthy = false
+			}
+			if state.successes >= 2 {
+				state.healthy = true
+			}
+			states[node.ID] = state
+			if state.failures >= 2 {
+				_ = store.SetProxyNodeIngressHealth(ctx, node.ID, false, "ingress_probe_failed")
+				continue
+			}
+			if state.successes < 2 {
+				continue
+			}
+			if err := store.SetProxyNodeIngressHealth(ctx, node.ID, true, ""); err != nil && log != nil {
+				log.Warn("proxy-node", "ingress health update failed", map[string]any{"event": "proxyNodeIngressHealthUpdateFailed", "node": node.ID})
+			}
+		}
+	}
+	go func() {
+		probe()
+		for {
+			delay := 30*time.Second + time.Duration(rand.Intn(5000))*time.Millisecond
+			timer := time.NewTimer(delay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+				probe()
+			}
+		}
+	}()
 }
 
 func isolatedTestMedia(w http.ResponseWriter, r *http.Request) {

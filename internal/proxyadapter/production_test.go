@@ -3,6 +3,7 @@ package proxyadapter
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net"
 	"net/http"
@@ -172,7 +173,7 @@ func TestProductionSlugRequiresEnabledPublicRoute(t *testing.T) {
 func TestProductionSlugSelectsEligibleProxyNodeAndFailsOver(t *testing.T) {
 	var edgeAHits, edgeBHits, originHits atomic.Int32
 	newEdge := func(counter *atomic.Int32, marker string) *httptest.Server {
-		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		return httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			counter.Add(1)
 			if r.URL.Path != "/s/demo/video" {
 				t.Errorf("%s path=%q", marker, r.URL.Path)
@@ -203,13 +204,13 @@ func TestProductionSlugSelectsEligibleProxyNodeAndFailsOver(t *testing.T) {
 		{"node-b", "edge-b", edgeB.URL, 2},
 	} {
 		if _, err := store.DB().Exec(`INSERT INTO proxy_nodes
-			(id,name,public_address,enabled,state,priority,quota_bytes,used_bytes,reset_day,reset_timezone,next_reset_at,last_heartbeat_at,playback_healthy,config_synced,agent_version,agent_commit,credential_hash,last_error,created_at,updated_at)
-			VALUES (?,?,?,1,'healthy',?,?,0,1,'UTC',0,?,1,1,'v1','test','hash','',?,?)`,
+			(id,name,public_address,enabled,state,priority,quota_bytes,used_bytes,reset_day,reset_timezone,next_reset_at,last_heartbeat_at,playback_healthy,ingress_healthy,config_synced,agent_version,agent_commit,credential_hash,last_error,created_at,updated_at)
+			VALUES (?,?,?,1,'healthy',?,?,0,1,'UTC',0,?,1,1,1,'v1','test','hash','',?,?)`,
 			node.id, node.name, node.address, node.priority, 0, now, now, now); err != nil {
 			t.Fatal(err)
 		}
 	}
-	router := NewProductionRouter(NewStorageResolver(store, "admin"), mediaproxy.NewExecutor(mediaproxy.Config{AllowPrivateTargets: true}), mediaproxy.Config{}, http.NotFoundHandler())
+	router := NewProductionRouter(NewStorageResolver(store, "admin"), mediaproxy.NewExecutor(mediaproxy.Config{AllowPrivateTargets: true, TLSConfig: &tls.Config{InsecureSkipVerify: true}}), mediaproxy.Config{}, http.NotFoundHandler())
 	first := httptest.NewRecorder()
 	router.ServeHTTP(first, httptest.NewRequest(http.MethodGet, "/s/demo/video", nil))
 	if first.Code != http.StatusPartialContent || first.Body.String() != "a" || edgeAHits.Load() != 1 || edgeBHits.Load() != 0 || originHits.Load() != 0 {
@@ -222,6 +223,17 @@ func TestProductionSlugSelectsEligibleProxyNodeAndFailsOver(t *testing.T) {
 	router.ServeHTTP(second, httptest.NewRequest(http.MethodGet, "/s/demo/video", nil))
 	if second.Code != http.StatusPartialContent || second.Body.String() != "b" || edgeBHits.Load() != 1 || originHits.Load() != 0 {
 		t.Fatalf("second status=%d body=%q edgeA=%d edgeB=%d origin=%d", second.Code, second.Body.String(), edgeAHits.Load(), edgeBHits.Load(), originHits.Load())
+	}
+}
+
+func TestProxyNodePublicAddressRequiresCompleteOrigin(t *testing.T) {
+	if _, err := parseProxyAddress("161.114.13.231"); err == nil {
+		t.Fatal("legacy bare address silently accepted")
+	}
+	for _, raw := range []string{"https://edge.example.net"} {
+		if _, err := parseProxyAddress(raw); err != nil {
+			t.Fatalf("parseProxyAddress(%q): %v", raw, err)
+		}
 	}
 }
 

@@ -1,7 +1,9 @@
 package nodes
 
 import (
+	"net/url"
 	"sort"
+	"strings"
 	"time"
 
 	"embyproxy/internal/storage"
@@ -24,9 +26,15 @@ type Policy struct {
 const heartbeatFreshness = 5 * time.Minute
 
 func Eligible(node storage.ProxyNode, now time.Time) bool {
-	return node.Enabled && (node.State == "online" || node.State == "healthy") &&
+	return node.Enabled && node.State == "healthy" &&
 		node.LastHeartbeatAt > 0 && now.Sub(time.Unix(node.LastHeartbeatAt, 0)) <= heartbeatFreshness &&
-		node.PlaybackHealthy && node.ConfigSynced && (node.QuotaBytes == 0 || node.UsedBytes < node.QuotaBytes)
+		node.PlaybackHealthy && node.ConfigSynced && node.IngressHealthy && secureOrigin(node.PublicAddress) &&
+		(node.QuotaBytes == 0 || node.UsedBytes < node.QuotaBytes)
+}
+
+func secureOrigin(raw string) bool {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	return err == nil && strings.EqualFold(u.Scheme, "https") && u.Host != "" && u.User == nil && u.RawQuery == "" && u.Fragment == ""
 }
 
 func Select(nodes []storage.ProxyNode, mode, currentID string, now time.Time) (Decision, bool) {

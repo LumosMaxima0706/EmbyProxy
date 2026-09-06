@@ -685,13 +685,13 @@ The managed-route runtime now consults the persisted `proxy_nodes` table before
 forwarding `/s/<slug>/...` requests. `StorageResolver` applies the configured
 `PROXY_NODE_SCHEDULER_MODE` (`manual` by default, `smart` when explicitly set)
 and the shared eligibility gates (enabled, fresh heartbeat, healthy playback,
-synced config, available quota). Assignments are retained per admin/slug with
+synced config, independently probed `ingress_healthy`, available quota). Assignments are retained per admin/slug with
 two-minute minimum dwell and smart hysteresis. A node's `public_address` is
-parsed as a strict HTTP(S) origin plus optional safe base path; credentials,
+parsed as a strict HTTPS origin plus optional safe base path; credentials,
 query strings, fragments and invalid targets are rejected. The selected edge
 marker is consumed by the router and stripped before an Emby upstream request,
 preventing routing loops and credential/header leakage. When no eligible node
-has a usable address, the original managed-route target remains the compatibility
+has a usable HTTPS address, the original managed-route target remains the compatibility
 fallback, preserving legacy `/https/...`, 1111 and younoyes behavior.
 
 Each selected request increments a persistent `proxy_node_connections` counter
@@ -934,3 +934,70 @@ This addendum supersedes older provisional statements above where they differ.
   origin is the validated canonical public HTTPS URL, and no token is written
   to request logs. The command must be copied and executed by the operator on
   the disposable VPS; this phase does not execute it.
+
+### Edge playback canary bootstrap correction (2026-09-04)
+
+- Root cause: the generated installer defaulted to `isolated_test_media=false`
+  and an empty `canary_path`, while the edge playback checker requires a Range
+  GET returning HTTP 206 with a non-empty `Content-Range`.
+- The installer now defaults to `isolated_test_media=true` and
+  `/__isolated-media/canary`, validates playback settings before consuming the
+  one-time enrollment, and rejects `false` plus an empty canary explicitly.
+- The edge agent validates the same contract at startup and reports
+  `playback_canary_failed` when an actual canary request fails. Tests cover the
+  built-in handler, external canaries, missing configuration, HTTP 200, and
+  HTTP 206 with/without `Content-Range`.
+- A clean install defaults to the dedicated loopback `127.0.0.1:18080` edge
+  listener and probes its canary through a separate `127.0.0.1:18080` address.
+  The agent has no TLS server, so production ingress must be an approved HTTPS
+  reverse proxy or TLS tunnel/LB; direct public HTTP on `:18080` is not a safe
+  default because Emby authorization headers and API tokens would be cleartext.
+- `proxy_nodes.public_address` is the Controller-to-edge scheduling origin, not
+  the final client publication URL. New records must be a complete HTTPS
+  origin. Bare historical IP/host values are retained for migration visibility
+  but are rejected by the production resolver and never silently converted to
+  cleartext HTTP.
+- Clean bootstrap defaults to a loopback agent plus an isolated Caddy HTTPS
+  ingress. Because this deployment has no approved DNS-provider API, the admin
+  must first create an HTTPS hostname and DNS A/AAAA record pointing at the
+  VPS; the installer derives `EMBYPROXY_EDGE_DOMAIN` from the persisted origin
+  and verifies DNS points at the host. It reuses the distribution-provided
+  `caddy.service`. Before installation it records the existing binary, unit,
+  configuration, and 80/443 listeners. Unknown/third-party Caddy state fails
+  closed; an independent root-owned marker under the edge state directory
+  identifies a prior EmbyProxy installation and permits idempotent reruns.
+  Package post-install auto-start is stopped before writing the managed
+  Caddyfile, which is validated with `caddy validate` before the same official
+  service is enabled/restarted. Startup failures print `systemctl status` and
+  recent `journalctl` diagnostics. The installer then checks
+  `https://edge-domain/health`. Advanced operators can set
+  `EMBYPROXY_EDGE_INGRESS_MODE=external` and
+  `EMBYPROXY_EDGE_EXTERNAL_INGRESS=https://...`; that mode installs no Caddy
+  and requires the external health endpoint to pass.
+  The generated Caddy config rejects `/__isolated-media/*` publicly; that path
+  remains loopback-only for the agent canary.
+- Enrollment carries the selected public origin back to the Controller. The
+  Controller stores it with `ingress_healthy=0`; a 30-second controller-side
+  HTTPS probe updates that flag independently from the agent's local
+  `playback_healthy`. `selectEdge()` requires both health dimensions, fresh
+  heartbeat, synced config, enabled state, and available quota.
+- Full Go tests, vet, formatting, and diff checks passed. No VPS, database,
+  enrollment, token, tunnel, or protected service was changed.
+
+The current operator workflow is two steps: create the node with its real
+HTTPS ingress/DNS, then copy and run the generated bootstrap command. A future
+DNS-provider integration would require a separate approved change; this release
+does not claim zero-precondition DNS automation.
+
+The production data path is:
+
+```text
+Client -> HTTPS PUBLIC_MEDIA_BASE_URL -> Controller publication handler
+  -> selectEdge() -> HTTPS proxy_nodes.public_address + /s/<route-slug>/...
+  -> Caddy HTTPS ingress -> 127.0.0.1:18080 edge-agent
+  -> managed route -> authorized upstream Emby
+```
+
+`listen_addr` and `probe_addr` are local agent addresses. `public_address` is
+the Controller's HTTPS management/data-plane origin, while
+`PUBLIC_MEDIA_BASE_URL` is the client-facing publication origin.

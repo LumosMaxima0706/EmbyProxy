@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	projectconfig "embyproxy/internal/config"
 	"embyproxy/internal/mediaproxy"
 	"embyproxy/internal/proxyadapter"
 	"embyproxy/internal/storage"
@@ -19,6 +21,7 @@ import (
 
 type config struct {
 	ListenAddr        string `json:"listen_addr"`
+	ProbeAddr         string `json:"probe_addr"`
 	DBPath            string `json:"db_path"`
 	Controller        string `json:"controller"`
 	NodeID            string `json:"node_id"`
@@ -39,6 +42,41 @@ type snapshot struct {
 	} `json:"routes"`
 }
 
+func normalizePlaybackConfig(cfg *config) error {
+	cfg.CanaryPath = strings.TrimSpace(cfg.CanaryPath)
+	if cfg.IsolatedTestMedia && cfg.CanaryPath == "" {
+		cfg.CanaryPath = projectconfig.DefaultEdgePlaybackCanaryPath
+	}
+	if cfg.CanaryPath == "" {
+		return errors.New("invalid playback health configuration: no playback canary configured")
+	}
+	if !strings.HasPrefix(cfg.CanaryPath, "/") || strings.ContainsAny(cfg.CanaryPath, "\x00\r\n\t\"'?#") {
+		return errors.New("invalid playback health configuration: canary path must be an absolute URI path")
+	}
+	return nil
+}
+
+func playbackHealth(ctx context.Context, client *http.Client, cfg config) bool {
+	if cfg.CanaryPath == "" {
+		return false
+	}
+	probeAddr := cfg.ProbeAddr
+	if strings.TrimSpace(probeAddr) == "" {
+		probeAddr = "127.0.0.1:18080"
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+probeAddr+cfg.CanaryPath, nil)
+	if err != nil {
+		return false
+	}
+	req.Header.Set("Range", "bytes=0-1023")
+	res, err := client.Do(req)
+	if err != nil {
+		return false
+	}
+	defer res.Body.Close()
+	return res.StatusCode == http.StatusPartialContent && res.Header.Get("Content-Range") != ""
+}
+
 func main() {
 	path := flag.String("config", "", "root-only edge configuration")
 	flag.Parse()
@@ -52,6 +90,9 @@ func main() {
 	var cfg config
 	if err = json.Unmarshal(raw, &cfg); err != nil || cfg.ListenAddr == "" || cfg.DBPath == "" || cfg.Controller == "" || cfg.NodeID == "" || cfg.Credential == "" {
 		panic("invalid edge config")
+	}
+	if err = normalizePlaybackConfig(&cfg); err != nil {
+		panic(err)
 	}
 	store, err := storage.New(cfg.DBPath)
 	if err != nil {
@@ -103,22 +144,8 @@ func main() {
 		}
 		return nil
 	}
-	health := func(ctx context.Context) bool {
-		if cfg.CanaryPath == "" {
-			return false
-		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+cfg.ListenAddr+cfg.CanaryPath, nil)
-		if err != nil {
-			return false
-		}
-		req.Header.Set("Range", "bytes=0-1023")
-		res, err := client.Do(req)
-		if err != nil {
-			return false
-		}
-		defer res.Body.Close()
-		return res.StatusCode == http.StatusPartialContent && res.Header.Get("Content-Range") != ""
-	}
+	// Healthy means the agent can sync routes and serve its configured local
+	// playback canary. Public ingress/TLS reachability is a separate concern.
 	heartbeat := func(ctx context.Context, synced, playback bool, lastErr string) {
 		body, _ := json.Marshal(map[string]any{"credential": cfg.Credential, "version": cfg.Version, "commit": cfg.Commit, "state": map[bool]string{true: "healthy", false: "degraded"}[synced && playback], "playbackHealthy": playback, "configSynced": synced, "lastError": lastErr})
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(cfg.Controller, "/")+"/api/edge/heartbeat/"+cfg.NodeID, strings.NewReader(string(body)))
@@ -138,7 +165,10 @@ func main() {
 			if err != nil {
 				message = "config_sync_failed"
 			}
-			playback := ok && health(context.Background())
+			playback := ok && playbackHealth(context.Background(), client, cfg)
+			if ok && !playback {
+				message = "playback_canary_failed"
+			}
 			heartbeat(context.Background(), ok, playback, message)
 			time.Sleep(30 * time.Second)
 		}

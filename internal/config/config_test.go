@@ -144,6 +144,18 @@ func TestNormalizeEnrollmentControllerURLAllowsExplicitIsolatedLoopback(t *testi
 	}
 }
 
+func TestNormalizeEdgePublicOriginRequiresHTTPSPublicOrigin(t *testing.T) {
+	for _, raw := range []string{"", "161.114.13.231", "http://edge.example.net:18080", "https://127.0.0.1", "https://edge.example"} {
+		if _, err := NormalizeEdgePublicOrigin(raw); err == nil {
+			t.Fatalf("accepted unsafe edge origin %q", raw)
+		}
+	}
+	got, err := NormalizeEdgePublicOrigin("https://edge.example.net/")
+	if err != nil || got != "https://edge.example.net" {
+		t.Fatalf("origin=%q err=%v", got, err)
+	}
+}
+
 func TestLoadDerivesEnrollmentURLFromExplicitOwnerAdminHost(t *testing.T) {
 	t.Setenv("ENROLLMENT_CONTROLLER_URL", "")
 	t.Setenv("OWNER_ADMIN_HOST", "Owner-Admin.149077530.xyz")

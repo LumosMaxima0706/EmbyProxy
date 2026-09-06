@@ -9,7 +9,7 @@ import (
 func TestSelectManualUsesEligibilityAndPriority(t *testing.T) {
 	now := time.Now()
 	base := func(id string, p int) storage.ProxyNode {
-		return storage.ProxyNode{ID: id, Name: id, Priority: p, Enabled: true, State: "healthy", LastHeartbeatAt: now.Unix(), PlaybackHealthy: true, ConfigSynced: true}
+		return storage.ProxyNode{ID: id, Name: id, Priority: p, Enabled: true, State: "healthy", LastHeartbeatAt: now.Unix(), PlaybackHealthy: true, ConfigSynced: true, IngressHealthy: true, PublicAddress: "https://edge.example.net"}
 	}
 	nodes := []storage.ProxyNode{base("late", 2), base("first", 1), base("draining", 0)}
 	nodes[2].State = "draining"
@@ -20,7 +20,7 @@ func TestSelectManualUsesEligibilityAndPriority(t *testing.T) {
 }
 func TestSelectSmartExcludesExhaustedAndStale(t *testing.T) {
 	now := time.Now()
-	good := storage.ProxyNode{ID: "good", Name: "good", Enabled: true, State: "healthy", LastHeartbeatAt: now.Unix(), PlaybackHealthy: true, ConfigSynced: true, QuotaBytes: 100, UsedBytes: 10}
+	good := storage.ProxyNode{ID: "good", Name: "good", Enabled: true, State: "healthy", LastHeartbeatAt: now.Unix(), PlaybackHealthy: true, ConfigSynced: true, IngressHealthy: true, PublicAddress: "https://edge.example.net", QuotaBytes: 100, UsedBytes: 10}
 	exhausted := good
 	exhausted.ID = "bad"
 	exhausted.UsedBytes = 100
@@ -36,7 +36,7 @@ func TestSelectSmartExcludesExhaustedAndStale(t *testing.T) {
 func TestSelectWithPolicyHysteresisAndImmediateFailover(t *testing.T) {
 	now := time.Unix(1700000000, 0)
 	base := func(id string) storage.ProxyNode {
-		return storage.ProxyNode{ID: id, Name: id, Enabled: true, State: "healthy", LastHeartbeatAt: now.Unix(), PlaybackHealthy: true, ConfigSynced: true, QuotaBytes: 100, UsedBytes: 10}
+		return storage.ProxyNode{ID: id, Name: id, Enabled: true, State: "healthy", LastHeartbeatAt: now.Unix(), PlaybackHealthy: true, ConfigSynced: true, IngressHealthy: true, PublicAddress: "https://edge.example.net", QuotaBytes: 100, UsedBytes: 10}
 	}
 	a, b := base("a"), base("b")
 	a.UsedBytes = 90
@@ -48,5 +48,13 @@ func TestSelectWithPolicyHysteresisAndImmediateFailover(t *testing.T) {
 	decision, ok = SelectWithPolicy([]storage.ProxyNode{a, b}, Policy{Mode: "smart", CurrentID: "a", CurrentSince: now, MinimumDwell: time.Hour}, now.Add(time.Minute))
 	if !ok || decision.NodeID != "b" {
 		t.Fatalf("failover decision=%+v ok=%v", decision, ok)
+	}
+}
+
+func TestEligibleRejectsUnhealthyIngress(t *testing.T) {
+	now := time.Now()
+	node := storage.ProxyNode{ID: "edge", PublicAddress: "https://edge.example.net", Enabled: true, State: "healthy", LastHeartbeatAt: now.Unix(), PlaybackHealthy: true, ConfigSynced: true}
+	if Eligible(node, now) {
+		t.Fatal("node with failed ingress probe was selectable")
 	}
 }

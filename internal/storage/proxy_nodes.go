@@ -60,6 +60,7 @@ type ProxyNode struct {
 	NextResetAt       int64  `json:"next_reset_at"`
 	LastHeartbeatAt   int64  `json:"last_heartbeat_at"`
 	PlaybackHealthy   bool   `json:"playback_healthy"`
+	IngressHealthy    bool   `json:"ingress_healthy"`
 	ConfigSynced      bool   `json:"config_synced"`
 	AgentVersion      string `json:"agent_version"`
 	AgentCommit       string `json:"agent_commit"`
@@ -86,7 +87,7 @@ CREATE TABLE IF NOT EXISTS proxy_nodes (
  enabled INTEGER NOT NULL DEFAULT 1, state TEXT NOT NULL DEFAULT 'registered', priority INTEGER NOT NULL DEFAULT 0,
  quota_bytes INTEGER NOT NULL DEFAULT 0, used_bytes INTEGER NOT NULL DEFAULT 0,
  reset_day INTEGER NOT NULL DEFAULT 1, reset_timezone TEXT NOT NULL DEFAULT 'Asia/Shanghai', next_reset_at INTEGER NOT NULL DEFAULT 0,
- last_heartbeat_at INTEGER NOT NULL DEFAULT 0, playback_healthy INTEGER NOT NULL DEFAULT 0, config_synced INTEGER NOT NULL DEFAULT 0,
+ last_heartbeat_at INTEGER NOT NULL DEFAULT 0, playback_healthy INTEGER NOT NULL DEFAULT 0, ingress_healthy INTEGER NOT NULL DEFAULT 0, config_synced INTEGER NOT NULL DEFAULT 0,
  agent_version TEXT NOT NULL DEFAULT '', agent_commit TEXT NOT NULL DEFAULT '', credential_hash TEXT NOT NULL DEFAULT '',
  last_error TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
 );
@@ -105,6 +106,9 @@ CREATE TABLE IF NOT EXISTS proxy_node_connections (
 	if err != nil {
 		return err
 	}
+	if err := s.ensureProxyNodeColumn(ctx, "ingress_healthy", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
 	_, err = s.db.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES ('proxy_nodes_v1', ?)`, time.Now().Unix())
 	if err != nil {
 		return err
@@ -113,7 +117,43 @@ CREATE TABLE IF NOT EXISTS proxy_node_connections (
 	if err != nil {
 		return err
 	}
+	_, err = s.db.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES ('proxy_nodes_v3_ingress_health', ?)`, time.Now().Unix())
+	if err != nil {
+		return err
+	}
 	return s.backfillProxyNodeResetSchedules(ctx, time.Now())
+}
+
+func (s *Store) ensureProxyNodeColumn(ctx context.Context, name, definition string) error {
+	rows, err := s.db.QueryContext(ctx, "PRAGMA table_info(proxy_nodes)")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	found := false
+	for rows.Next() {
+		var cid int
+		var column, typ string
+		var notNull, primary int
+		var defaultValue sql.NullString
+		if err := rows.Scan(&cid, &column, &typ, &notNull, &defaultValue, &primary); err != nil {
+			return err
+		}
+		if column == name {
+			found = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if found {
+		return nil
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, "ALTER TABLE proxy_nodes ADD COLUMN "+name+" "+definition)
+	return err
 }
 
 func (s *Store) backfillProxyNodeResetSchedules(ctx context.Context, now time.Time) error {
@@ -268,7 +308,7 @@ func (s *Store) CreateProxyNode(ctx context.Context, node ProxyNode, enrollmentT
 		return Enrollment{}, "", err
 	}
 	defer tx.Rollback()
-	if _, err = tx.ExecContext(ctx, `INSERT INTO proxy_nodes (id,name,public_address,enabled,state,priority,quota_bytes,used_bytes,reset_day,reset_timezone,next_reset_at,last_heartbeat_at,playback_healthy,config_synced,agent_version,agent_commit,credential_hash,last_error,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, node.ID, node.Name, node.PublicAddress, 1, node.State, node.Priority, node.QuotaBytes, 0, node.ResetDay, node.ResetTimezone, node.NextResetAt, 0, 0, 0, "", "", "", "", now, now); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT INTO proxy_nodes (id,name,public_address,enabled,state,priority,quota_bytes,used_bytes,reset_day,reset_timezone,next_reset_at,last_heartbeat_at,playback_healthy,ingress_healthy,config_synced,agent_version,agent_commit,credential_hash,last_error,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, node.ID, node.Name, node.PublicAddress, 1, node.State, node.Priority, node.QuotaBytes, 0, node.ResetDay, node.ResetTimezone, node.NextResetAt, 0, 0, 0, 0, "", "", "", "", now, now); err != nil {
 		return Enrollment{}, "", err
 	}
 	if _, err = tx.ExecContext(ctx, `INSERT INTO proxy_node_enrollments (id,node_id,token_hash,expires_at,created_at) VALUES (?,?,?,?,?)`, enrollment.ID, node.ID, nodeHash(token), enrollment.ExpiresAt, now); err != nil {
@@ -325,12 +365,13 @@ func (s *Store) RegenerateProxyNodeEnrollment(ctx context.Context, nodeID string
 func scanProxyNode(row interface{ Scan(...any) error }) (ProxyNode, error) {
 	var n ProxyNode
 	var enabled, playback, synced int
-	err := row.Scan(&n.ID, &n.Name, &n.PublicAddress, &enabled, &n.State, &n.Priority, &n.QuotaBytes, &n.UsedBytes, &n.ResetDay, &n.ResetTimezone, &n.NextResetAt, &n.LastHeartbeatAt, &playback, &synced, &n.AgentVersion, &n.AgentCommit, &n.LastError, &n.CreatedAt, &n.UpdatedAt)
-	n.Enabled, n.PlaybackHealthy, n.ConfigSynced = enabled != 0, playback != 0, synced != 0
+	var ingress int
+	err := row.Scan(&n.ID, &n.Name, &n.PublicAddress, &enabled, &n.State, &n.Priority, &n.QuotaBytes, &n.UsedBytes, &n.ResetDay, &n.ResetTimezone, &n.NextResetAt, &n.LastHeartbeatAt, &playback, &ingress, &synced, &n.AgentVersion, &n.AgentCommit, &n.LastError, &n.CreatedAt, &n.UpdatedAt)
+	n.Enabled, n.PlaybackHealthy, n.IngressHealthy, n.ConfigSynced = enabled != 0, playback != 0, ingress != 0, synced != 0
 	return n, err
 }
 
-const proxyNodeFields = `id,name,public_address,enabled,state,priority,quota_bytes,used_bytes,reset_day,reset_timezone,next_reset_at,last_heartbeat_at,playback_healthy,config_synced,agent_version,agent_commit,last_error,created_at,updated_at`
+const proxyNodeFields = `id,name,public_address,enabled,state,priority,quota_bytes,used_bytes,reset_day,reset_timezone,next_reset_at,last_heartbeat_at,playback_healthy,ingress_healthy,config_synced,agent_version,agent_commit,last_error,created_at,updated_at`
 
 func (s *Store) ListProxyNodes(ctx context.Context) ([]ProxyNode, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT `+proxyNodeFields+` FROM proxy_nodes ORDER BY priority, name`)
@@ -371,7 +412,7 @@ func (s *Store) ReplaceProxyNodeSnapshot(ctx context.Context, nodes []ProxyNode)
 			return errors.New("invalid_proxy_node_snapshot")
 		}
 		seen[n.ID] = struct{}{}
-		_, err = tx.ExecContext(ctx, `INSERT INTO proxy_nodes (id,name,public_address,enabled,state,priority,quota_bytes,used_bytes,reset_day,reset_timezone,next_reset_at,last_heartbeat_at,playback_healthy,config_synced,agent_version,agent_commit,credential_hash,last_error,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,public_address=excluded.public_address,enabled=excluded.enabled,state=excluded.state,priority=excluded.priority,quota_bytes=excluded.quota_bytes,used_bytes=excluded.used_bytes,reset_day=excluded.reset_day,reset_timezone=excluded.reset_timezone,next_reset_at=excluded.next_reset_at,last_heartbeat_at=excluded.last_heartbeat_at,playback_healthy=excluded.playback_healthy,config_synced=excluded.config_synced,agent_version=excluded.agent_version,agent_commit=excluded.agent_commit,last_error=excluded.last_error,updated_at=excluded.updated_at`, n.ID, n.Name, n.PublicAddress, boolInt(n.Enabled), n.State, n.Priority, n.QuotaBytes, n.UsedBytes, n.ResetDay, n.ResetTimezone, n.NextResetAt, n.LastHeartbeatAt, boolInt(n.PlaybackHealthy), boolInt(n.ConfigSynced), n.AgentVersion, n.AgentCommit, "", redactFailoverStorageText(n.LastError), n.CreatedAt, n.UpdatedAt)
+		_, err = tx.ExecContext(ctx, `INSERT INTO proxy_nodes (id,name,public_address,enabled,state,priority,quota_bytes,used_bytes,reset_day,reset_timezone,next_reset_at,last_heartbeat_at,playback_healthy,ingress_healthy,config_synced,agent_version,agent_commit,credential_hash,last_error,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,public_address=excluded.public_address,enabled=excluded.enabled,state=excluded.state,priority=excluded.priority,quota_bytes=excluded.quota_bytes,used_bytes=excluded.used_bytes,reset_day=excluded.reset_day,reset_timezone=excluded.reset_timezone,next_reset_at=excluded.next_reset_at,last_heartbeat_at=excluded.last_heartbeat_at,playback_healthy=excluded.playback_healthy,ingress_healthy=excluded.ingress_healthy,config_synced=excluded.config_synced,agent_version=excluded.agent_version,agent_commit=excluded.agent_commit,last_error=excluded.last_error,updated_at=excluded.updated_at`, n.ID, n.Name, n.PublicAddress, boolInt(n.Enabled), n.State, n.Priority, n.QuotaBytes, n.UsedBytes, n.ResetDay, n.ResetTimezone, n.NextResetAt, n.LastHeartbeatAt, boolInt(n.PlaybackHealthy), boolInt(n.IngressHealthy), boolInt(n.ConfigSynced), n.AgentVersion, n.AgentCommit, "", redactFailoverStorageText(n.LastError), n.CreatedAt, n.UpdatedAt)
 		if err != nil {
 			return err
 		}
@@ -410,11 +451,24 @@ func (s *Store) GetProxyNode(ctx context.Context, id string) (*ProxyNode, error)
 	n.ActiveConnections, _ = s.ProxyNodeActiveConnections(ctx, n.ID)
 	return &n, nil
 }
+
+// GetProxyNodeForEnrollment returns the node bound to an enrollment without
+// exposing token material. It is used to bind bootstrap preflight to the
+// controller's persisted edge origin.
+func (s *Store) GetProxyNodeForEnrollment(ctx context.Context, enrollmentID string) (*ProxyNode, error) {
+	fields := "n." + strings.ReplaceAll(proxyNodeFields, ",", ",n.")
+	row := s.db.QueryRowContext(ctx, `SELECT `+fields+` FROM proxy_nodes n JOIN proxy_node_enrollments e ON e.node_id=n.id WHERE e.id=?`, enrollmentID)
+	node, err := scanProxyNode(row)
+	if err != nil {
+		return nil, err
+	}
+	return &node, nil
+}
 func (s *Store) UpdateProxyNode(ctx context.Context, n ProxyNode) error {
 	if n.ID == "" || !validNodeName(n.Name) || n.QuotaBytes < 0 || n.UsedBytes < 0 || n.ResetDay < 1 || n.ResetDay > 31 {
 		return errors.New("invalid_proxy_node")
 	}
-	_, err := s.db.ExecContext(ctx, `UPDATE proxy_nodes SET name=?,public_address=?,enabled=?,state=?,priority=?,quota_bytes=?,used_bytes=?,reset_day=?,reset_timezone=?,next_reset_at=?,playback_healthy=?,config_synced=?,last_error=?,updated_at=? WHERE id=?`, n.Name, n.PublicAddress, boolInt(n.Enabled), n.State, n.Priority, n.QuotaBytes, n.UsedBytes, n.ResetDay, n.ResetTimezone, n.NextResetAt, boolInt(n.PlaybackHealthy), boolInt(n.ConfigSynced), redactFailoverStorageText(n.LastError), time.Now().Unix(), n.ID)
+	_, err := s.db.ExecContext(ctx, `UPDATE proxy_nodes SET name=?,public_address=?,enabled=?,state=?,priority=?,quota_bytes=?,used_bytes=?,reset_day=?,reset_timezone=?,next_reset_at=?,playback_healthy=?,ingress_healthy=?,config_synced=?,last_error=?,updated_at=? WHERE id=?`, n.Name, n.PublicAddress, boolInt(n.Enabled), n.State, n.Priority, n.QuotaBytes, n.UsedBytes, n.ResetDay, n.ResetTimezone, n.NextResetAt, boolInt(n.PlaybackHealthy), boolInt(n.IngressHealthy), boolInt(n.ConfigSynced), redactFailoverStorageText(n.LastError), time.Now().Unix(), n.ID)
 	return err
 }
 
@@ -566,6 +620,17 @@ func (s *Store) DrainProxyNode(ctx context.Context, id string) error {
 	return tx.Commit()
 }
 func (s *Store) CompleteEnrollment(ctx context.Context, enrollmentID, token, version, commit string) (ProxyNode, string, error) {
+	return s.completeEnrollment(ctx, enrollmentID, token, version, commit, "")
+}
+
+// CompleteEnrollmentWithPublicAddress records the HTTPS ingress origin chosen
+// by the installer before the node can become selectable. An empty origin
+// preserves the node's existing value for older installers.
+func (s *Store) CompleteEnrollmentWithPublicAddress(ctx context.Context, enrollmentID, token, version, commit, publicAddress string) (ProxyNode, string, error) {
+	return s.completeEnrollment(ctx, enrollmentID, token, version, commit, strings.TrimSpace(publicAddress))
+}
+
+func (s *Store) completeEnrollment(ctx context.Context, enrollmentID, token, version, commit, publicAddress string) (ProxyNode, string, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return ProxyNode{}, "", err
@@ -587,8 +652,14 @@ func (s *Store) CompleteEnrollment(ctx context.Context, enrollmentID, token, ver
 	if _, err = tx.ExecContext(ctx, `UPDATE proxy_node_enrollments SET consumed_at=? WHERE id=?`, now, enrollmentID); err != nil {
 		return ProxyNode{}, "", err
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE proxy_nodes SET state='installing',credential_hash=?,agent_version=?,agent_commit=?,updated_at=? WHERE id=?`, nodeHash(credential), version, commit, now, nodeID); err != nil {
-		return ProxyNode{}, "", err
+	if publicAddress == "" {
+		if _, err = tx.ExecContext(ctx, `UPDATE proxy_nodes SET state='installing',credential_hash=?,agent_version=?,agent_commit=?,updated_at=? WHERE id=?`, nodeHash(credential), version, commit, now, nodeID); err != nil {
+			return ProxyNode{}, "", err
+		}
+	} else {
+		if _, err = tx.ExecContext(ctx, `UPDATE proxy_nodes SET state='installing',public_address=?,ingress_healthy=0,credential_hash=?,agent_version=?,agent_commit=?,updated_at=? WHERE id=?`, publicAddress, nodeHash(credential), version, commit, now, nodeID); err != nil {
+			return ProxyNode{}, "", err
+		}
 	}
 	if err = tx.Commit(); err != nil {
 		return ProxyNode{}, "", err
@@ -619,13 +690,51 @@ func (s *Store) HeartbeatProxyNode(ctx context.Context, id, credential, version,
 	if state != "online" && state != "healthy" && state != "degraded" {
 		return errors.New("invalid_node_state")
 	}
-	result, err := s.db.ExecContext(ctx, `UPDATE proxy_nodes SET state=?,last_heartbeat_at=?,playback_healthy=?,config_synced=?,agent_version=?,agent_commit=?,last_error=?,updated_at=? WHERE id=? AND credential_hash=? AND state!='revoked'`, state, time.Now().Unix(), boolInt(playback), boolInt(synced), version, commit, redactFailoverStorageText(lastError), time.Now().Unix(), id, nodeHash(credential))
+	// Agent heartbeats report local capability only. Public ingress health is
+	// written by the controller-side probe and remains an independent gate.
+	if !playback || !synced {
+		state = "degraded"
+	} else {
+		var ingress int
+		if err := s.db.QueryRowContext(ctx, `SELECT ingress_healthy FROM proxy_nodes WHERE id=? AND credential_hash=? AND state!='revoked'`, id, nodeHash(credential)).Scan(&ingress); err == nil && ingress == 0 {
+			state = "online"
+		}
+	}
+	now := time.Now().Unix()
+	result, err := s.db.ExecContext(ctx, `UPDATE proxy_nodes SET state=?,last_heartbeat_at=?,playback_healthy=?,config_synced=?,agent_version=?,agent_commit=?,last_error=?,updated_at=? WHERE id=? AND credential_hash=? AND state!='revoked'`, state, now, boolInt(playback), boolInt(synced), version, commit, redactFailoverStorageText(lastError), now, id, nodeHash(credential))
 	if err != nil {
 		return err
 	}
 	n, _ := result.RowsAffected()
 	if n != 1 {
 		return errors.New("node_credential_denied")
+	}
+	return nil
+}
+
+// SetProxyNodeIngressHealth records the controller's independent HTTPS
+// reachability probe. It never changes playback_healthy.
+func (s *Store) SetProxyNodeIngressHealth(ctx context.Context, id string, healthy bool, lastError string) error {
+	now := time.Now().Unix()
+	state := "degraded"
+	if healthy {
+		var playback, synced int
+		if err := s.db.QueryRowContext(ctx, `SELECT playback_healthy,config_synced FROM proxy_nodes WHERE id=? AND state!='revoked'`, id).Scan(&playback, &synced); err != nil {
+			return err
+		}
+		if playback != 0 && synced != 0 {
+			state = "healthy"
+		} else {
+			state = "online"
+		}
+	}
+	result, err := s.db.ExecContext(ctx, `UPDATE proxy_nodes SET ingress_healthy=?,state=CASE WHEN state IN ('registered','installing','revoked') THEN state ELSE ? END,last_error=CASE WHEN ?='' THEN last_error ELSE ? END,updated_at=? WHERE id=? AND state!='revoked'`, boolInt(healthy), state, lastError, redactFailoverStorageText(lastError), now, id)
+	if err != nil {
+		return err
+	}
+	changed, _ := result.RowsAffected()
+	if changed != 1 {
+		return sql.ErrNoRows
 	}
 	return nil
 }

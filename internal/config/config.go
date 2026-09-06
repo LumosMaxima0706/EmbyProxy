@@ -22,6 +22,10 @@ type Defaults struct {
 	ProgressThrottleMS int64
 }
 
+// DefaultEdgePlaybackCanaryPath is served by the edge agent's isolated media
+// handler and is intentionally stable so bootstrap and health checks agree.
+const DefaultEdgePlaybackCanaryPath = "/__isolated-media/canary"
+
 type Config struct {
 	CWD                     string
 	DBPath                  string
@@ -103,6 +107,34 @@ func NormalizeEnrollmentControllerURL(raw string, allowInsecureLoopback bool) (s
 		return "", fmt.Errorf("ENROLLMENT_CONTROLLER_URL must not use a loopback host")
 	}
 	return scheme + "://" + parsed.Host, nil
+}
+
+// NormalizeEdgePublicOrigin validates the HTTPS origin that the controller
+// uses to reach an enrolled edge. Unlike the local bind/probe address, this
+// value must be publicly routable and must not contain a path or credentials.
+func NormalizeEdgePublicOrigin(raw string) (string, error) {
+	raw = strings.TrimRight(strings.TrimSpace(raw), "/")
+	if raw == "" || strings.ContainsAny(raw, "\x00\r\n\t <>{}") {
+		return "", fmt.Errorf("edge public origin must be configured")
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") {
+		return "", fmt.Errorf("edge public origin must be an HTTPS origin")
+	}
+	host := parsed.Hostname()
+	if host == "" || isLoopbackHost(host) {
+		return "", fmt.Errorf("edge public origin must be publicly reachable")
+	}
+	hostLower := strings.ToLower(strings.TrimSuffix(host, "."))
+	for _, suffix := range []string{".example", ".invalid", ".test", ".localhost"} {
+		if strings.HasSuffix(hostLower, suffix) || hostLower == strings.TrimPrefix(suffix, ".") {
+			return "", fmt.Errorf("edge public origin must not use a placeholder host")
+		}
+	}
+	if ip := net.ParseIP(host); ip != nil && (ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified()) {
+		return "", fmt.Errorf("edge public origin must be publicly reachable")
+	}
+	return "https://" + parsed.Host, nil
 }
 
 type ProxyEnv struct {

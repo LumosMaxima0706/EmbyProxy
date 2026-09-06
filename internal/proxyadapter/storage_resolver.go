@@ -193,7 +193,7 @@ func parseProxyAddress(raw string) (mediaproxy.Target, error) {
 		return mediaproxy.Target{}, ErrInvalidTarget
 	}
 	parsed, err := url.Parse(value)
-	if err != nil || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Hostname() == "" {
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Hostname() == "" {
 		return mediaproxy.Target{}, ErrInvalidTarget
 	}
 	return parseServerTarget(value)
