@@ -183,6 +183,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleProxyNodesAPI(w, r, path)
 		return
 	}
+	if strings.HasPrefix(path, "/api/admin/proxy-node-jobs/") {
+		h.handleProxyNodeJobsAPI(w, r, path)
+		return
+	}
 	if strings.HasPrefix(path, "/api/admin/emby-servers/") {
 		h.handlePublicationAPI(w, r, path)
 		return

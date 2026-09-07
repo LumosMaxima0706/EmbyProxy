@@ -315,6 +315,36 @@ func TestProxyNodeBootstrapRegenerationWorksForRevokedUnadmittedNode(t *testing.
 	}
 }
 
+func TestProxyNodeLifecycleAPIRejectsEnableForRevokedAndCreatesJob(t *testing.T) {
+	h := newAuthTestHandler(t, config.Config{AdminToken: "strong-admin-token", EnrollmentControllerURL: "https://owner-admin.149077530.xyz"})
+	login := serveAdminJSON(t, h, http.MethodPost, "/admin/auth/login", map[string]any{"token": "strong-admin-token"}, nil)
+	cookie := login.Result().Cookies()[0]
+	created := serveAdminJSON(t, h, http.MethodPost, "/api/admin/proxy-nodes", map[string]any{"name": "edge-lifecycle-api", "public_address": "https://edge-lifecycle.example.net", "reset_day": 1}, cookie)
+	var body map[string]any
+	if err := json.Unmarshal(created.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	id := body["enrollment"].(map[string]any)["node_id"].(string)
+	if resp := serveAdminJSON(t, h, http.MethodPost, "/api/admin/proxy-nodes/"+id+"/revoke?force=true", nil, cookie); resp.Code != http.StatusOK {
+		t.Fatalf("revoke=%d %s", resp.Code, resp.Body.String())
+	}
+	if resp := serveAdminJSON(t, h, http.MethodPatch, "/api/admin/proxy-nodes/"+id, map[string]any{"enabled": true}, cookie); resp.Code != http.StatusConflict {
+		t.Fatalf("enable revoked=%d %s", resp.Code, resp.Body.String())
+	}
+	decom := serveAdminJSON(t, h, http.MethodPost, "/api/admin/proxy-nodes/"+id+"/decommission", map[string]any{"confirm_name": "edge-lifecycle-api"}, cookie)
+	if decom.Code != http.StatusAccepted || !strings.Contains(decom.Body.String(), "remote_cleanup_pending") {
+		t.Fatalf("decommission=%d %s", decom.Code, decom.Body.String())
+	}
+	var jobBody map[string]any
+	if err := json.Unmarshal(decom.Body.Bytes(), &jobBody); err != nil {
+		t.Fatal(err)
+	}
+	job := jobBody["job"].(map[string]any)["id"].(string)
+	if got := serveAdminJSON(t, h, http.MethodGet, "/api/admin/proxy-node-jobs/"+job, nil, cookie); got.Code != http.StatusOK {
+		t.Fatalf("job=%d %s", got.Code, got.Body.String())
+	}
+}
+
 func TestBootstrapAllowsCleanHostToChooseHTTPSIngressAtInstallTime(t *testing.T) {
 	h := newAuthTestHandler(t, config.Config{AdminToken: "strong-admin-token", EnrollmentControllerURL: "https://owner-admin.149077530.xyz"})
 	enrollment, token, err := h.store.CreateProxyNode(context.Background(), storage.ProxyNode{Name: "edge-no-ingress", PublicAddress: "https://edge-no-ingress.example.net", ResetDay: 1}, 15*time.Minute)

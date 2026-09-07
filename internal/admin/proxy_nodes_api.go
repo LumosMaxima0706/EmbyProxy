@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"io"
@@ -30,12 +31,18 @@ func (h *Handler) handleProxyNodesAPI(w http.ResponseWriter, r *http.Request, pa
 	}
 	if r.Method == http.MethodPost && path == "/api/admin/proxy-nodes" {
 		var body struct {
-			Name          string `json:"name"`
-			PublicAddress string `json:"public_address"`
-			QuotaBytes    int64  `json:"quota_bytes"`
-			ResetDay      int    `json:"reset_day"`
-			ResetTimezone string `json:"reset_timezone"`
-			Priority      int    `json:"priority"`
+			Name                    string `json:"name"`
+			PublicAddress           string `json:"public_address"`
+			QuotaBytes              int64  `json:"quota_bytes"`
+			ResetDay                int    `json:"reset_day"`
+			ResetTimezone           string `json:"reset_timezone"`
+			Priority                int    `json:"priority"`
+			DNSRecordID             string `json:"dns_record_id"`
+			DNSOwned                bool   `json:"dns_owned"`
+			CaddyInstalledByProject bool   `json:"caddy_installed_by_project"`
+			CaddyConfigOwned        bool   `json:"caddy_config_owned"`
+			TLSStateOwned           bool   `json:"tls_state_owned"`
+			EdgeUnitOwned           bool   `json:"edge_unit_owned"`
 		}
 		if !decodeAuthJSON(w, r, &body) {
 			return
@@ -60,6 +67,10 @@ func (h *Handler) handleProxyNodesAPI(w http.ResponseWriter, r *http.Request, pa
 		enrollment, token, err := h.store.CreateProxyNode(ctx, storage.ProxyNode{Name: body.Name, PublicAddress: body.PublicAddress, QuotaBytes: body.QuotaBytes, ResetDay: body.ResetDay, ResetTimezone: body.ResetTimezone, Priority: body.Priority}, 15*time.Minute)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "INVALID_NODE"})
+			return
+		}
+		if err := h.store.SetProxyNodeOwnership(ctx, enrollment.NodeID, body.DNSRecordID, body.DNSOwned, body.CaddyInstalledByProject, body.CaddyConfigOwned, body.TLSStateOwned, body.EdgeUnitOwned); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": "NODE_OWNERSHIP_FAILED"})
 			return
 		}
 		writeJSON(w, http.StatusCreated, map[string]any{"ok": true, "enrollment": enrollment, "install_command": buildEnrollmentCommand(controllerURL, enrollment.ID, token)})
@@ -100,6 +111,92 @@ func (h *Handler) handleProxyNodesAPI(w http.ResponseWriter, r *http.Request, pa
 			writeJSON(w, 200, map[string]any{"ok": true, "state": map[bool]string{true: "revoked", false: "draining"}[force], "force": force})
 			return
 		}
+		if r.Method == http.MethodPost && len(parts) == 2 && parts[1] == "drain" {
+			if err := h.store.BeginProxyNodeDrain(ctx, id); err != nil {
+				writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "error": "DRAIN_FAILED"})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "state": "draining"})
+			return
+		}
+		if r.Method == http.MethodPost && len(parts) == 2 && parts[1] == "decommission" {
+			var body struct {
+				Force       bool   `json:"force"`
+				ConfirmName string `json:"confirm_name"`
+			}
+			if !decodeAuthJSON(w, r, &body) {
+				return
+			}
+			node, err := h.store.GetProxyNode(ctx, id)
+			if err != nil || node == nil {
+				writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "error": "NODE_NOT_FOUND"})
+				return
+			}
+			if strings.TrimSpace(body.ConfirmName) != node.Name {
+				writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "NODE_NAME_CONFIRMATION_REQUIRED"})
+				return
+			}
+			if node.State == "revoked" && !body.Force {
+				// Revoked nodes can be safely archived without a remote identity.
+			}
+			active := h.proxyNodeIsActive(node)
+			if active && !body.Force {
+				items, _ := h.store.ListProxyNodes(ctx)
+				fallback := false
+				for _, candidate := range items {
+					if candidate.ID != id && candidate.Enabled && candidate.State == "healthy" && candidate.PlaybackHealthy && candidate.IngressHealthy && candidate.ConfigSynced {
+						fallback = true
+						break
+					}
+				}
+				if !fallback {
+					writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "error": "ACTIVE_NODE_REQUIRES_HEALTHY_FALLBACK", "force_required": true})
+					return
+				}
+				if err := h.switchProxyNodeForDecommission(ctx, id, items); err != nil {
+					writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "error": "ACTIVE_SWITCH_FAILED"})
+					return
+				}
+			}
+			job, err := h.store.DecommissionProxyNode(ctx, id, body.Force)
+			if err != nil {
+				writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "error": "DECOMMISSION_FAILED"})
+				return
+			}
+			writeJSON(w, http.StatusAccepted, map[string]any{"ok": true, "job": job})
+			return
+		}
+		if r.Method == http.MethodGet && len(parts) == 3 && parts[1] == "decommission" && parts[2] == "preview" {
+			node, err := h.store.GetProxyNode(ctx, id)
+			if err != nil || node == nil {
+				writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "error": "NODE_NOT_FOUND"})
+				return
+			}
+			items, _ := h.store.ListProxyNodes(ctx)
+			hasFallback := false
+			for _, candidate := range items {
+				if candidate.ID != id && candidate.Enabled && candidate.State == "healthy" && candidate.PlaybackHealthy && candidate.IngressHealthy && candidate.ConfigSynced {
+					hasFallback = true
+					break
+				}
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "node": node, "preview": map[string]any{"scheduler_exclude": true, "revoke_identity": true, "remove_controller_state": true, "remove_dns": node.DNSOwned, "cleanup_remote": node.LastHeartbeatAt > 0, "cleanup_caddy": node.CaddyConfigOwned || node.CaddyInstalledByProject, "cleanup_tls": node.TLSStateOwned, "force_required": h.proxyNodeIsActive(node) && !hasFallback}})
+			return
+		}
+		if r.Method == http.MethodPost && len(parts) == 3 && parts[1] == "decommission" && parts[2] == "retry" {
+			job, err := h.store.LatestProxyNodeDecommissionJob(ctx, id)
+			if err != nil || job == nil {
+				writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "error": "JOB_NOT_FOUND"})
+				return
+			}
+			job, err = h.store.RetryProxyNodeDecommission(ctx, job.ID)
+			if err != nil {
+				writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "error": "RETRY_FAILED"})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "job": job})
+			return
+		}
 		if r.Method == http.MethodPost && len(parts) == 2 && parts[1] == "bootstrap" {
 			controllerURL, err := config.NormalizeEnrollmentControllerURL(h.cfg.EnrollmentControllerURL, false)
 			if err != nil {
@@ -125,7 +222,11 @@ func (h *Handler) handleProxyNodesAPI(w http.ResponseWriter, r *http.Request, pa
 				return
 			}
 			if v, ok := body["enabled"].(bool); ok {
-				n.Enabled = v
+				if err := h.store.SetProxyNodeScheduling(ctx, id, v); err != nil {
+					writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "error": "REVOKED_NODE_REQUIRES_REENROLLMENT"})
+					return
+				}
+				n, _ = h.store.GetProxyNode(ctx, id)
 			}
 			if v, ok := body["public_address"].(string); ok {
 				if strings.TrimSpace(v) == "" {
@@ -182,6 +283,66 @@ func (h *Handler) handleProxyNodesAPI(w http.ResponseWriter, r *http.Request, pa
 		}
 	}
 	http.NotFound(w, r)
+}
+
+func (h *Handler) proxyNodeIsActive(node *storage.ProxyNode) bool {
+	if node == nil {
+		return false
+	}
+	state := h.readExternalFailoverState()
+	for _, key := range []string{"active_node_id", "active_target"} {
+		if value, ok := state[key].(string); ok && (value == node.ID || strings.EqualFold(value, node.Name)) {
+			return true
+		}
+	}
+	return node.Priority == 1
+}
+
+func (h *Handler) switchProxyNodeForDecommission(ctx context.Context, id string, items []storage.ProxyNode) error {
+	ordered := make([]string, 0, len(items))
+	for _, n := range items {
+		if n.ID != id && n.Enabled && n.State == "healthy" && n.PlaybackHealthy && n.IngressHealthy && n.ConfigSynced {
+			ordered = append(ordered, n.ID)
+		}
+	}
+	for _, n := range items {
+		if n.ID == id {
+			continue
+		}
+		found := false
+		for _, existing := range ordered {
+			if existing == n.ID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			ordered = append(ordered, n.ID)
+		}
+	}
+	ordered = append(ordered, id)
+	return h.store.ReorderProxyNodes(ctx, ordered)
+}
+
+func (h *Handler) handleProxyNodeJobsAPI(w http.ResponseWriter, r *http.Request, path string) {
+	parts := strings.Split(strings.TrimPrefix(path, "/api/admin/proxy-node-jobs/"), "/")
+	if len(parts) == 0 || parts[0] == "" {
+		http.NotFound(w, r)
+		return
+	}
+	job, err := h.store.GetProxyNodeDecommissionJob(r.Context(), parts[0])
+	if err != nil || job == nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "error": "JOB_NOT_FOUND"})
+		return
+	}
+	if r.Method == http.MethodPost && len(parts) == 2 && parts[1] == "retry" {
+		job, err = h.store.RetryProxyNodeDecommission(r.Context(), parts[0])
+		if err != nil {
+			writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "error": "RETRY_FAILED"})
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "job": job})
 }
 
 func buildEnrollmentCommand(controllerURL, id, token string) string {

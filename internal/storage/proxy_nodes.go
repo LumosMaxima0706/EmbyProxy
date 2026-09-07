@@ -47,28 +47,61 @@ func NextMonthlyReset(now time.Time, resetDay int, timezone string) (time.Time, 
 // ProxyNode is an independently enrolled data-plane node. Secrets never leave
 // this package after enrollment and are stored only as SHA-256 verifiers.
 type ProxyNode struct {
-	ID                string `json:"id"`
-	Name              string `json:"name"`
-	PublicAddress     string `json:"public_address"`
-	Enabled           bool   `json:"enabled"`
-	State             string `json:"state"`
-	Priority          int    `json:"priority"`
-	QuotaBytes        int64  `json:"quota_bytes"`
-	UsedBytes         int64  `json:"used_bytes"`
-	ResetDay          int    `json:"reset_day"`
-	ResetTimezone     string `json:"reset_timezone"`
-	NextResetAt       int64  `json:"next_reset_at"`
-	LastHeartbeatAt   int64  `json:"last_heartbeat_at"`
-	PlaybackHealthy   bool   `json:"playback_healthy"`
-	IngressHealthy    bool   `json:"ingress_healthy"`
-	ConfigSynced      bool   `json:"config_synced"`
-	AgentVersion      string `json:"agent_version"`
-	AgentCommit       string `json:"agent_commit"`
-	LastError         string `json:"last_error,omitempty"`
-	ActiveConnections int    `json:"active_connections"`
-	CreatedAt         int64  `json:"created_at"`
-	UpdatedAt         int64  `json:"updated_at"`
+	ID                      string `json:"id"`
+	Name                    string `json:"name"`
+	PublicAddress           string `json:"public_address"`
+	Enabled                 bool   `json:"enabled"`
+	State                   string `json:"state"`
+	Priority                int    `json:"priority"`
+	QuotaBytes              int64  `json:"quota_bytes"`
+	UsedBytes               int64  `json:"used_bytes"`
+	ResetDay                int    `json:"reset_day"`
+	ResetTimezone           string `json:"reset_timezone"`
+	NextResetAt             int64  `json:"next_reset_at"`
+	LastHeartbeatAt         int64  `json:"last_heartbeat_at"`
+	PlaybackHealthy         bool   `json:"playback_healthy"`
+	IngressHealthy          bool   `json:"ingress_healthy"`
+	ConfigSynced            bool   `json:"config_synced"`
+	AgentVersion            string `json:"agent_version"`
+	AgentCommit             string `json:"agent_commit"`
+	LastError               string `json:"last_error,omitempty"`
+	ActiveConnections       int    `json:"active_connections"`
+	CreatedAt               int64  `json:"created_at"`
+	UpdatedAt               int64  `json:"updated_at"`
+	DNSRecordID             string `json:"dns_record_id,omitempty"`
+	DNSOwned                bool   `json:"dns_owned"`
+	CaddyInstalledByProject bool   `json:"caddy_installed_by_project"`
+	CaddyConfigOwned        bool   `json:"caddy_config_owned"`
+	TLSStateOwned           bool   `json:"tls_state_owned"`
+	EdgeUnitOwned           bool   `json:"edge_unit_owned"`
+	RemoteCleanupPending    bool   `json:"remote_cleanup_pending"`
 }
+
+type ProxyNodeDecommissionJob struct {
+	ID                   string                      `json:"id"`
+	NodeID               string                      `json:"node_id"`
+	State                string                      `json:"state"`
+	Force                bool                        `json:"force"`
+	CurrentStep          string                      `json:"current_step"`
+	Error                string                      `json:"error,omitempty"`
+	RemoteCleanupPending bool                        `json:"remote_cleanup_pending"`
+	CleanupCommand       string                      `json:"cleanup_command,omitempty"`
+	CreatedAt            int64                       `json:"created_at"`
+	UpdatedAt            int64                       `json:"updated_at"`
+	CompletedAt          int64                       `json:"completed_at,omitempty"`
+	Steps                []ProxyNodeDecommissionStep `json:"steps,omitempty"`
+}
+
+type ProxyNodeDecommissionStep struct {
+	Name      string `json:"name"`
+	State     string `json:"state"`
+	Error     string `json:"error,omitempty"`
+	UpdatedAt int64  `json:"updated_at"`
+}
+
+var proxyNodeDecommissionSteps = []string{"switching_traffic", "draining", "scheduler_exclude", "revoking", "cleaning_remote", "removing_dns", "removing_controller_state", "complete"}
+
+const proxyNodeHeartbeatFreshness = 5 * time.Minute
 
 // ProxyRedirectEndpoint is a canary-validated media redirect origin. It is
 // control-plane data, never derived from a client request.
@@ -112,6 +145,22 @@ CREATE TABLE IF NOT EXISTS proxy_node_connections (
  node_id TEXT PRIMARY KEY, active INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL,
  FOREIGN KEY(node_id) REFERENCES proxy_nodes(id) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS proxy_node_ownership (
+ node_id TEXT PRIMARY KEY, dns_record_id TEXT NOT NULL DEFAULT '', dns_owned INTEGER NOT NULL DEFAULT 0,
+ caddy_installed_by_project INTEGER NOT NULL DEFAULT 0, caddy_config_owned INTEGER NOT NULL DEFAULT 0,
+ tls_state_owned INTEGER NOT NULL DEFAULT 0, edge_unit_owned INTEGER NOT NULL DEFAULT 0,
+ FOREIGN KEY(node_id) REFERENCES proxy_nodes(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS proxy_node_decommission_jobs (
+ id TEXT PRIMARY KEY, node_id TEXT NOT NULL, state TEXT NOT NULL, force INTEGER NOT NULL DEFAULT 0,
+ current_step TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '', remote_cleanup_pending INTEGER NOT NULL DEFAULT 0,
+ cleanup_command TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, completed_at INTEGER NOT NULL DEFAULT 0,
+ FOREIGN KEY(node_id) REFERENCES proxy_nodes(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS proxy_node_decommission_steps (
+ job_id TEXT NOT NULL, name TEXT NOT NULL, state TEXT NOT NULL, error TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL,
+ PRIMARY KEY(job_id, name), FOREIGN KEY(job_id) REFERENCES proxy_node_decommission_jobs(id) ON DELETE CASCADE
+);
 `)
 	if err != nil {
 		return err
@@ -132,6 +181,12 @@ CREATE INDEX IF NOT EXISTS idx_proxy_redirect_endpoints_route ON proxy_redirect_
 		return err
 	}
 	if err := s.ensureProxyNodeColumn(ctx, "ingress_healthy", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := s.ensureProxyNodeColumn(ctx, "drain_finalize", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES ('proxy_nodes_v4_lifecycle', ?)`, time.Now().Unix()); err != nil {
 		return err
 	}
 	_, err = s.db.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES ('proxy_nodes_v1', ?)`, time.Now().Unix())
@@ -305,7 +360,7 @@ func (s *Store) BeginProxyNodeConnection(ctx context.Context, id string) error {
 	if err = tx.QueryRowContext(ctx, `SELECT state FROM proxy_nodes WHERE id=?`, id).Scan(&state); err != nil {
 		return err
 	}
-	if state == "draining" || state == "revoked" {
+	if state == "draining" || state == "disabled" || state == "revoked" || state == "decommissioning" || state == "removed" {
 		return errors.New("node_draining")
 	}
 	now := time.Now().Unix()
@@ -315,8 +370,8 @@ func (s *Store) BeginProxyNodeConnection(ctx context.Context, id string) error {
 	return tx.Commit()
 }
 
-// EndProxyNodeConnection decrements the active count. A drained node is
-// revoked automatically once its final response has completed.
+// EndProxyNodeConnection decrements the active count. Legacy DrainProxyNode
+// callers may request finalization; lifecycle drains never revoke credentials.
 func (s *Store) EndProxyNodeConnection(ctx context.Context, id string) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -331,15 +386,14 @@ func (s *Store) EndProxyNodeConnection(ctx context.Context, id string) error {
 	if err = tx.QueryRowContext(ctx, `SELECT active FROM proxy_node_connections WHERE node_id=?`, id).Scan(&active); err != nil {
 		return err
 	}
-	if active == 0 {
-		var state string
-		if err = tx.QueryRowContext(ctx, `SELECT state FROM proxy_nodes WHERE id=?`, id).Scan(&state); err == nil && state == "draining" {
-			if _, err = tx.ExecContext(ctx, `UPDATE proxy_nodes SET enabled=0,state='revoked',credential_hash='',updated_at=? WHERE id=?`, now, id); err != nil {
-				return err
-			}
-			if _, err = tx.ExecContext(ctx, `UPDATE proxy_node_enrollments SET revoked=1 WHERE node_id=?`, id); err != nil {
-				return err
-			}
+	var state string
+	var finalize int
+	if err = tx.QueryRowContext(ctx, `SELECT state,drain_finalize FROM proxy_nodes WHERE id=?`, id).Scan(&state, &finalize); err == nil && active == 0 && state == "draining" && finalize != 0 {
+		if _, err = tx.ExecContext(ctx, `UPDATE proxy_nodes SET enabled=0,state='revoked',credential_hash='',updated_at=? WHERE id=?`, now, id); err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, `UPDATE proxy_node_enrollments SET revoked=1 WHERE node_id=?`, id); err != nil {
+			return err
 		}
 	}
 	return tx.Commit()
@@ -352,6 +406,25 @@ func (s *Store) ProxyNodeActiveConnections(ctx context.Context, id string) (int,
 		return 0, nil
 	}
 	return active, err
+}
+
+func (s *Store) loadProxyNodeOwnership(ctx context.Context, n *ProxyNode) error {
+	if n == nil {
+		return nil
+	}
+	var dnsID string
+	var dnsOwned, caddyInstalled, caddyConfig, tlsOwned, unitOwned int
+	err := s.db.QueryRowContext(ctx, `SELECT dns_record_id,dns_owned,caddy_installed_by_project,caddy_config_owned,tls_state_owned,edge_unit_owned FROM proxy_node_ownership WHERE node_id=?`, n.ID).Scan(&dnsID, &dnsOwned, &caddyInstalled, &caddyConfig, &tlsOwned, &unitOwned)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	n.DNSRecordID, n.DNSOwned = dnsID, dnsOwned != 0
+	n.CaddyInstalledByProject, n.CaddyConfigOwned = caddyInstalled != 0, caddyConfig != 0
+	n.TLSStateOwned, n.EdgeUnitOwned = tlsOwned != 0, unitOwned != 0
+	return nil
 }
 
 func randomNodeToken() (string, error) {
@@ -414,6 +487,9 @@ func (s *Store) CreateProxyNode(ctx context.Context, node ProxyNode, enrollmentT
 	if _, err = tx.ExecContext(ctx, `INSERT INTO proxy_node_enrollments (id,node_id,token_hash,expires_at,created_at) VALUES (?,?,?,?,?)`, enrollment.ID, node.ID, nodeHash(token), enrollment.ExpiresAt, now); err != nil {
 		return Enrollment{}, "", err
 	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO proxy_node_ownership(node_id) VALUES(?)`, node.ID); err != nil {
+		return Enrollment{}, "", err
+	}
 	if err = tx.Commit(); err != nil {
 		return Enrollment{}, "", err
 	}
@@ -469,6 +545,7 @@ func scanProxyNode(row interface{ Scan(...any) error }) (ProxyNode, error) {
 	var ingress int
 	err := row.Scan(&n.ID, &n.Name, &n.PublicAddress, &enabled, &n.State, &n.Priority, &n.QuotaBytes, &n.UsedBytes, &n.ResetDay, &n.ResetTimezone, &n.NextResetAt, &n.LastHeartbeatAt, &playback, &ingress, &synced, &n.AgentVersion, &n.AgentCommit, &n.LastError, &n.CreatedAt, &n.UpdatedAt)
 	n.Enabled, n.PlaybackHealthy, n.IngressHealthy, n.ConfigSynced = enabled != 0, playback != 0, ingress != 0, synced != 0
+	n.RemoteCleanupPending = n.LastError == "remote_cleanup_pending"
 	return n, err
 }
 
@@ -494,6 +571,7 @@ func (s *Store) ListProxyNodes(ctx context.Context) ([]ProxyNode, error) {
 	_ = rows.Close()
 	for i := range out {
 		out[i].ActiveConnections, _ = s.ProxyNodeActiveConnections(ctx, out[i].ID)
+		_ = s.loadProxyNodeOwnership(ctx, &out[i])
 	}
 	return out, nil
 }
@@ -550,6 +628,7 @@ func (s *Store) GetProxyNode(ctx context.Context, id string) (*ProxyNode, error)
 		return nil, err
 	}
 	n.ActiveConnections, _ = s.ProxyNodeActiveConnections(ctx, n.ID)
+	_ = s.loadProxyNodeOwnership(ctx, &n)
 	return &n, nil
 }
 
@@ -670,6 +749,59 @@ func (s *Store) ReorderProxyNodes(ctx context.Context, ids []string) error {
 	}
 	return tx.Commit()
 }
+
+// SetProxyNodeScheduling changes scheduler admission without revoking the
+// node's identity. Revoked and removed nodes must be re-enrolled instead.
+func (s *Store) SetProxyNodeScheduling(ctx context.Context, id string, enabled bool) error {
+	node, err := s.GetProxyNode(ctx, id)
+	if err != nil || node == nil {
+		if err == nil {
+			return sql.ErrNoRows
+		}
+		return err
+	}
+	if node.State == "revoked" || node.State == "removed" || node.State == "decommissioning" {
+		return errors.New("node_requires_reenrollment")
+	}
+	state := node.State
+	if enabled {
+		if state == "disabled" || state == "draining" {
+			state = "registered"
+			if node.PlaybackHealthy && node.IngressHealthy && node.ConfigSynced {
+				state = "healthy"
+			}
+		}
+	} else if state != "draining" {
+		state = "disabled"
+	}
+	_, err = s.db.ExecContext(ctx, `UPDATE proxy_nodes SET enabled=?,state=?,updated_at=? WHERE id=?`, boolInt(enabled), state, time.Now().Unix(), id)
+	return err
+}
+
+// BeginProxyNodeDrain is the lifecycle drain operation. It excludes a node
+// from new traffic while keeping credentials and existing sessions intact.
+func (s *Store) BeginProxyNodeDrain(ctx context.Context, id string) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE proxy_nodes SET enabled=0,state='draining',drain_finalize=0,updated_at=? WHERE id=? AND state NOT IN ('revoked','removed','decommissioning')`, time.Now().Unix(), id)
+	if err != nil {
+		return err
+	}
+	changed, _ := result.RowsAffected()
+	if changed != 1 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (s *Store) SetProxyNodeOwnership(ctx context.Context, nodeID, dnsRecordID string, dnsOwned, caddyInstalled, caddyConfig, tlsOwned, unitOwned bool) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO proxy_node_ownership(node_id,dns_record_id,dns_owned,caddy_installed_by_project,caddy_config_owned,tls_state_owned,edge_unit_owned) VALUES(?,?,?,?,?,?,?) ON CONFLICT(node_id) DO UPDATE SET dns_record_id=excluded.dns_record_id,dns_owned=excluded.dns_owned,caddy_installed_by_project=excluded.caddy_installed_by_project,caddy_config_owned=excluded.caddy_config_owned,tls_state_owned=excluded.tls_state_owned,edge_unit_owned=excluded.edge_unit_owned`, nodeID, dnsRecordID, boolInt(dnsOwned), boolInt(caddyInstalled), boolInt(caddyConfig), boolInt(tlsOwned), boolInt(unitOwned))
+	return err
+}
+
+func (s *Store) SetProxyNodeRemoteCleanupPending(ctx context.Context, id string, pending bool) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE proxy_nodes SET last_error=CASE WHEN ? THEN 'remote_cleanup_pending' ELSE CASE WHEN last_error='remote_cleanup_pending' THEN '' ELSE last_error END END,updated_at=? WHERE id=?`, boolInt(pending), time.Now().Unix(), id)
+	return err
+}
+
 func (s *Store) RevokeProxyNode(ctx context.Context, id string, force bool) error {
 	state := "revoked"
 	if !force {
@@ -698,7 +830,7 @@ func (s *Store) DrainProxyNode(ctx context.Context, id string) error {
 	}
 	defer tx.Rollback()
 	now := time.Now().Unix()
-	result, err := tx.ExecContext(ctx, `UPDATE proxy_nodes SET enabled=0,state='draining',updated_at=? WHERE id=? AND state!='revoked'`, now, id)
+	result, err := tx.ExecContext(ctx, `UPDATE proxy_nodes SET enabled=0,state='draining',drain_finalize=1,updated_at=? WHERE id=? AND state!='revoked'`, now, id)
 	if err != nil {
 		return err
 	}
@@ -711,7 +843,7 @@ func (s *Store) DrainProxyNode(ctx context.Context, id string) error {
 		return err
 	}
 	if active == 0 {
-		if _, err := tx.ExecContext(ctx, `UPDATE proxy_nodes SET state='revoked',credential_hash='',updated_at=? WHERE id=?`, now, id); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE proxy_nodes SET enabled=0,state='revoked',credential_hash='',updated_at=? WHERE id=?`, now, id); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE proxy_node_enrollments SET revoked=1 WHERE node_id=?`, id); err != nil {
@@ -719,6 +851,148 @@ func (s *Store) DrainProxyNode(ctx context.Context, id string) error {
 		}
 	}
 	return tx.Commit()
+}
+
+func (s *Store) setDecommissionStep(ctx context.Context, jobID, name, state, stepErr string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE proxy_node_decommission_steps SET state=?,error=?,updated_at=? WHERE job_id=? AND name=?`, state, redactFailoverStorageText(stepErr), time.Now().Unix(), jobID, name)
+	return err
+}
+
+func (s *Store) GetProxyNodeDecommissionJob(ctx context.Context, jobID string) (*ProxyNodeDecommissionJob, error) {
+	var j ProxyNodeDecommissionJob
+	var force, pending int
+	err := s.db.QueryRowContext(ctx, `SELECT id,node_id,state,force,current_step,error,remote_cleanup_pending,cleanup_command,created_at,updated_at,completed_at FROM proxy_node_decommission_jobs WHERE id=?`, jobID).Scan(&j.ID, &j.NodeID, &j.State, &force, &j.CurrentStep, &j.Error, &pending, &j.CleanupCommand, &j.CreatedAt, &j.UpdatedAt, &j.CompletedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	j.Force, j.RemoteCleanupPending = force != 0, pending != 0
+	rows, err := s.db.QueryContext(ctx, `SELECT name,state,error,updated_at FROM proxy_node_decommission_steps WHERE job_id=? ORDER BY rowid`, jobID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var step ProxyNodeDecommissionStep
+		if err := rows.Scan(&step.Name, &step.State, &step.Error, &step.UpdatedAt); err != nil {
+			return nil, err
+		}
+		j.Steps = append(j.Steps, step)
+	}
+	return &j, rows.Err()
+}
+
+func (s *Store) LatestProxyNodeDecommissionJob(ctx context.Context, nodeID string) (*ProxyNodeDecommissionJob, error) {
+	var jobID string
+	err := s.db.QueryRowContext(ctx, `SELECT id FROM proxy_node_decommission_jobs WHERE node_id=? ORDER BY created_at DESC LIMIT 1`, nodeID).Scan(&jobID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return s.GetProxyNodeDecommissionJob(ctx, jobID)
+}
+
+// DecommissionProxyNode completes the control-plane half of removal in an
+// idempotent job. Remote cleanup is reported pending when the last heartbeat
+// is stale; it never prevents credential/routing cleanup or archival.
+func (s *Store) DecommissionProxyNode(ctx context.Context, id string, force bool) (*ProxyNodeDecommissionJob, error) {
+	node, err := s.GetProxyNode(ctx, id)
+	if err != nil || node == nil {
+		if err == nil {
+			return nil, sql.ErrNoRows
+		}
+		return nil, err
+	}
+	if node.State == "removed" {
+		if job, err := s.LatestProxyNodeDecommissionJob(ctx, id); err == nil && job != nil {
+			return job, nil
+		}
+		return nil, errors.New("node_already_removed")
+	}
+	jobID, _ := randomNodeToken()
+	jobID = "decom-" + jobID[:20]
+	now := time.Now().Unix()
+	remotePending := node.LastHeartbeatAt == 0 || time.Since(time.Unix(node.LastHeartbeatAt, 0)) > proxyNodeHeartbeatFreshness
+	cleanupCommand := "sudo sh -c 'systemctl stop embyproxy-edge.service 2>/dev/null || true; rm -f /usr/local/bin/embyproxy-edge /etc/systemd/system/embyproxy-edge.service; for d in /etc/embyproxy-edge /var/lib/embyproxy-edge; do [ -d \"$d\" ] && find \"$d\" -xdev -depth -type f -delete && find \"$d\" -xdev -depth -type d -empty -delete; done'"
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `INSERT INTO proxy_node_decommission_jobs(id,node_id,state,force,current_step,remote_cleanup_pending,cleanup_command,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)`, jobID, id, "running", boolInt(force), "switching_traffic", boolInt(remotePending), cleanupCommand, now, now); err != nil {
+		return nil, err
+	}
+	for _, name := range proxyNodeDecommissionSteps {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO proxy_node_decommission_steps(job_id,name,state,updated_at) VALUES(?,?,?,?)`, jobID, name, "pending", now); err != nil {
+			return nil, err
+		}
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE proxy_nodes SET enabled=0,state='decommissioning',credential_hash='',last_error=CASE WHEN ? THEN 'remote_cleanup_pending' ELSE '' END,updated_at=? WHERE id=?`, boolInt(remotePending), now, id); err != nil {
+		return nil, err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE proxy_node_enrollments SET revoked=1 WHERE node_id=?`, id); err != nil {
+		return nil, err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM proxy_redirect_endpoints WHERE route_slug IN (SELECT name FROM proxy_nodes WHERE id=?)`, id); err != nil {
+		return nil, err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE proxy_node_decommission_steps SET state='complete',updated_at=? WHERE job_id=? AND name IN ('switching_traffic','draining','scheduler_exclude','revoking','removing_dns','removing_controller_state')`, now, jobID); err != nil {
+		return nil, err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE proxy_node_decommission_steps SET state=?,updated_at=? WHERE job_id=? AND name='cleaning_remote'`, map[bool]string{true: "pending", false: "complete"}[remotePending], now, jobID); err != nil {
+		return nil, err
+	}
+	finalState := "removed"
+	if remotePending {
+		finalState = "removed"
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE proxy_nodes SET state=?,enabled=0,updated_at=? WHERE id=?`, finalState, now, id); err != nil {
+		return nil, err
+	}
+	jobState := "complete"
+	currentStep := "complete"
+	if remotePending {
+		jobState = "partial"
+		currentStep = "cleaning_remote"
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE proxy_node_decommission_jobs SET state=?,current_step=?,updated_at=?,completed_at=CASE WHEN ?='complete' THEN ? ELSE 0 END WHERE id=?`, jobState, currentStep, now, jobState, now, jobID); err != nil {
+		return nil, err
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+	return s.GetProxyNodeDecommissionJob(ctx, jobID)
+}
+
+func (s *Store) RetryProxyNodeDecommission(ctx context.Context, jobID string) (*ProxyNodeDecommissionJob, error) {
+	job, err := s.GetProxyNodeDecommissionJob(ctx, jobID)
+	if err != nil || job == nil {
+		if err == nil {
+			return nil, sql.ErrNoRows
+		}
+		return nil, err
+	}
+	if job.State != "partial" && job.State != "failed" {
+		return job, nil
+	}
+	if job.RemoteCleanupPending {
+		now := time.Now().Unix()
+		if _, err := s.db.ExecContext(ctx, `UPDATE proxy_node_decommission_steps SET state='complete',error='',updated_at=? WHERE job_id=? AND name='cleaning_remote'`, now, jobID); err != nil {
+			return nil, err
+		}
+		if _, err := s.db.ExecContext(ctx, `UPDATE proxy_node_decommission_jobs SET state='complete',current_step='complete',remote_cleanup_pending=0,error='',updated_at=?,completed_at=? WHERE id=?`, now, now, jobID); err != nil {
+			return nil, err
+		}
+		if _, err := s.db.ExecContext(ctx, `UPDATE proxy_nodes SET last_error='',updated_at=? WHERE id=?`, now, job.NodeID); err != nil {
+			return nil, err
+		}
+		return s.GetProxyNodeDecommissionJob(ctx, jobID)
+	}
+	return s.DecommissionProxyNode(ctx, job.NodeID, job.Force)
 }
 func (s *Store) CompleteEnrollment(ctx context.Context, enrollmentID, token, version, commit string) (ProxyNode, string, error) {
 	return s.completeEnrollment(ctx, enrollmentID, token, version, commit, "")
@@ -802,7 +1076,7 @@ func (s *Store) HeartbeatProxyNode(ctx context.Context, id, credential, version,
 		}
 	}
 	now := time.Now().Unix()
-	result, err := s.db.ExecContext(ctx, `UPDATE proxy_nodes SET state=?,last_heartbeat_at=?,playback_healthy=?,config_synced=?,agent_version=?,agent_commit=?,last_error=?,updated_at=? WHERE id=? AND credential_hash=? AND state!='revoked'`, state, now, boolInt(playback), boolInt(synced), version, commit, redactFailoverStorageText(lastError), now, id, nodeHash(credential))
+	result, err := s.db.ExecContext(ctx, `UPDATE proxy_nodes SET state=CASE WHEN state IN ('disabled','draining','decommissioning','removed','revoked') THEN state ELSE ? END,last_heartbeat_at=?,playback_healthy=?,config_synced=?,agent_version=?,agent_commit=?,last_error=?,updated_at=? WHERE id=? AND credential_hash=? AND state NOT IN ('revoked','decommissioning','removed')`, state, now, boolInt(playback), boolInt(synced), version, commit, redactFailoverStorageText(lastError), now, id, nodeHash(credential))
 	if err != nil {
 		return err
 	}
@@ -829,7 +1103,7 @@ func (s *Store) SetProxyNodeIngressHealth(ctx context.Context, id string, health
 			state = "online"
 		}
 	}
-	result, err := s.db.ExecContext(ctx, `UPDATE proxy_nodes SET ingress_healthy=?,state=CASE WHEN state IN ('registered','installing','revoked') THEN state ELSE ? END,last_error=CASE WHEN ?='' THEN last_error ELSE ? END,updated_at=? WHERE id=? AND state!='revoked'`, boolInt(healthy), state, lastError, redactFailoverStorageText(lastError), now, id)
+	result, err := s.db.ExecContext(ctx, `UPDATE proxy_nodes SET ingress_healthy=?,state=CASE WHEN state IN ('registered','installing','disabled','draining','decommissioning','removed','revoked') THEN state ELSE ? END,last_error=CASE WHEN ?='' THEN last_error ELSE ? END,updated_at=? WHERE id=? AND state NOT IN ('revoked','decommissioning','removed')`, boolInt(healthy), state, lastError, redactFailoverStorageText(lastError), now, id)
 	if err != nil {
 		return err
 	}

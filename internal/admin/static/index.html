@@ -433,6 +433,19 @@ tr:last-child td{border-bottom:0}
   .toast{max-width:none}
 }
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important}}
+.proxy-summary{grid-template-columns:repeat(5,minmax(0,1fr));}
+.proxy-filterbar{grid-template-columns:minmax(180px,260px) auto;justify-content:space-between;}
+.proxy-action-menu{position:relative;display:inline-flex;}
+.proxy-more{width:38px;padding:0;font-size:20px;line-height:1;}
+.proxy-menu{position:absolute;right:0;top:42px;z-index:20;display:grid;min-width:180px;padding:6px;background:var(--paper);border:1px solid var(--line);border-radius:14px;box-shadow:0 14px 34px rgba(58,48,32,.18);}
+.proxy-menu button{justify-content:flex-start;border:0;border-radius:9px;background:transparent;padding:9px 11px;color:var(--ink-2);font-size:12px;font-weight:800;cursor:pointer;text-align:left;}
+.proxy-menu button:hover{background:var(--pine-wash);color:var(--pine);}
+.cleanup-preview{display:grid;gap:8px;padding:14px 16px;margin-bottom:16px;border:1px solid var(--line);border-radius:16px;background:var(--paper-2);}
+.cleanup-preview div{color:var(--ink-2);font-size:13px;}
+.cleanup-preview div::first-letter{color:var(--green);}
+.job-progress{display:grid;gap:6px;padding:12px 14px;margin-bottom:12px;border:1px solid var(--line);border-radius:14px;background:var(--paper-2);font-size:12px;}
+.job-step{display:flex;justify-content:space-between;gap:12px;}.job-step b{color:var(--ink);}.job-step span{color:var(--ink-3);}
+@media (max-width:920px){.proxy-summary{grid-template-columns:repeat(2,minmax(0,1fr));}.proxy-filterbar{grid-template-columns:1fr auto;}}
 </style>
 </head>
 <body>
@@ -559,7 +572,9 @@ tr:last-child td{border-bottom:0}
         </section>
 
         <section id="tabProxyNodes" class="stats-deck" style="display:none">
-          <div class="stats-top"><div><strong>反代节点</strong><p class="form-hint">统一查看入口、播放能力和调度资格；只有健康且已接纳的节点会接收新流量。</p></div><button class="primary-action" onclick="openProxyNodeModal()">添加反代 VPS</button></div>
+          <div class="stats-top"><div><strong>反代节点</strong><p class="form-hint">调度、连接和远端生命周期统一管理。已移除节点默认隐藏。</p></div><button class="primary-action" onclick="openProxyNodeModal()">添加反代 VPS</button></div>
+          <div class="signal-grid proxy-summary" id="proxyNodeSummary"></div>
+          <div class="stats-top proxy-filterbar"><select id="proxyNodeFilter" class="select-input" onchange="renderProxyNodeTable()"><option value="active">可用</option><option value="all">全部</option><option value="issue">异常</option><option value="disabled">已停用</option><option value="removed">已移除</option></select><button class="btn" onclick="loadProxyNodes()">刷新</button></div>
           <div class="table-wrap"><table><thead><tr><th>节点 / Endpoint</th><th>状态</th><th>播放</th><th>入口</th><th>接纳</th><th>流量</th><th>优先级</th><th>操作</th></tr></thead><tbody id="proxyNodesBody"><tr><td colspan="8" class="table-empty">暂无反代节点</td></tr></tbody></table></div>
           <div class="action-pack" style="justify-content:flex-end;margin-top:12px"><button class="btn btn-sm" id="proxyEnrollmentCopy" onclick="copyProxyEnrollmentCommand()" hidden>复制安装命令</button></div>
           <div id="proxyEnrollmentOutput" class="code-block" hidden></div>
@@ -711,6 +726,17 @@ tr:last-child td{border-bottom:0}
       <div class="form-group"><label for="proxyNodeResetDay">重置日</label><input id="proxyNodeResetDay" type="number" min="1" max="31" value="1"></div>
       <div class="form-actions form-full"><button type="button" class="btn" onclick="closeProxyNodeModal()">取消</button><button type="submit" class="primary-action" id="proxyNodeSubmit">创建并生成安装命令</button></div>
     </form>
+  </div>
+</div>
+
+<div class="sheet-layer" id="decommissionModal" style="display:none" onclick="if(event.target===this)closeDecommissionModal()">
+  <div class="sheet decommission-sheet">
+    <div class="sheet-head"><div><h2>彻底移除节点</h2><p id="decommissionIntro">这会撤销身份并清理控制面资源。远端离线时会保留短期 cleanup command。</p></div><button class="sheet-close" onclick="closeDecommissionModal()">×</button></div>
+    <div id="decommissionPreview" class="cleanup-preview"></div>
+    <div class="form-group form-full"><label for="decommissionConfirm">输入节点名称确认</label><input id="decommissionConfirm" autocomplete="off" oninput="syncDecommissionConfirmation()"/><small class="form-hint">操作不可逆；active 节点无健康备用节点时只能使用强制移除。</small></div>
+    <label class="log-switch" id="decommissionForceRow" hidden><input type="checkbox" id="decommissionForce"/> 强制移除（播放可能中断）</label>
+    <div id="decommissionProgress" class="job-progress" hidden></div>
+    <div class="form-actions"><button class="btn" onclick="closeDecommissionModal()">取消</button><button class="btn btn-danger" id="decommissionSubmit" disabled onclick="confirmDecommission()">彻底移除</button></div>
   </div>
 </div>
 
@@ -1710,16 +1736,37 @@ function switchTab(name, btn) {
 async function loadProxyNodes() {
   const r = await authFetch('/api/admin/proxy-nodes');
   if (!r.ok) { toast('加载反代节点失败: ' + authErrorMessage(r.error), 'err'); return; }
+  window.proxyNodes = Array.isArray(r.nodes) ? r.nodes : [];
+  renderProxyNodeTable();
+}
+function proxyNodeHealth(n) { return n.playback_healthy && n.config_synced && n.ingress_healthy && n.state === 'healthy'; }
+function proxyNodeVisible(n) {
+  const filter = document.getElementById('proxyNodeFilter')?.value || 'active';
+  if (filter === 'all') return n.state !== 'removed';
+  if (filter === 'removed') return n.state === 'removed';
+  if (filter === 'disabled') return ['disabled','revoked','draining','removed'].includes(n.state);
+  if (filter === 'issue') return n.state !== 'removed' && !proxyNodeHealth(n);
+  return n.state === 'healthy' && n.enabled;
+}
+function renderProxyNodeTable() {
+  const all = window.proxyNodes || [];
   const body = document.getElementById('proxyNodesBody');
-  const items = Array.isArray(r.nodes) ? r.nodes : [];
+  const items = all.filter(proxyNodeVisible);
+  const summary = {all: all.filter(n=>n.state!=='removed').length, available: all.filter(n=>n.state==='healthy'&&n.enabled).length, active: all.filter(n=>n.state==='healthy'&&n.enabled&&Number(n.priority||0)===1).length, issue: all.filter(n=>n.state!=='removed'&&!proxyNodeHealth(n)).length, disabled: all.filter(n=>['disabled','revoked','draining','removed'].includes(n.state)).length};
+  const summaryEl = document.getElementById('proxyNodeSummary');
+  if (summaryEl) summaryEl.innerHTML = [['all','反代节点'],['available','可用'],['active','当前活跃'],['issue','异常'],['disabled','已停用/已移除']].map(([key,label])=>`<div class="signal"><b>${summary[key]}</b><div><span>${label}</span><em>控制面实时状态</em></div></div>`).join('');
+  body.innerHTML = items.length ? items.map((n, i) => {
   body.innerHTML = items.length ? items.map((n, i) => {
     const remaining = n.quota_bytes > 0 ? Math.max(0, n.quota_bytes - n.used_bytes) : null;
-    const health = n.playback_healthy && n.config_synced && n.ingress_healthy ? 'healthy' : (n.state || 'unknown');
-    const bootstrapAction = ['registered','revoked','installing','healthy','degraded'].includes(n.state) ? `<button class="btn btn-sm" onclick="regenerateProxyBootstrap('${attr(n.id)}')">重新生成安装命令</button>` : '';
+    const health = proxyNodeHealth(n) ? 'healthy' : (n.state || 'unknown');
     const chip = (value, ok) => `<span class="chip ${ok ? 'ok' : 'warn'}">${value ? '正常' : '未通过'}</span>`;
-    return `<tr><td><strong>${esc(n.name)}</strong><small class="muted">${esc(n.public_address || '未配置 HTTPS origin')}</small><small class="muted">最近心跳：${n.last_heartbeat_at ? new Date(Number(n.last_heartbeat_at)*1000).toLocaleString() : '暂无'}</small></td><td><span class="chip ${health === 'healthy' ? 'ok' : 'warn'}">${esc(n.state || 'unknown')}</span></td><td>${chip(n.playback_healthy, n.playback_healthy)}</td><td>${chip(n.ingress_healthy, n.ingress_healthy)}</td><td>${chip(n.enabled && health === 'healthy', n.enabled && health === 'healthy')}</td><td>${remaining === null ? '未设置' : `${formatBytes(n.used_bytes)} / ${formatBytes(n.quota_bytes)}`}</td><td>${Number(n.priority || i + 1)}</td><td><div class="action-pack" style="justify-content:flex-start"><button class="btn btn-sm btn-primary" onclick="switchProxyNode('${attr(n.id)}')" ${health !== 'healthy' || !n.enabled ? 'disabled' : ''}>切换到此节点</button><button class="btn btn-sm" onclick="toggleProxyNode('${attr(n.id)}',${!n.enabled})">${n.enabled ? '停用' : '启用'}</button>${bootstrapAction}<button class="btn btn-sm btn-danger" onclick="revokeProxyNode('${attr(n.id)}')">排空</button></div></td></tr>`;
-  }).join('') : '<tr><td colspan="8" class="table-empty">暂无反代节点</td></tr>';
+    const primary = n.state==='healthy' && n.enabled && Number(n.priority||0)===1 ? '<span class="node-tag">当前活跃</span>' : (n.state==='healthy' && n.enabled ? `<button class="btn btn-sm btn-primary" onclick="switchProxyNode('${attr(n.id)}')">切换到此节点</button>` : (n.state==='disabled' ? `<button class="btn btn-sm btn-primary" onclick="toggleProxyNode('${attr(n.id)}',true)">启用</button>` : (n.state==='revoked' ? '<span class="chip err">需重新接入</span>' : '')));
+    const menu = `<div class="proxy-action-menu"><button class="btn btn-sm proxy-more" aria-label="更多操作" onclick="toggleProxyMenu('${attr(n.id)}',event)">⋯</button><div class="proxy-menu" id="proxy-menu-${attr(n.id)}" hidden>${n.state!=='revoked'&&n.state!=='removed'?`<button onclick="drainProxyNode('${attr(n.id)}')">排空现有连接</button>`:''}${n.state!=='revoked'&&n.state!=='removed'?`<button onclick="toggleProxyNode('${attr(n.id)}',${!n.enabled})">${n.enabled?'禁用调度':'启用调度'}</button>`:''}<button onclick="regenerateProxyBootstrap('${attr(n.id)}')">重新接入/重装</button><button onclick="openDecommissionModal('${attr(n.id)}')">彻底移除</button></div></div>`;
+    return `<tr><td><strong>${esc(n.name)}</strong><small class="muted">${esc(n.public_address || '未配置 HTTPS origin')}</small><small class="muted">最近心跳：${n.last_heartbeat_at ? new Date(Number(n.last_heartbeat_at)*1000).toLocaleString() : '暂无'}</small></td><td><span class="chip ${health === 'healthy' ? 'ok' : (n.state==='revoked'?'err':'warn')}">${esc(n.state || 'unknown')}</span></td><td>${chip(n.playback_healthy, n.playback_healthy)}</td><td>${chip(n.ingress_healthy, n.ingress_healthy)}</td><td>${chip(n.enabled && health === 'healthy', n.enabled && health === 'healthy')}</td><td>${remaining === null ? '未设置' : `${formatBytes(n.used_bytes)} / ${formatBytes(n.quota_bytes)}`}</td><td>${Number(n.priority || i + 1)}</td><td><div class="action-pack" style="justify-content:flex-start">${primary}${menu}</div></td></tr>`;
+  }).join('') : '<tr><td colspan="8" class="table-empty">当前筛选暂无节点</td></tr>';
 }
+function toggleProxyMenu(id, event) { event?.stopPropagation(); document.querySelectorAll('.proxy-menu').forEach(el=>{ if(el.id!=='proxy-menu-'+id) el.hidden=true; }); const menu=document.getElementById('proxy-menu-'+id); if(menu) menu.hidden=!menu.hidden; }
+document.addEventListener('click',()=>document.querySelectorAll('.proxy-menu').forEach(el=>el.hidden=true));
 function formatBytes(v) { const n = Number(v || 0); if (n < 1e9) return `${(n / 1e6).toFixed(1)} MB`; return `${(n / 1e9).toFixed(2)} GB`; }
 function syncProxyNodeFormValidity() {
   const form = document.getElementById('proxyNodeForm');
@@ -1743,8 +1790,15 @@ async function submitProxyNode(event) {
   closeProxyNodeModal();
   const output = document.getElementById('proxyEnrollmentOutput'); output.hidden = false; output.textContent = `一次性安装命令（15 分钟内有效）\n${r.install_command}`; document.getElementById('proxyEnrollmentCopy').hidden = false; await loadProxyNodes(); toast('节点已创建，请执行安装命令', 'ok');
 }
-async function toggleProxyNode(id, enabled) { const r = await authFetch('/api/admin/proxy-nodes/'+encodeURIComponent(id), {method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled})}); if (!r.ok) toast('更新节点失败','err'); await loadProxyNodes(); }
-async function regenerateProxyBootstrap(id) { const r = await authFetch('/api/admin/proxy-nodes/'+encodeURIComponent(id)+'/bootstrap',{method:'POST'}); if (!r.ok) { toast('重新生成安装命令失败: ' + authErrorMessage(r.error), 'err'); return; } const output = document.getElementById('proxyEnrollmentOutput'); output.hidden = false; output.textContent = `一次性安装命令（15 分钟内有效）\n${r.install_command}`; document.getElementById('proxyEnrollmentCopy').hidden = false; toast('已生成新的短期安装命令', 'ok'); }
+async function toggleProxyNode(id, enabled) { const r = await authFetch('/api/admin/proxy-nodes/'+encodeURIComponent(id), {method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled})}); if (!r.ok) toast(enabled?'启用节点失败':'禁用调度失败','err'); else toast(enabled?'节点已重新进入接纳流程':'节点已停止接纳新流量','ok'); await loadProxyNodes(); }
+async function drainProxyNode(id) { if (!window.confirm('确认排空该节点？现有 session 会自然结束，节点身份不会被撤销。')) return; const r=await authFetch('/api/admin/proxy-nodes/'+encodeURIComponent(id)+'/drain',{method:'POST'}); if(!r.ok) toast('排空节点失败','err'); else toast('节点已排空','ok'); await loadProxyNodes(); }
+async function regenerateProxyBootstrap(id) { if (!window.confirm('将撤销当前未使用的安装命令并生成新的短期重新接入命令，继续？')) return; const r = await authFetch('/api/admin/proxy-nodes/'+encodeURIComponent(id)+'/bootstrap',{method:'POST'}); if (!r.ok) { toast('重新接入失败: ' + authErrorMessage(r.error), 'err'); return; } const output = document.getElementById('proxyEnrollmentOutput'); output.hidden = false; output.textContent = `一次性重新接入命令（15 分钟内有效）\n${r.install_command}`; document.getElementById('proxyEnrollmentCopy').hidden = false; toast('已生成短期重新接入命令', 'ok'); }
+let decommissionNodeId = '';
+function openDecommissionModal(id) { const node=(window.proxyNodes||[]).find(n=>n.id===id); if(!node) return; decommissionNodeId=id; document.getElementById('decommissionConfirm').value=''; document.getElementById('decommissionForce').checked=false; document.getElementById('decommissionForceRow').hidden=!(Number(node.priority||0)===1); const preview=['从调度器移除','撤销节点身份','删除 Controller 路由',node.dns_owned?'删除由本系统创建的 DNS':'保留非本系统 DNS', '清理 VPS 上 EmbyProxy', (node.caddy_config_owned||node.tls_state_owned)?'清理项目拥有的 Caddy/TLS':'保留非本系统 Caddy/TLS']; document.getElementById('decommissionPreview').innerHTML=preview.map(x=>`<div>✓ ${x}</div>`).join(''); document.getElementById('decommissionProgress').hidden=true; syncDecommissionConfirmation(); showModal('decommissionModal'); }
+function closeDecommissionModal(){ hideModal('decommissionModal'); decommissionNodeId=''; }
+function syncDecommissionConfirmation(){ const node=(window.proxyNodes||[]).find(n=>n.id===decommissionNodeId); document.getElementById('decommissionSubmit').disabled=!node||document.getElementById('decommissionConfirm').value.trim()!==node.name; }
+async function confirmDecommission(){ const node=(window.proxyNodes||[]).find(n=>n.id===decommissionNodeId); if(!node) return; const progress=document.getElementById('decommissionProgress'); progress.hidden=false; progress.innerHTML=['switching traffic','draining','revoking','cleaning remote','removing DNS','removing controller state'].map(x=>`<div class="job-step"><b>${x}</b><span>处理中</span></div>`).join(''); const r=await authFetch('/api/admin/proxy-nodes/'+encodeURIComponent(node.id)+'/decommission',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({confirm_name:node.name,force:document.getElementById('decommissionForce').checked})}); if(!r.ok){progress.innerHTML='<div class="chip err">部分操作未完成：'+esc(authErrorMessage(r.error))+'</div>'; toast('彻底移除未完成','err'); return;} const job=r.job||{}; progress.innerHTML=(job.steps||[]).map(s=>`<div class="job-step"><b>${esc(s.name)}</b><span>${esc(s.state)}</span></div>`).join('')+(job.remote_cleanup_pending?`<div class="chip warn">控制面已彻底断开，远端残留未清理</div><pre class="publication-plan">${esc(job.cleanup_command||'')}</pre><button class="btn btn-sm" onclick="retryDecommissionJob('${attr(job.id)}')">重试远端清理</button>`:'<div class="chip ok">complete</div>'); toast(job.remote_cleanup_pending?'控制面已完成，等待远端清理':'节点已彻底移除',job.remote_cleanup_pending?'warn':'ok'); await loadProxyNodes(); }
+async function retryDecommissionJob(jobId){ const r=await authFetch('/api/admin/proxy-node-jobs/'+encodeURIComponent(jobId)+'/retry',{method:'POST'}); if(!r.ok){toast('重试失败: '+authErrorMessage(r.error),'err');return;} toast('远端清理已重试','ok'); const job=r.job||{}; const progress=document.getElementById('decommissionProgress'); if(progress) progress.innerHTML=(job.steps||[]).map(s=>`<div class="job-step"><b>${esc(s.name)}</b><span>${esc(s.state)}</span></div>`).join(''); await loadProxyNodes(); }
 async function copyProxyEnrollmentCommand() { const output = document.getElementById('proxyEnrollmentOutput'); const command = (output?.textContent || '').split('\n').slice(1).join('\n').trim(); if (!command) return; try { await navigator.clipboard.writeText(command); toast('安装命令已复制', 'ok'); } catch (_) { toast('浏览器拒绝访问剪贴板，请手动复制', 'err'); } }
 async function revokeProxyNode(id) { if (!window.confirm('确认排空该节点？现有连接自然结束后将撤销凭据。')) return; const r=await authFetch('/api/admin/proxy-nodes/'+encodeURIComponent(id)+'/revoke',{method:'POST'}); if(!r.ok) toast('排空节点失败','err'); await loadProxyNodes(); }
 async function switchProxyNode(id) { if (window.proxySwitchInFlight) return; window.proxySwitchInFlight=true; try { const list = await authFetch('/api/admin/proxy-nodes'); if (!list.ok) { toast('切换失败: 无法读取节点','err'); return; } const ids = (list.nodes || []).map(n=>n.id); const ordered = [id].concat(ids.filter(v=>v!==id)); const r = await authFetch('/api/admin/proxy-nodes/reorder',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids:ordered})}); if (!r.ok) { toast('切换失败: '+authErrorMessage(r.error),'err'); return; } toast('已将节点置为首选；健康保护仍然生效','ok'); await loadProxyNodes(); } finally { window.proxySwitchInFlight=false; } }

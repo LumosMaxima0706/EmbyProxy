@@ -267,6 +267,73 @@ func TestProxyNodeDrainWithoutConnectionsRevokesImmediately(t *testing.T) {
 	}
 }
 
+func TestLifecycleDrainKeepsIdentityAndDisabledCanReenable(t *testing.T) {
+	ctx := context.Background()
+	store, err := New(filepath.Join(t.TempDir(), "proxy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	enrollment, token, err := store.CreateProxyNode(ctx, ProxyNode{Name: "edge-lifecycle", ResetDay: 1}, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = store.CompleteEnrollment(ctx, enrollment.ID, token, "v1", "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.BeginProxyNodeDrain(ctx, enrollment.NodeID); err != nil {
+		t.Fatal(err)
+	}
+	node, _ := store.GetProxyNode(ctx, enrollment.NodeID)
+	if node.State != "draining" || node.Enabled {
+		t.Fatalf("drain=%+v", node)
+	}
+	if err = store.SetProxyNodeScheduling(ctx, enrollment.NodeID, true); err != nil {
+		t.Fatal(err)
+	}
+	node, _ = store.GetProxyNode(ctx, enrollment.NodeID)
+	if node.State != "registered" || !node.Enabled {
+		t.Fatalf("reenable=%+v", node)
+	}
+}
+
+func TestDecommissionCreatesPartialJobForUnreachableNodeAndRetryCompletes(t *testing.T) {
+	ctx := context.Background()
+	store, err := New(filepath.Join(t.TempDir(), "proxy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	enrollment, _, err := store.CreateProxyNode(ctx, ProxyNode{Name: "edge-decommission", ResetDay: 1}, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.SetProxyNodeOwnership(ctx, enrollment.NodeID, "dns-1", true, true, true, true, true); err != nil {
+		t.Fatal(err)
+	}
+	job, err := store.DecommissionProxyNode(ctx, enrollment.NodeID, false)
+	if err != nil || job == nil {
+		t.Fatalf("job=%+v err=%v", job, err)
+	}
+	if job.State != "partial" || !job.RemoteCleanupPending || job.CleanupCommand == "" {
+		t.Fatalf("job=%+v", job)
+	}
+	node, _ := store.GetProxyNode(ctx, enrollment.NodeID)
+	if node.State != "removed" || node.Enabled || node.DNSRecordID != "dns-1" || !node.DNSOwned {
+		t.Fatalf("node=%+v", node)
+	}
+	if !node.CaddyConfigOwned || !node.TLSStateOwned || !node.EdgeUnitOwned {
+		t.Fatalf("ownership metadata was changed: %+v", node)
+	}
+	if _, err = store.RetryProxyNodeDecommission(ctx, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	job, _ = store.GetProxyNodeDecommissionJob(ctx, job.ID)
+	if job.State != "complete" || job.RemoteCleanupPending {
+		t.Fatalf("retry=%+v", job)
+	}
+}
+
 func TestProxyNodeUsageAdvancesExpiredBillingCycle(t *testing.T) {
 	ctx := context.Background()
 	store, err := New(filepath.Join(t.TempDir(), "proxy.db"))

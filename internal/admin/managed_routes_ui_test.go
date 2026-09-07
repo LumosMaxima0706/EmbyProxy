@@ -45,6 +45,11 @@ func TestProxyNodesUIUsesSingleFormAndHealthGatedSwitch(t *testing.T) {
 		"/api/admin/proxy-nodes/reorder",
 		"function copyProxyEnrollmentCommand()",
 		"复制安装命令",
+		"id=\"proxyNodeFilter\"",
+		"id=\"decommissionModal\"",
+		"彻底移除",
+		"function retryDecommissionJob(",
+		"remote_cleanup_pending",
 	} {
 		if !strings.Contains(indexHTML, marker) {
 			t.Fatalf("proxy node UI marker %q is missing", marker)
