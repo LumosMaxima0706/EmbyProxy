@@ -304,6 +304,35 @@ func TestProductionSlugSelectsEligibleProxyNodeAndFailsOver(t *testing.T) {
 	}
 }
 
+func TestSmartResolverAppliesExplicitNodeReorderImmediately(t *testing.T) {
+	store := newRouteStore(t)
+	seedManagedRoute(t, store, "demo", "https://origin.example", true, true)
+	now := time.Now().Unix()
+	for _, node := range []struct {
+		id, address string
+		priority    int
+	}{{"edge-a", "https://edge-a.example", 1}, {"edge-b", "https://edge-b.example", 2}} {
+		if _, err := store.DB().Exec(`INSERT INTO proxy_nodes
+			(id,name,public_address,enabled,state,priority,quota_bytes,used_bytes,reset_day,reset_timezone,next_reset_at,last_heartbeat_at,playback_healthy,ingress_healthy,config_synced,agent_version,agent_commit,credential_hash,last_error,created_at,updated_at)
+			VALUES (?,?,?,1,'healthy',?,?,0,1,'UTC',0,?,1,1,1,'v1','test','hash','',?,?)`,
+			node.id, node.id, node.address, node.priority, 100, now, now, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resolver := NewStorageResolver(store, "admin", "smart")
+	first, ok := resolver.selectEdge(context.Background(), "demo", mediaproxy.Target{Scheme: "https", Host: "origin.example", Port: 443})
+	if !ok || first.Host != "edge-a.example" {
+		t.Fatalf("first=%+v ok=%v", first, ok)
+	}
+	if err := store.ReorderProxyNodes(context.Background(), []string{"edge-b", "edge-a"}); err != nil {
+		t.Fatal(err)
+	}
+	second, ok := resolver.selectEdge(context.Background(), "demo", mediaproxy.Target{Scheme: "https", Host: "origin.example", Port: 443})
+	if !ok || second.Host != "edge-b.example" {
+		t.Fatalf("reordered=%+v ok=%v", second, ok)
+	}
+}
+
 func TestProxyNodePublicAddressRequiresCompleteOrigin(t *testing.T) {
 	if _, err := parseProxyAddress("161.114.13.231"); err == nil {
 		t.Fatal("legacy bare address silently accepted")

@@ -77,8 +77,9 @@ type StorageResolver struct {
 }
 
 type nodeAssignment struct {
-	id    string
-	since time.Time
+	id       string
+	priority int
+	since    time.Time
 }
 
 // NewStorageResolver accepts an optional scheduler mode for compatibility
@@ -193,8 +194,19 @@ func (r *StorageResolver) selectEdge(ctx context.Context, slug string, fallback 
 	key := r.uid + ":" + slug
 	r.mu.Lock()
 	current := r.assignments[key]
+	selectionMode := r.mode
+	if current.id != "" && current.priority > 0 {
+		for _, candidate := range nodeList {
+			if candidate.ID == current.id && candidate.Priority != current.priority {
+				// An explicit reorder is an operator command, not an automatic
+				// score fluctuation. Apply it immediately even in smart mode.
+				selectionMode = "manual"
+				break
+			}
+		}
+	}
 	decision, selected := nodes.SelectWithPolicy(nodeList, nodes.Policy{
-		Mode: r.mode, CurrentID: current.id, CurrentSince: current.since,
+		Mode: selectionMode, CurrentID: current.id, CurrentSince: current.since,
 		MinimumDwell: 2 * time.Minute, HysteresisScore: 0.08,
 	}, now)
 	if !selected {
@@ -203,7 +215,21 @@ func (r *StorageResolver) selectEdge(ctx context.Context, slug string, fallback 
 	}
 	if current.id != decision.NodeID {
 		current = nodeAssignment{id: decision.NodeID, since: now}
+		for _, candidate := range nodeList {
+			if candidate.ID == decision.NodeID {
+				current.priority = candidate.Priority
+				break
+			}
+		}
 		r.assignments[key] = current
+	} else if selectionMode == "manual" {
+		for _, candidate := range nodeList {
+			if candidate.ID == current.id {
+				current.priority = candidate.Priority
+				r.assignments[key] = current
+				break
+			}
+		}
 	}
 	r.mu.Unlock()
 	var node storage.ProxyNode
