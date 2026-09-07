@@ -89,10 +89,10 @@ func SelectWithPolicy(nodes []storage.ProxyNode, policy Policy, now time.Time) (
 	if current.ID == "" || !Eligible(current, now) || decision.NodeID == current.ID {
 		return decision, ok
 	}
-	if policy.MinimumDwell > 0 && !policy.CurrentSince.IsZero() && now.Sub(policy.CurrentSince) < policy.MinimumDwell {
-		return Decision{NodeID: current.ID, Score: 0, Reason: "minimum_dwell"}, true
-	}
 	if policy.Mode == "smart" {
+		if policy.MinimumDwell > 0 && !policy.CurrentSince.IsZero() && now.Sub(policy.CurrentSince) < policy.MinimumDwell {
+			return Decision{NodeID: current.ID, Score: 0, Reason: "minimum_dwell"}, true
+		}
 		currentScore := quotaScore(current, now) - float64(current.Priority)*0.001 + 0.03
 		if decision.Score-currentScore < policy.HysteresisScore {
 			return Decision{NodeID: current.ID, Score: currentScore, Reason: "hysteresis"}, true

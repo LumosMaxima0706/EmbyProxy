@@ -51,6 +51,19 @@ func TestSelectWithPolicyHysteresisAndImmediateFailover(t *testing.T) {
 	}
 }
 
+func TestSelectWithPolicyManualPriorityChangeIsImmediate(t *testing.T) {
+	now := time.Unix(1700000000, 0)
+	base := func(id string, priority int) storage.ProxyNode {
+		return storage.ProxyNode{ID: id, Name: id, Priority: priority, Enabled: true, State: "healthy", LastHeartbeatAt: now.Unix(), PlaybackHealthy: true, ConfigSynced: true, IngressHealthy: true, PublicAddress: "https://edge.example.net"}
+	}
+	decision, ok := SelectWithPolicy([]storage.ProxyNode{base("old", 2), base("selected", 1)}, Policy{
+		Mode: "manual", CurrentID: "old", CurrentSince: now, MinimumDwell: time.Hour,
+	}, now.Add(time.Minute))
+	if !ok || decision.NodeID != "selected" || decision.Reason != "manual_priority" {
+		t.Fatalf("decision=%+v ok=%v", decision, ok)
+	}
+}
+
 func TestEligibleRejectsUnhealthyIngress(t *testing.T) {
 	now := time.Now()
 	node := storage.ProxyNode{ID: "edge", PublicAddress: "https://edge.example.net", Enabled: true, State: "healthy", LastHeartbeatAt: now.Unix(), PlaybackHealthy: true, ConfigSynced: true}
