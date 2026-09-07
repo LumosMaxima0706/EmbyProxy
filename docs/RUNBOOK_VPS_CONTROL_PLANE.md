@@ -1127,15 +1127,24 @@ an already valid certificate; never delete or replace unrelated certificates.
 #### Final evidence audit (2026-09-07)
 
 - **Second clean reinstall timeline (UTC):** project-only cleanup was captured
-  as `/root/backup-phase6-clean-20260907T024018Z`; the host then passed the
-  clean-state check (single official `caddy.service`, no project edge unit or
-  state left). The Admin control plane recreated `clean-e2e-161-r1` and issued
-  a fresh short-lived bootstrap. On 161, only that generated bootstrap command
-  was run; the installer itself performed dependency/bootstrap, edge-agent,
-  official Caddy configuration, enrollment and service enablement. There was
-  no bootstrap-external `apt`, `mkdir`, `chmod`, `systemctl`, Caddy, config or
-  TLS repair. The resulting edge service started at 02:55 UTC and Caddy at
-  03:26 UTC, followed by healthy/admitted state and the normal playback chain:
+  as `/root/backup-phase6-clean-20260907T024018Z`. At the clean-state boundary
+  (`02:40:23`, after the purge completed and before the generated command's
+  installation phase), the following were absent: the edge binary,
+  `embyproxy-edge.service`, edge config/state/identity/enrollment, project
+  Caddyfile and Caddy TLS/state. The Caddy package and its `/lib/systemd`
+  service were also absent; the package history records purge completion at
+  `02:40:23`. This is the BEFORE state, not the later steady-state check.
+  The Admin control plane then recreated `clean-e2e-161-r1` and issued a fresh
+  short-lived bootstrap. On 161, only that generated bootstrap command was run;
+  the installer itself performed dependency/bootstrap, edge-agent, official
+  Caddy installation/configuration, enrollment and service enablement. The
+  resulting edge config/unit were created at `02:40:36`, and the Caddy package
+  was installed and started at `02:40:54-55`, proving both were AFTER bootstrap
+  work. There was no bootstrap-external `apt`, `mkdir`, `chmod`, `systemctl`,
+  Caddy, config or TLS repair. The later steady state had one official
+  `caddy.service` and one `embyproxy-edge.service`; that is the AFTER state.
+  The resulting edge service started at 02:55 UTC and Caddy at 03:26 UTC,
+  followed by healthy/admitted state and the normal playback chain:
   `PlaybackInfo 200 -> VideoStream 302 -> redirect -> Range 206`, with
   `Content-Range: bytes 0-1048575/...`, `Content-Length: 1048576` and a
   positive 1 MiB body.
