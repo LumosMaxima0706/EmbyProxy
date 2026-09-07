@@ -700,7 +700,7 @@ tr:last-child td{border-bottom:0}
 <div class="sheet-layer" id="proxyNodeModal" style="display:none" onclick="if(event.target===this)closeProxyNodeModal()">
   <div class="sheet">
     <div class="sheet-head"><div><h2>添加反代 VPS</h2><p>一次填写节点参数，创建后立即生成短期一键安装命令。</p></div><button class="sheet-close" onclick="closeProxyNodeModal()">x</button></div>
-    <form id="proxyNodeForm" class="form-grid" onsubmit="submitProxyNode(event)">
+    <form id="proxyNodeForm" class="form-grid" oninput="syncProxyNodeFormValidity()" onsubmit="submitProxyNode(event)">
       <div class="form-section">基本信息</div>
       <div class="form-group"><label for="proxyNodeName">节点名称</label><input id="proxyNodeName" required pattern="[a-z0-9][a-z0-9-]{1,62}" value="edge-new" placeholder="edge-new"><small class="form-hint">小写字母、数字和短横线</small></div>
       <div class="form-group"><label for="proxyNodePriority">优先级</label><input id="proxyNodePriority" type="number" min="0" max="10000" value="10"></div>
@@ -1721,7 +1721,12 @@ async function loadProxyNodes() {
   }).join('') : '<tr><td colspan="8" class="table-empty">暂无反代节点</td></tr>';
 }
 function formatBytes(v) { const n = Number(v || 0); if (n < 1e9) return `${(n / 1e6).toFixed(1)} MB`; return `${(n / 1e9).toFixed(2)} GB`; }
-function openProxyNodeModal() { document.getElementById('proxyNodeForm').reset(); document.getElementById('proxyNodeName').value='edge-new'; document.getElementById('proxyNodePriority').value='10'; document.getElementById('proxyNodeQuota').value='1000'; document.getElementById('proxyNodeResetDay').value='1'; document.getElementById('proxyNodeAddressError').style.display='none'; showModal('proxyNodeModal'); }
+function syncProxyNodeFormValidity() {
+  const form = document.getElementById('proxyNodeForm');
+  const button = document.getElementById('proxyNodeSubmit');
+  if (form && button) button.disabled = !form.checkValidity();
+}
+function openProxyNodeModal() { document.getElementById('proxyNodeForm').reset(); document.getElementById('proxyNodeName').value='edge-new'; document.getElementById('proxyNodePriority').value='10'; document.getElementById('proxyNodeQuota').value='1000'; document.getElementById('proxyNodeResetDay').value='1'; document.getElementById('proxyNodeAddressError').style.display='none'; showModal('proxyNodeModal'); syncProxyNodeFormValidity(); }
 function closeProxyNodeModal() { hideModal('proxyNodeModal'); }
 async function submitProxyNode(event) {
   event.preventDefault();
