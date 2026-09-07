@@ -56,10 +56,21 @@ func Select(nodes []storage.ProxyNode, mode, currentID string, now time.Time) (D
 		})
 		return Decision{NodeID: candidates[0].ID, Score: 1, Reason: "manual_priority"}, true
 	}
+	// Priority is the operator's active/standby contract. Smart quota pacing
+	// may compare nodes in the same tier, but it must never promote a lower
+	// priority standby while a higher priority node remains playable.
+	minimumPriority := candidates[0].Priority
+	for _, node := range candidates[1:] {
+		if node.Priority < minimumPriority {
+			minimumPriority = node.Priority
+		}
+	}
 	best := Decision{}
 	for _, node := range candidates {
+		if node.Priority != minimumPriority {
+			continue
+		}
 		score := quotaScore(node, now)
-		score -= float64(node.Priority) * 0.001
 		if node.ID == currentID {
 			score += 0.03
 		}
@@ -93,12 +104,24 @@ func SelectWithPolicy(nodes []storage.ProxyNode, policy Policy, now time.Time) (
 		if policy.MinimumDwell > 0 && !policy.CurrentSince.IsZero() && now.Sub(policy.CurrentSince) < policy.MinimumDwell {
 			return Decision{NodeID: current.ID, Score: 0, Reason: "minimum_dwell"}, true
 		}
-		currentScore := quotaScore(current, now) - float64(current.Priority)*0.001 + 0.03
+		if decisionPriority(nodes, decision.NodeID) < current.Priority {
+			return decision, true
+		}
+		currentScore := quotaScore(current, now) + 0.03
 		if decision.Score-currentScore < policy.HysteresisScore {
 			return Decision{NodeID: current.ID, Score: currentScore, Reason: "hysteresis"}, true
 		}
 	}
 	return decision, true
+}
+
+func decisionPriority(values []storage.ProxyNode, id string) int {
+	for _, node := range values {
+		if node.ID == id {
+			return node.Priority
+		}
+	}
+	return int(^uint(0) >> 1)
 }
 
 func quotaScore(node storage.ProxyNode, now time.Time) float64 {
