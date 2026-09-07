@@ -1102,3 +1102,24 @@ not switch to `-k` as acceptance evidence, and retry only after the provider's
 `retry-after` time. For repeated disposable tests, use a fresh approved test
 hostname (with DNS pointing at the disposable VPS) or an external ingress with
 an already valid certificate; never delete or replace unrelated certificates.
+
+### PHASE-6 two-edge acceptance (2026-09-07)
+
+- `clean-e2e-161-r1` uses the restricted test DNS name
+  `stream-failover-test.149077530.xyz` and the clean-host Caddy ingress.
+- `bwg-backup-edge` uses the existing independent `stream-b` HTTPS ingress and
+  a separate agent on `127.0.0.1:18084`. Its enrollment did not edit or reload
+  the protected BWG Nginx configuration.
+- Both nodes reached `healthy` with playback, config-sync and controller-side
+  ingress health true. Manual reorder was exercised in both directions and
+  each direction completed authenticated PlaybackInfo, a 302 media redirect,
+  and a 1 MiB HTTP 206 response with a valid Content-Range.
+- Automatic failover was exercised in smart mode by stopping only the
+  disposable 161 Caddy service. The first failed probe did not remove the node;
+  the second consecutive failure set ingress false and moved new playback to
+  BWG. Starting Caddy and receiving two consecutive successful probes restored
+  161 to healthy. Unit tests cover minimum dwell, hysteresis, immediate hard
+  failure, and immediate operator reorder while smart mode remains enabled.
+- The test DNS record is an active dependency of the accepted 161 node. Remove
+  it with the restricted provider's `temp-cleanup` only after disabling or
+  deleting that node and cleaning the disposable host.
