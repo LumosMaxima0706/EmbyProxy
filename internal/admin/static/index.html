@@ -574,7 +574,7 @@ tr:last-child td{border-bottom:0}
         <section id="tabProxyNodes" class="stats-deck" style="display:none">
           <div class="stats-top"><div><strong>反代节点</strong><p class="form-hint">调度、连接和远端生命周期统一管理。已移除节点默认隐藏。</p></div><button class="primary-action" onclick="openProxyNodeModal()">添加反代 VPS</button></div>
           <div class="signal-grid proxy-summary" id="proxyNodeSummary"></div>
-          <div class="stats-top proxy-filterbar"><select id="proxyNodeFilter" class="select-input" onchange="renderProxyNodeTable()"><option value="active">可用</option><option value="all">全部</option><option value="issue">异常</option><option value="disabled">已停用</option><option value="removed">已移除</option></select><button class="btn" onclick="loadProxyNodes()">刷新</button></div>
+          <div class="stats-top proxy-filterbar"><select id="proxyNodeFilter" class="select-input" onchange="renderProxyNodeTable()"><option value="active">可用</option><option value="all">全部</option><option value="issue">异常（degraded）</option><option value="disabled">已停用/撤销</option><option value="removed">已移除</option></select><button class="btn" onclick="loadProxyNodes()">刷新</button></div>
           <div class="table-wrap"><table><thead><tr><th>节点 / Endpoint</th><th>状态</th><th>播放</th><th>入口</th><th>接纳</th><th>流量</th><th>优先级</th><th>操作</th></tr></thead><tbody id="proxyNodesBody"><tr><td colspan="8" class="table-empty">暂无反代节点</td></tr></tbody></table></div>
           <div class="action-pack" style="justify-content:flex-end;margin-top:12px"><button class="btn btn-sm" id="proxyEnrollmentCopy" onclick="copyProxyEnrollmentCommand()" hidden>复制安装命令</button></div>
           <div id="proxyEnrollmentOutput" class="code-block" hidden></div>
@@ -1744,17 +1744,17 @@ function proxyNodeVisible(n) {
   const filter = document.getElementById('proxyNodeFilter')?.value || 'active';
   if (filter === 'all') return n.state !== 'removed';
   if (filter === 'removed') return n.state === 'removed';
-  if (filter === 'disabled') return ['disabled','revoked','draining','removed'].includes(n.state);
-  if (filter === 'issue') return n.state !== 'removed' && !proxyNodeHealth(n);
+  if (filter === 'disabled') return ['disabled','revoked','draining'].includes(n.state);
+  if (filter === 'issue') return n.state !== 'removed' && ['degraded','online'].includes(n.state) && !proxyNodeHealth(n);
   return n.state === 'healthy' && n.enabled;
 }
 function renderProxyNodeTable() {
   const all = window.proxyNodes || [];
   const body = document.getElementById('proxyNodesBody');
   const items = all.filter(proxyNodeVisible);
-  const summary = {all: all.filter(n=>n.state!=='removed').length, available: all.filter(n=>n.state==='healthy'&&n.enabled).length, active: all.filter(n=>n.state==='healthy'&&n.enabled&&Number(n.priority||0)===1).length, issue: all.filter(n=>n.state!=='removed'&&!proxyNodeHealth(n)).length, disabled: all.filter(n=>['disabled','revoked','draining','removed'].includes(n.state)).length};
+  const summary = {all: all.filter(n=>n.state!=='removed').length, available: all.filter(n=>n.state==='healthy'&&n.enabled).length, active: all.filter(n=>n.state==='healthy'&&n.enabled&&Number(n.priority||0)===1).length, issue: all.filter(n=>n.state!=='removed'&&['degraded','online'].includes(n.state)&&!proxyNodeHealth(n)).length, disabled: all.filter(n=>['disabled','revoked','draining','removed'].includes(n.state)).length};
   const summaryEl = document.getElementById('proxyNodeSummary');
-  if (summaryEl) summaryEl.innerHTML = [['all','反代节点'],['available','可用'],['active','当前活跃'],['issue','异常'],['disabled','已停用/已移除']].map(([key,label])=>`<div class="signal"><b>${summary[key]}</b><div><span>${label}</span><em>控制面实时状态</em></div></div>`).join('');
+  if (summaryEl) summaryEl.innerHTML = [['all','反代节点'],['available','可用'],['active','当前活跃'],['issue','异常（degraded）'],['disabled','已停用/撤销/已移除']].map(([key,label])=>`<div class="signal"><b>${summary[key]}</b><div><span>${label}</span><em>控制面实时状态</em></div></div>`).join('');
   body.innerHTML = items.length ? items.map((n, i) => {
     const remaining = n.quota_bytes > 0 ? Math.max(0, n.quota_bytes - n.used_bytes) : null;
     const health = proxyNodeHealth(n) ? 'healthy' : (n.state || 'unknown');
