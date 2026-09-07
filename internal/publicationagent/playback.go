@@ -445,6 +445,11 @@ func (a *Agent) runPlaybackCanaryOne(ctx context.Context, request publicationpro
 	}
 	result.Status = "healthy"
 	result.FailureClass = ""
+	for _, route := range manifest.Routes {
+		if route.Kind == "redirect" || route.Kind == "redirect_pattern" {
+			result.RedirectEndpoints = append(result.RedirectEndpoints, route)
+		}
+	}
 	return publicationprotocol.Response{OK: true, NOSLA: publicationprotocol.EdgeResult{Status: "synced"}, BWG: publicationprotocol.EdgeResult{Status: "synced"}, Playback: result}
 }
 

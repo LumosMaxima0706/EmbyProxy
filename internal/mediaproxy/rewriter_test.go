@@ -21,3 +21,11 @@ func TestRewriteLocationStripsTargetBasePath(t *testing.T) {
 		t.Fatalf("location=%q", got)
 	}
 }
+
+func TestRewriteLocationKeepsRedirectAliasForRelativeFollowUp(t *testing.T) {
+	target := Target{Scheme: "http", Host: "media.example", Port: 80, BasePath: "/stream"}
+	routes := []RedirectRoute{{Scheme: "http", Host: "media.example", Port: 80, BasePath: "/stream"}}
+	if got, want := rewriteLocationWithRoutes("/stream?signature=redacted", target, "/s/demo/", routes), "/s/demo/http/media.example/80/stream?signature=redacted"; got != want {
+		t.Fatalf("relative redirect = %q want %q", got, want)
+	}
+}

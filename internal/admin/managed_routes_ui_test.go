@@ -30,3 +30,27 @@ func TestManagedRoutesUIContract(t *testing.T) {
 		}
 	}
 }
+
+func TestProxyNodesUIUsesSingleFormAndHealthGatedSwitch(t *testing.T) {
+	for _, marker := range []string{
+		"id=\"proxyNodeModal\"",
+		"id=\"proxyNodeForm\"",
+		"function submitProxyNode(event)",
+		"function switchProxyNode(id)",
+		"创建并生成安装命令",
+		"切换到此节点",
+		"n.playback_healthy",
+		"n.ingress_healthy",
+		"n.last_heartbeat_at",
+		"/api/admin/proxy-nodes/reorder",
+		"function copyProxyEnrollmentCommand()",
+		"复制安装命令",
+	} {
+		if !strings.Contains(indexHTML, marker) {
+			t.Fatalf("proxy node UI marker %q is missing", marker)
+		}
+	}
+	if strings.Contains(indexHTML, "window.prompt('节点名称") || strings.Contains(indexHTML, "window.prompt('Edge HTTPS ingress") {
+		t.Fatal("proxy node creation must not use a prompt wizard")
+	}
+}

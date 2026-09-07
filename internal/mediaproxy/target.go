@@ -55,7 +55,9 @@ func (t Target) URLForRequest(r *url.URL) (*url.URL, error) {
 	}
 	base := cleanBasePath(t.BasePath)
 	joined := path.Join(base, tail)
-	if strings.HasSuffix(tail, "/") && !strings.HasSuffix(joined, "/") {
+	if t.ExactBasePath && base != "" && (tail == "" || tail == "/") {
+		joined = base
+	} else if strings.HasSuffix(tail, "/") && !strings.HasSuffix(joined, "/") {
 		joined += "/"
 	}
 	result := &url.URL{Scheme: t.Scheme, Host: net.JoinHostPort(t.Host, strconv.Itoa(t.Port)), Path: joined}

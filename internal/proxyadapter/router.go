@@ -15,6 +15,10 @@ type Router struct {
 	executor       *mediaproxy.Executor
 	executorConfig mediaproxy.Config
 	fallback       http.Handler
+	// edgeLocal marks a router running on an edge agent. Such a router must
+	// resolve persisted redirect endpoints locally on client follow-up
+	// requests, while the controller router keeps those aliases blocked.
+	edgeLocal bool
 }
 
 func NewRouter(prefix string, registry *Registry, executor *mediaproxy.Executor, configs ...mediaproxy.Config) *Router {
@@ -32,6 +36,14 @@ func NewProductionRouter(resolver *StorageResolver, executor *mediaproxy.Executo
 	return &Router{resolver: resolver, executor: executor, executorConfig: config, fallback: fallback}
 }
 
+// NewEdgeRouter creates the production router used by an edge agent. Requests
+// already arrived at this edge, so they must not trigger another scheduler
+// selection. This also enables the allowlisted, persisted redirect endpoints
+// emitted in rewritten PlaybackInfo responses.
+func NewEdgeRouter(resolver *StorageResolver, executor *mediaproxy.Executor, config mediaproxy.Config, fallback http.Handler) *Router {
+	return &Router{resolver: resolver, executor: executor, executorConfig: config, fallback: fallback, edgeLocal: true}
+}
+
 func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	if r == nil || r.resolver == nil || r.executor == nil || req == nil {
 		http.Error(w, "Not Found", http.StatusNotFound)
@@ -40,6 +52,9 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	if req.Header.Get(selectedNodeHeader) == "1" {
 		req = req.WithContext(MarkSelectedNodeRequest(req.Context()))
 		req.Header.Set(selectedNodeHeader, "2")
+	}
+	if r.edgeLocal {
+		req = req.WithContext(MarkSelectedNodeRequest(req.Context()))
 	}
 	rawPath, err := requestPath(req)
 	if err != nil {

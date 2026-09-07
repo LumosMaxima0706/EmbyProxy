@@ -73,7 +73,7 @@ func (s *SocketPublicationSyncer) PlaybackCanary(ctx context.Context, plan Publi
 		PlaybackInfoStatus: p.PlaybackInfoStatus, VideoStreamStatus: p.VideoStreamStatus, MediaStatus: p.MediaStatus,
 		RedirectsFollowed: p.RedirectsFollowed, EndpointsDiscovered: p.EndpointsDiscovered, BytesRead: p.BytesRead,
 		ByteGrowth: p.ByteGrowth, ContentRange: p.ContentRange, AcceptRanges: p.AcceptRanges,
-		Samples: p.Samples, SamplesPassed: p.SamplesPassed}
+		Samples: p.Samples, SamplesPassed: p.SamplesPassed, RedirectEndpoints: p.RedirectEndpoints}
 	if !response.OK {
 		if result.FailureClass == "" {
 			result.FailureClass = response.FailedStep

@@ -63,6 +63,9 @@ type PlaybackCanaryResponse struct {
 	ByteGrowth          bool   `json:"byte_growth"`
 	ContentRange        bool   `json:"content_range"`
 	AcceptRanges        bool   `json:"accept_ranges"`
+	// RedirectEndpoints contains only endpoints validated by the canary and
+	// synchronized to both edge configurations. It carries no query/token.
+	RedirectEndpoints []EdgeRoute `json:"redirect_endpoints,omitempty"`
 }
 
 type EdgeManifest struct {

@@ -1,10 +1,14 @@
 package mediaproxy
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -30,20 +34,24 @@ func (e *Executor) ServeHTTP(w http.ResponseWriter, r *http.Request, target Targ
 		http.Error(w, "Bad Gateway", http.StatusBadGateway)
 		return
 	}
-	e.serveHTTP(w, r, target, e.cfg.PublicPrefix)
+	e.serveHTTP(w, r, target, e.cfg.PublicPrefix, nil)
 }
 
 // ServeHTTPWithPublicPrefix reuses the executor's transport and connection
 // pool while allowing an adapter to select the externally visible route prefix.
 func (e *Executor) ServeHTTPWithPublicPrefix(w http.ResponseWriter, r *http.Request, target Target, publicPrefix string) {
+	e.ServeHTTPWithPublicPrefixAndRoutes(w, r, target, publicPrefix, nil)
+}
+
+func (e *Executor) ServeHTTPWithPublicPrefixAndRoutes(w http.ResponseWriter, r *http.Request, target Target, publicPrefix string, routes []RedirectRoute) {
 	if e == nil {
 		http.Error(w, "Bad Gateway", http.StatusBadGateway)
 		return
 	}
-	e.serveHTTP(w, r, target, publicPrefix)
+	e.serveHTTP(w, r, target, publicPrefix, routes)
 }
 
-func (e *Executor) serveHTTP(w http.ResponseWriter, r *http.Request, target Target, publicPrefix string) {
+func (e *Executor) serveHTTP(w http.ResponseWriter, r *http.Request, target Target, publicPrefix string, routes []RedirectRoute) {
 	if r == nil {
 		http.Error(w, "Bad Gateway", http.StatusBadGateway)
 		return
@@ -90,10 +98,14 @@ func (e *Executor) serveHTTP(w http.ResponseWriter, r *http.Request, target Targ
 		return
 	}
 	defer response.Body.Close()
+	if rewritten, ok := rewritePlaybackInfoBody(response, r, publicPrefix); ok {
+		response = rewritten
+		defer response.Body.Close()
+	}
 	if publicPrefix == "" {
 		publicPrefix = "/"
 	}
-	for key, values := range rewriteResponseHeaders(response.Header, target, publicPrefix) {
+	for key, values := range rewriteResponseHeadersWithRoutes(response.Header, target, publicPrefix, routes) {
 		for _, value := range values {
 			w.Header().Add(key, value)
 		}
@@ -102,6 +114,103 @@ func (e *Executor) serveHTTP(w http.ResponseWriter, r *http.Request, target Targ
 	if r.Method != http.MethodHead {
 		_, _ = io.Copy(w, response.Body)
 	}
+}
+
+// rewritePlaybackInfoBody prevents an Emby-compatible upstream from leaking a
+// private MediaSources.Path (for example http://127.0.0.1:5244/...). Clients
+// must receive a route-local playback URL so the next request follows the
+// same controller/edge selection path as the initial PlaybackInfo request.
+func rewritePlaybackInfoBody(response *http.Response, request *http.Request, publicPrefix string) (*http.Response, bool) {
+	if response == nil || request == nil || response.StatusCode != http.StatusOK ||
+		!strings.Contains(strings.ToLower(response.Header.Get("Content-Type")), "application/json") ||
+		!strings.Contains(strings.ToLower(request.URL.Path), "/playbackinfo") {
+		return response, false
+	}
+	itemID := playbackItemID(request.URL.Path)
+	if itemID == "" {
+		return response, false
+	}
+	raw, err := io.ReadAll(io.LimitReader(response.Body, 2<<20))
+	if err != nil {
+		return response, false
+	}
+	// Reading an upstream PlaybackInfo body is necessary to decide whether a
+	// private path must be replaced. Put it back before every no-rewrite exit;
+	// otherwise a valid 200 response reaches clients with an empty JSON body.
+	response.Body = io.NopCloser(bytes.NewReader(raw))
+	var payload map[string]any
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&payload); err != nil {
+		return response, false
+	}
+	sources, ok := payload["MediaSources"].([]any)
+	if !ok {
+		return response, false
+	}
+	playSessionID, _ := payload["PlaySessionId"].(string)
+	userID := strings.TrimSpace(request.URL.Query().Get("UserId"))
+	if userID == "" {
+		userID = strings.TrimSpace(request.Header.Get("X-Emby-User-Id"))
+	}
+	changed := false
+	for _, value := range sources {
+		source, ok := value.(map[string]any)
+		if !ok {
+			continue
+		}
+		if pathValue, ok := source["Path"].(string); ok && isPrivateMediaPath(pathValue) {
+			// MediaSources.Path is commonly a server filesystem path. For remote
+			// HTTP media, Emby exposes the client-compatible original route; the
+			// media source and play session bind the signed redirect response.
+			stream := strings.TrimRight(publicPrefix, "/") + "/emby/videos/" + itemID + "/original.mkv?Static=true"
+			if mediaID, ok := source["Id"].(string); ok && strings.TrimSpace(mediaID) != "" {
+				stream += "&MediaSourceId=" + urlQueryEscape(mediaID)
+			}
+			if strings.TrimSpace(playSessionID) != "" {
+				stream += "&PlaySessionId=" + urlQueryEscape(playSessionID)
+			}
+			if userID != "" {
+				stream += "&UserId=" + urlQueryEscape(userID)
+			}
+			stream += "&DeviceId=embyproxy-canary"
+			source["Path"] = stream
+			changed = true
+		}
+	}
+	if !changed {
+		return response, false
+	}
+	out, err := json.Marshal(payload)
+	if err != nil {
+		return response, false
+	}
+	headers := response.Header.Clone()
+	headers.Del("Content-Length")
+	return &http.Response{StatusCode: response.StatusCode, Status: response.Status, Header: headers, Body: io.NopCloser(bytes.NewReader(out)), Request: response.Request}, true
+}
+
+func playbackItemID(rawPath string) string {
+	parts := strings.Split(strings.Trim(rawPath, "/"), "/")
+	for index := 0; index+2 < len(parts); index++ {
+		if strings.EqualFold(parts[index], "items") && strings.EqualFold(parts[index+2], "playbackinfo") && parts[index+1] != "" {
+			return parts[index+1]
+		}
+	}
+	return ""
+}
+
+func isPrivateMediaPath(value string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	if err != nil || parsed.Hostname() == "" {
+		return false
+	}
+	ip := net.ParseIP(parsed.Hostname())
+	return ip != nil && (ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() || ip.IsLinkLocalUnicast())
+}
+
+func urlQueryEscape(value string) string {
+	return url.QueryEscape(value)
 }
 
 func isWebSocketRequest(r *http.Request) bool {

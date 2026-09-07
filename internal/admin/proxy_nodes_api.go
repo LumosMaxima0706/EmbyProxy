@@ -245,6 +245,36 @@ state_dir="${install_root}/var/lib/embyproxy-edge"
 lib_dir="${install_root}/usr/local/lib"
 bin_dir="${install_root}/usr/local/bin"
 unit_dir="${install_root}/etc/systemd/system"
+# Refuse an unowned ingress before enrollment or writing any edge artifact.
+# A failed bootstrap must leave a clean host clean, so a pre-existing Caddy
+# installation cannot result in a consumed enrollment plus a half-installed
+# edge unit/configuration.
+if [ -z "$install_root" ] && [ "${EMBYPROXY_EDGE_INGRESS_MODE:-auto}" = auto ]; then
+  caddy_root=/etc/caddy
+  caddy_marker="$state_dir/caddy-managed"
+  caddy_before_installed=false
+  command -v caddy >/dev/null 2>&1 && caddy_before_installed=true
+  caddy_unit_before=false
+  # Vendor unit files can remain after a package purge; only a locally
+  # managed/custom unit is an ownership conflict when the package is absent.
+  [ -e /etc/systemd/system/caddy.service ] && caddy_unit_before=true
+  caddy_config_before=false
+  [ -e "$caddy_root/Caddyfile" ] && caddy_config_before=true
+  caddy_managed=false
+  if [ -f "$caddy_marker" ] && grep -Fx 'managed_by=embyproxy-edge' "$caddy_marker" >/dev/null 2>&1; then
+    caddy_managed=true
+  fi
+  if [ "$caddy_managed" != true ] && { [ "$caddy_before_installed" = true ] || [ "$caddy_unit_before" = true ] || [ "$caddy_config_before" = true ]; }; then
+    echo 'unmanaged Caddy/configuration already exists; refusing to overwrite it' >&2
+    echo 'choose EMBYPROXY_EDGE_INGRESS_MODE=external with an existing HTTPS ingress' >&2
+    exit 1
+  fi
+  if [ "$caddy_managed" != true ] && command -v ss >/dev/null 2>&1 && ss -lnt '( sport = :80 or sport = :443 )' | tail -n +2 | grep -q .; then
+    echo 'ports 80/443 are already occupied; refusing to replace an existing ingress' >&2
+    echo 'choose EMBYPROXY_EDGE_INGRESS_MODE=external with an existing HTTPS ingress' >&2
+    exit 1
+  fi
+fi
 install -d -m 0700 "$cfg_dir" "$state_dir" "$lib_dir" "$bin_dir" "$unit_dir"
 # The edge agent has no TLS server. Keep the bind and local probe on loopback;
 # the default mode installs an isolated Caddy HTTPS ingress on clean hosts.
@@ -290,9 +320,6 @@ else
   [ -n "$resolved_ips" ] || { echo "DNS for $edge_domain does not resolve to this host" >&2; exit 1; }
   local_ip=$(curl --fail --silent --show-error --connect-timeout 10 --max-time 15 https://api.ipify.org || true)
   [ -n "$local_ip" ] && printf '%%s\n' "$resolved_ips" | grep -Fx "$local_ip" >/dev/null || { echo "DNS for $edge_domain does not point to this VPS" >&2; exit 1; }
-  if command -v ss >/dev/null 2>&1 && ss -lnt '( sport = :80 or sport = :443 )' | tail -n +2 | grep -q .; then
-    echo 'ports 80/443 are already occupied; refusing to replace an existing ingress' >&2; exit 1
-  fi
 fi
 case "$edge_public" in https://?*) ;; *) echo 'edge ingress must be an HTTPS origin' >&2; exit 1;; esac
 case "$edge_public" in *' '*|*'?'*|*'#'*|*'@'*) echo 'edge ingress URL contains unsafe characters' >&2; exit 1;; esac
@@ -303,47 +330,23 @@ node_id=$(printf '%%s' "$response" | sed -n 's/.*"node_id":"\([^"]*\)".*/\1/p')
 [ -n "$credential" ] && [ -n "$node_id" ] || { echo 'invalid enrollment response' >&2; exit 1; }
 printf 'NODE_ID=%%s\nCREDENTIAL=%%s\nCONTROLLER=%%s\n' "$node_id" "$credential" '%s' > "$cfg_dir/identity.env"
 chmod 0600 "$cfg_dir/identity.env"
-artifact_headers="$state_dir/edge-agent.headers"
-curl --fail --silent --show-error --proto '%s' --tlsv1.2 -D "$artifact_headers" -H "X-EmbyProxy-Node-Credential: $credential" "$CONTROLLER/api/edge/artifact/$node_id/edge-agent" -o "$bin_dir/embyproxy-edge-agent"
+artifact_tmp=$(mktemp "$bin_dir/embyproxy-edge-agent.XXXXXX")
+artifact_headers=$(mktemp "$state_dir/edge-agent.headers.XXXXXX")
+if ! curl --fail --silent --show-error --proto '%s' --tlsv1.2 -D "$artifact_headers" -H "X-EmbyProxy-Node-Credential: $credential" "$CONTROLLER/api/edge/artifact/$node_id/edge-agent" -o "$artifact_tmp"; then
+  echo 'failed to download edge agent artifact' >&2
+  rm -f "$artifact_tmp" "$artifact_headers"
+  exit 1
+fi
 artifact_sha=$(sed -n 's/^[Xx]-[Ee]mby[Pp]roxy-[Aa]rtifact-[Ss][Hh][Aa]256: *\([0-9a-fA-F]\{64\}\).*$/\1/p' "$artifact_headers" | tail -n 1)
-actual_sha=$(sha256sum "$bin_dir/embyproxy-edge-agent" | awk '{print $1}')
-[ -n "$artifact_sha" ] && [ "$artifact_sha" = "$actual_sha" ] || { echo 'edge agent checksum verification failed' >&2; exit 1; }
+actual_sha=$(sha256sum "$artifact_tmp" | awk '{print $1}')
+[ -n "$artifact_sha" ] && [ "$artifact_sha" = "$actual_sha" ] || { echo 'edge agent checksum verification failed' >&2; rm -f "$artifact_tmp" "$artifact_headers"; exit 1; }
 rm -f "$artifact_headers"
-chmod 0700 "$bin_dir/embyproxy-edge-agent"
+chmod 0700 "$artifact_tmp"
+# Atomic replacement keeps reruns safe while the currently running executable
+# still has its old inode open (direct writes would fail with curl 23/ETXTBSY).
+mv -f "$artifact_tmp" "$bin_dir/embyproxy-edge-agent"
 printf '{"listen_addr":"%%s","probe_addr":"%%s","db_path":"%%s/edge.db","controller":"%%s","node_id":"%%s","credential":"%%s","version":"bootstrap","commit":"%s","canary_path":"%%s","allow_private_targets":%%s,"isolated_test_media":%%s}\n' "$edge_listen" "$edge_probe" "$state_dir" "$CONTROLLER" "$node_id" "$credential" "$edge_canary" "$edge_allow_private" "$edge_isolated_media" > "$cfg_dir/edge-agent.json"
 chmod 0600 "$cfg_dir/edge-agent.json"
-cat > "$lib_dir/embyproxy-edge-heartbeat" <<HEARTBEAT
-#!/bin/sh
-set -eu
-. "$cfg_dir/identity.env"
-payload=\$(printf '{"credential":"%%s","version":"bootstrap","commit":"%s","state":"online","playbackHealthy":false,"configSynced":false}' "\$CREDENTIAL")
-curl --fail --silent --show-error --proto '%s' --tlsv1.2 -H 'Content-Type: application/json' --data "\$payload" "\$CONTROLLER/api/edge/heartbeat/\$NODE_ID" >/dev/null
-HEARTBEAT
-chmod 0700 "$lib_dir/embyproxy-edge-heartbeat"
-cat > "$unit_dir/embyproxy-edge-heartbeat.service" <<UNIT
-[Unit]
-Description=EmbyProxy enrolled edge heartbeat
-Wants=network-online.target
-After=network-online.target
-[Service]
-Type=oneshot
-ExecStart=$lib_dir/embyproxy-edge-heartbeat
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=$cfg_dir
-UNIT
-cat > "$unit_dir/embyproxy-edge-heartbeat.timer" <<TIMER
-[Unit]
-Description=EmbyProxy enrolled edge heartbeat timer
-[Timer]
-OnBootSec=30s
-OnUnitActiveSec=60s
-RandomizedDelaySec=10s
-[Install]
-WantedBy=timers.target
-TIMER
 cat > "$unit_dir/embyproxy-edge.service" <<UNIT
 [Unit]
 Description=EmbyProxy enrolled edge agent
@@ -359,6 +362,8 @@ PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=$cfg_dir $state_dir
+[Install]
+WantedBy=multi-user.target
 UNIT
 if [ -z "$install_root" ]; then
   if [ "$ingress_mode" = auto ]; then
@@ -368,7 +373,7 @@ if [ -z "$install_root" ]; then
     command -v caddy >/dev/null 2>&1 && caddy_before_installed=true
     caddy_postinst_active=false
     caddy_unit_before=false
-    systemctl cat caddy.service >/dev/null 2>&1 && caddy_unit_before=true
+    [ -e /etc/systemd/system/caddy.service ] && caddy_unit_before=true
     caddy_config_before=false
     [ -e "$caddy_root/Caddyfile" ] && caddy_config_before=true
     caddy_managed=false
@@ -390,6 +395,26 @@ if [ -z "$install_root" ]; then
     if [ "$caddy_before_installed" != true ]; then
       command -v apt-get >/dev/null 2>&1 || { echo 'caddy is not installed and apt-get is unavailable' >&2; exit 1; }
       apt-get update
+      DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl gnupg debian-keyring debian-archive-keyring apt-transport-https
+      caddy_keyring=/usr/share/keyrings/caddy-stable-archive-keyring.gpg
+      caddy_repo=/etc/apt/sources.list.d/caddy-stable.list
+      caddy_repo_line="deb [signed-by=$caddy_keyring] https://dl.cloudsmith.io/public/caddy/stable/deb/debian any-version main"
+      if [ -e "$caddy_repo" ] && ! grep -Fx "$caddy_repo_line" "$caddy_repo" >/dev/null 2>&1; then
+        echo 'an unexpected Caddy APT source already exists; refusing to overwrite it' >&2
+        echo 'choose EMBYPROXY_EDGE_INGRESS_MODE=external or remove the source after review' >&2
+        exit 1
+      fi
+      if [ ! -s "$caddy_keyring" ]; then
+        caddy_key_tmp=$(mktemp)
+        curl --fail --silent --show-error --proto '=https' --tlsv1.2 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' -o "$caddy_key_tmp"
+        install -d -m 0755 /usr/share/keyrings
+        gpg --dearmor --yes -o "$caddy_keyring" "$caddy_key_tmp"
+        rm -f "$caddy_key_tmp"
+        chmod 0644 "$caddy_keyring"
+      fi
+      printf '%%s\n' "$caddy_repo_line" > "$caddy_repo"
+      chmod 0644 "$caddy_repo"
+      apt-get update
       if [ -n "${EMBYPROXY_CADDY_VERSION:-}" ]; then
         DEBIAN_FRONTEND=noninteractive apt-get install -y "caddy=${EMBYPROXY_CADDY_VERSION}"
       else
@@ -403,6 +428,8 @@ if [ -z "$install_root" ]; then
     id caddy >/dev/null 2>&1 || { echo 'trusted Caddy package did not create the caddy service user' >&2; exit 1; }
     systemctl cat caddy.service >/dev/null 2>&1 || { echo 'trusted Caddy package did not provide caddy.service' >&2; exit 1; }
     install -d -m 0750 "$caddy_root"
+    chown root:caddy "$caddy_root"
+    chmod 0750 "$caddy_root"
     caddy_tmp=$(mktemp "$caddy_root/Caddyfile.embyproxy.XXXXXX")
     caddy_backup="$caddy_marker.previous"
     caddy_had_working=false
@@ -497,7 +524,24 @@ CADDY
     fi
   fi
   systemctl daemon-reload
-  systemctl enable --now embyproxy-edge.service
+  # Older installers emitted a synthetic heartbeat timer that reported false
+  # health and could overwrite the agent's real heartbeat. Remove only those
+  # project-owned legacy units during upgrades.
+  if [ -z "$install_root" ]; then
+    systemctl disable --now embyproxy-edge-heartbeat.timer >/dev/null 2>&1 || true
+    rm -f "$unit_dir/embyproxy-edge-heartbeat.timer" "$unit_dir/embyproxy-edge-heartbeat.service" "$lib_dir/embyproxy-edge-heartbeat"
+    systemctl daemon-reload
+  fi
+  # Always restart after replacing the enrolled config. enable --now is a
+  # no-op for an already active unit and would leave a rerun using stale
+  # credentials and settings.
+  systemctl enable embyproxy-edge.service
+  systemctl restart embyproxy-edge.service || {
+    echo 'failed to restart embyproxy-edge.service' >&2
+    systemctl status embyproxy-edge.service --no-pager || true
+    journalctl -u embyproxy-edge.service -n 80 --no-pager || true
+    exit 1
+  }
   wait_http_200() {
     wait_label="$1"
     wait_url="$2"
@@ -523,15 +567,13 @@ CADDY
   }
   wait_http_200 'edge agent local' "http://$edge_probe/health" 5 2 3 4 http || exit 1
   if [ "$ingress_mode" = external ]; then
-    wait_http_200 'external HTTPS ingress' "$edge_public/health" 9 5 5 5 https || exit 1
+    wait_http_200 'external HTTPS ingress' "$edge_public/health" 18 5 5 5 https || exit 1
   else
-    wait_http_200 'HTTPS edge ingress' "$edge_public/health" 9 5 5 5 https || exit 1
+    wait_http_200 'HTTPS edge ingress' "$edge_public/health" 18 5 5 5 https || exit 1
   fi
-  systemctl enable --now embyproxy-edge-heartbeat.timer
 fi
-"$lib_dir/embyproxy-edge-heartbeat" || true
 echo 'Edge identity enrolled. This host remains unadmitted until its data-plane configuration reports a passing playback canary.'
-		`, controller, persistedEdgePublic, buildinfo.Current().Version, buildinfo.Current().Commit, curlProtocol, url.PathEscape(enrollmentID), url.PathEscape(token), controller, curlProtocol, buildinfo.Current().Commit, buildinfo.Current().Commit, curlProtocol)
+		`, controller, persistedEdgePublic, buildinfo.Current().Version, buildinfo.Current().Commit, curlProtocol, url.PathEscape(enrollmentID), url.PathEscape(token), controller, curlProtocol, buildinfo.Current().Commit)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
@@ -662,10 +704,11 @@ func (h *Handler) handleEdgeEnrollment(w http.ResponseWriter, r *http.Request, p
 				Route storage.ManagedRoute       `json:"route"`
 				Lines []storage.ManagedRouteLine `json:"lines"`
 			} `json:"routes"`
+			RedirectEndpoints map[string][]storage.ProxyRedirectEndpoint `json:"redirect_endpoints,omitempty"`
 		}{NodeID: id, Nodes: nodes, Routes: make([]struct {
 			Route storage.ManagedRoute       `json:"route"`
 			Lines []storage.ManagedRouteLine `json:"lines"`
-		}, 0, len(routes))}
+		}, 0, len(routes)), RedirectEndpoints: map[string][]storage.ProxyRedirectEndpoint{}}
 		for _, route := range routes {
 			if !route.Enabled || !route.Public {
 				continue
@@ -679,6 +722,12 @@ func (h *Handler) handleEdgeEnrollment(w http.ResponseWriter, r *http.Request, p
 				Route storage.ManagedRoute       `json:"route"`
 				Lines []storage.ManagedRouteLine `json:"lines"`
 			}{Route: route, Lines: lines})
+			redirects, redirectErr := h.store.ListProxyRedirectEndpoints(r.Context(), route.Slug)
+			if redirectErr != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false})
+				return
+			}
+			response.RedirectEndpoints[route.Slug] = redirects
 		}
 		w.Header().Set("Cache-Control", "no-store")
 		writeJSON(w, http.StatusOK, response)

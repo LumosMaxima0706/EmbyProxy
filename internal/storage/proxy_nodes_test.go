@@ -134,6 +134,35 @@ func TestRegenerateProxyNodeEnrollmentReopensRevokedUnadmittedNode(t *testing.T)
 	}
 }
 
+func TestRegenerateProxyNodeEnrollmentAllowsHealthyNodeWithoutChangingIdentity(t *testing.T) {
+	ctx := context.Background()
+	store, err := New(filepath.Join(t.TempDir(), "proxy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	enrollment, token, err := store.CreateProxyNode(ctx, ProxyNode{Name: "edge-healthy-regen", ResetDay: 1}, 15*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, credential, err := store.CompleteEnrollment(ctx, enrollment.ID, token, "v1", "test"); err != nil {
+		t.Fatal(err)
+	} else if err := store.HeartbeatProxyNode(ctx, enrollment.NodeID, credential, "v1", "test", "healthy", true, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetProxyNodeIngressHealth(ctx, enrollment.NodeID, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	fresh, _, err := store.RegenerateProxyNodeEnrollment(ctx, enrollment.NodeID, 15*time.Minute)
+	if err != nil || fresh.NodeID != enrollment.NodeID {
+		t.Fatalf("fresh=%+v err=%v", fresh, err)
+	}
+	node, err := store.GetProxyNode(ctx, enrollment.NodeID)
+	if err != nil || node == nil || node.State != "healthy" || !node.PlaybackHealthy || !node.IngressHealthy {
+		t.Fatalf("node=%+v err=%v", node, err)
+	}
+}
+
 func TestProxyNodeOrderAndRevokePersist(t *testing.T) {
 	store, err := New(filepath.Join(t.TempDir(), "proxy.db"))
 	if err != nil {

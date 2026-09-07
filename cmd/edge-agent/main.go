@@ -40,6 +40,7 @@ type snapshot struct {
 		Route storage.ManagedRoute       `json:"route"`
 		Lines []storage.ManagedRouteLine `json:"lines"`
 	} `json:"routes"`
+	RedirectEndpoints map[string][]storage.ProxyRedirectEndpoint `json:"redirect_endpoints,omitempty"`
 }
 
 func normalizePlaybackConfig(cfg *config) error {
@@ -142,6 +143,9 @@ func main() {
 				}
 			}
 		}
+		if err = store.ReplaceProxyRedirectEndpoints(ctx, body.RedirectEndpoints); err != nil {
+			return err
+		}
 		return nil
 	}
 	// Healthy means the agent can sync routes and serve its configured local
@@ -173,7 +177,7 @@ func main() {
 			time.Sleep(30 * time.Second)
 		}
 	}()
-	router := proxyadapter.NewProductionRouter(proxyadapter.NewStorageResolver(store, "admin"), mediaproxy.NewExecutor(mediaproxy.Config{AllowPrivateTargets: cfg.AllowPrivate}), mediaproxy.Config{AllowPrivateTargets: cfg.AllowPrivate}, http.NotFoundHandler())
+	router := proxyadapter.NewEdgeRouter(proxyadapter.NewStorageResolver(store, "admin"), mediaproxy.NewExecutor(mediaproxy.Config{AllowPrivateTargets: cfg.AllowPrivate}), mediaproxy.Config{AllowPrivateTargets: cfg.AllowPrivate}, http.NotFoundHandler())
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) })
 	if cfg.IsolatedTestMedia {

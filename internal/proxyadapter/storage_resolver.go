@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -28,6 +29,10 @@ type ProxyNodeStore interface {
 type ProxyNodeConnectionStore interface {
 	BeginProxyNodeConnection(context.Context, string) error
 	EndProxyNodeConnection(context.Context, string) error
+}
+
+type ProxyRedirectEndpointStore interface {
+	ListProxyRedirectEndpoints(context.Context, string) ([]storage.ProxyRedirectEndpoint, error)
 }
 
 type proxyNodeUsageStore interface {
@@ -124,6 +129,42 @@ func (r *StorageResolver) slug(ctx context.Context, slug string) (mediaproxy.Tar
 		}
 	}
 	return target, true, "/s/" + slug + "/", nil
+}
+
+func (r *StorageResolver) redirectTarget(ctx context.Context, slug string, parts []string) (mediaproxy.Target, int, bool, error) {
+	provider, ok := r.store.(ProxyRedirectEndpointStore)
+	if !ok || len(parts) < 3 {
+		return mediaproxy.Target{}, 0, false, nil
+	}
+	port, err := strconv.Atoi(parts[2])
+	if err != nil {
+		return mediaproxy.Target{}, 0, false, nil
+	}
+	for _, endpoint := range mustRedirectEndpoints(ctx, provider, slug) {
+		if strings.EqualFold(endpoint.Scheme, parts[0]) && strings.EqualFold(endpoint.Host, parts[1]) && endpoint.Port == port {
+			target, parseErr := mediaproxy.ParseTarget(endpoint.Scheme, endpoint.Host, endpoint.Port, endpoint.PathPrefix)
+			if parseErr == nil {
+				target.ExactBasePath = endpoint.PathPrefix != ""
+				consumed := 3
+				if endpoint.PathPrefix != "" {
+					consumed += len(strings.Split(strings.Trim(endpoint.PathPrefix, "/"), "/"))
+				}
+				if len(parts) < consumed || (endpoint.PathPrefix != "" && strings.Join(parts[3:consumed], "/") != strings.Trim(endpoint.PathPrefix, "/")) {
+					continue
+				}
+				return target, consumed, true, nil
+			}
+		}
+	}
+	return mediaproxy.Target{}, 0, false, nil
+}
+
+func mustRedirectEndpoints(ctx context.Context, provider ProxyRedirectEndpointStore, slug string) []storage.ProxyRedirectEndpoint {
+	values, err := provider.ListProxyRedirectEndpoints(ctx, slug)
+	if err != nil {
+		return nil
+	}
+	return values
 }
 
 type selectedNodeContextKey struct{}

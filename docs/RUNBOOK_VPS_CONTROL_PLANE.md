@@ -1001,3 +1001,104 @@ Client -> HTTPS PUBLIC_MEDIA_BASE_URL -> Controller publication handler
 `listen_addr` and `probe_addr` are local agent addresses. `public_address` is
 the Controller's HTTPS management/data-plane origin, while
 `PUBLIC_MEDIA_BASE_URL` is the client-facing publication origin.
+
+### Disposable clean-VPS E2E procedure (2026-09-06)
+
+This is the required end-to-end acceptance procedure for a disposable host. It
+is deliberately separate from the BWG/NOSLA isolated environment. Never place
+SSH private keys, bootstrap URLs, enrollment tokens, node credentials, or
+Emby authorization material in this runbook, shell history, or captured logs.
+
+#### Preconditions
+
+- Use a newly provisioned disposable VPS only. Record its SSH port and the
+  dedicated test-key fingerprint outside the repository.
+- Before enrollment, verify that no Caddy package/unit is installed and no
+  third-party process owns TCP 80 or 443. Existing Caddy, Caddyfile, or an
+  occupied port must use external-ingress mode rather than be overwritten.
+- Create a public DNS A/AAAA record for the new edge hostname which resolves
+  to the disposable VPS. The controller's `public_address` must be the full
+  `https://edge-hostname` origin. DNS and TCP 80/443 must be available for
+  Caddy ACME issuance.
+- Deploy the controller release containing the bootstrap Caddy, HTTPS origin,
+  `ingress_healthy`, and scheduler gates before generating an enrollment. A
+  controller that stores a bare IP or does not expose `ingress_healthy` cannot
+  accept this release's clean-VPS flow.
+
+#### Bootstrap capture and install
+
+1. Generate a fresh 15-minute command through the Admin VPS-node API/UI. Do
+   not reuse a previously displayed token.
+2. On the disposable VPS, save the command's URL in a shell variable without
+   printing it, then download rather than pipe it to a shell:
+
+   ```sh
+   curl --fail --location --show-error --proto '=https' --tlsv1.2 \
+     --connect-timeout 10 --max-time 60 "$BOOTSTRAP_URL" \
+     -o /tmp/embyproxy-bootstrap.sh
+   file /tmp/embyproxy-bootstrap.sh
+   head -n 20 /tmp/embyproxy-bootstrap.sh
+   sh -n /tmp/embyproxy-bootstrap.sh
+   sh -x /tmp/embyproxy-bootstrap.sh \
+     >/tmp/embyproxy-bootstrap.out 2>/tmp/embyproxy-bootstrap.err
+   ```
+
+   A former `curl: (23)` from `curl | sh` may mean the shell exited early and
+   closed the pipe. The first failing command in `bootstrap.err`, not curl's
+   final write error, is the diagnosis.
+
+#### Required checks
+
+1. `systemctl is-active embyproxy-edge.service` and
+   `systemctl is-active caddy.service` both return `active`.
+2. `ss -lntp` shows only the official `caddy.service` on 80/443 and the edge
+   agent only on `127.0.0.1:18080`; no `embyproxy-edge-caddy.service` exists.
+3. `stat /etc/caddy/Caddyfile` confirms `root:caddy` ownership and mode `0640`
+   (or an equally restrictive Caddy-readable mode). Validate and inspect the
+   official unit using `caddy validate --config /etc/caddy/Caddyfile --adapter
+   caddyfile` and `systemctl status caddy.service --no-pager`.
+4. Local `http://127.0.0.1:18080/health` and public
+   `https://edge-hostname/health` both return HTTP 200. The public request must
+   verify the certificate normally; do not use `-k`. Confirm DNS resolves to
+   the disposable VPS.
+5. The local agent's isolated canary uses a Range GET and must return HTTP 206
+   with `Content-Range`. Public ` /__isolated-media/*` remains rejected by
+   Caddy.
+6. Controller storage/API must show `config_synced=true`,
+   `playback_healthy=true`, `ingress_healthy=true`, state `healthy`, and an
+   admitted node. Confirm `selectEdge()` actually selects this node for an
+   eligible request rather than inferring admission from `/health`.
+7. A normal publication/playback URL must traverse Controller -> selected edge
+   -> Caddy -> edge agent -> authorized upstream. A real media Range request
+   must return 206, `Content-Range`, a non-zero body, and evidence in the
+   controller, Caddy, and edge-agent logs that this disposable node carried
+   the request. For HLS, verify both manifest and a media segment.
+8. Re-run the same bootstrap on the working host, then restart
+   `embyproxy-edge.service` and `caddy.service`. Repeat local/public health,
+   controller admission, selection, and media checks. The rerun must retain a
+   single official Caddy service, its ownership marker, a working Caddyfile,
+   and the existing node identity.
+
+#### Diagnostics and cleanup
+
+- Bootstrap output: `/tmp/embyproxy-bootstrap.out` and
+  `/tmp/embyproxy-bootstrap.err`; do not archive sensitive values.
+- Agent logs: `journalctl -u embyproxy-edge.service -n 200 --no-pager`.
+- Caddy logs: `journalctl -u caddy.service -n 200 --no-pager`.
+- Controller-side ingress failures must be diagnosed from its probe logs and
+  persisted node health fields; never silently treat local canary success as
+  public ingress success.
+- After acceptance, remove the disposable enrollment and only its dedicated
+  edge files/units according to a separately approved cleanup plan. Do not
+  use this cleanup procedure against BWG or NOSLA.
+
+#### ACME rate-limit recovery
+
+If a clean reinstall reports TLS handshake errors while Caddy is active, inspect
+`journalctl -u caddy.service`. An ACME HTTP 429 for the exact hostname means
+the CA's certificate-per-domain limit, not an edge binary failure. Keep the
+installed services stopped or in an explicitly documented degraded state, do
+not switch to `-k` as acceptance evidence, and retry only after the provider's
+`retry-after` time. For repeated disposable tests, use a fresh approved test
+hostname (with DNS pointing at the disposable VPS) or an external ingress with
+an already valid certificate; never delete or replace unrelated certificates.

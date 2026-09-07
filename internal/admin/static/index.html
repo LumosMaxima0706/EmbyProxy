@@ -559,8 +559,9 @@ tr:last-child td{border-bottom:0}
         </section>
 
         <section id="tabProxyNodes" class="stats-deck" style="display:none">
-          <div class="stats-top"><div><strong>反代节点</strong><p class="form-hint">管理可加入反代池的 VPS、排序、配额和生命周期。</p></div><button class="primary-action" onclick="createProxyNode()">添加反代 VPS</button></div>
-          <div class="table-wrap"><table><thead><tr><th>节点</th><th>状态</th><th>健康</th><th>流量</th><th>优先级</th><th>操作</th></tr></thead><tbody id="proxyNodesBody"><tr><td colspan="6" class="table-empty">暂无反代节点</td></tr></tbody></table></div>
+          <div class="stats-top"><div><strong>反代节点</strong><p class="form-hint">统一查看入口、播放能力和调度资格；只有健康且已接纳的节点会接收新流量。</p></div><button class="primary-action" onclick="openProxyNodeModal()">添加反代 VPS</button></div>
+          <div class="table-wrap"><table><thead><tr><th>节点 / Endpoint</th><th>状态</th><th>播放</th><th>入口</th><th>接纳</th><th>流量</th><th>优先级</th><th>操作</th></tr></thead><tbody id="proxyNodesBody"><tr><td colspan="8" class="table-empty">暂无反代节点</td></tr></tbody></table></div>
+          <div class="action-pack" style="justify-content:flex-end;margin-top:12px"><button class="btn btn-sm" id="proxyEnrollmentCopy" onclick="copyProxyEnrollmentCommand()" hidden>复制安装命令</button></div>
           <div id="proxyEnrollmentOutput" class="code-block" hidden></div>
         </section>
 
@@ -693,6 +694,23 @@ tr:last-child td{border-bottom:0}
         </section>
       </main>
     </section>
+  </div>
+</div>
+
+<div class="sheet-layer" id="proxyNodeModal" style="display:none" onclick="if(event.target===this)closeProxyNodeModal()">
+  <div class="sheet">
+    <div class="sheet-head"><div><h2>添加反代 VPS</h2><p>一次填写节点参数，创建后立即生成短期一键安装命令。</p></div><button class="sheet-close" onclick="closeProxyNodeModal()">x</button></div>
+    <form id="proxyNodeForm" class="form-grid" onsubmit="submitProxyNode(event)">
+      <div class="form-section">基本信息</div>
+      <div class="form-group"><label for="proxyNodeName">节点名称</label><input id="proxyNodeName" required pattern="[a-z0-9][a-z0-9-]{1,62}" value="edge-new" placeholder="edge-new"><small class="form-hint">小写字母、数字和短横线</small></div>
+      <div class="form-group"><label for="proxyNodePriority">优先级</label><input id="proxyNodePriority" type="number" min="0" max="10000" value="10"></div>
+      <div class="form-section">HTTPS 入口</div>
+      <div class="form-group form-full"><label for="proxyNodeAddress">公网 HTTPS origin</label><input id="proxyNodeAddress" type="url" required placeholder="https://edge.example.com"><small class="form-hint">必须是可由 Controller 访问并能返回 /health=200 的 HTTPS origin。</small><div id="proxyNodeAddressError" class="login-err" style="display:none"></div></div>
+      <div class="form-section">配额策略</div>
+      <div class="form-group"><label for="proxyNodeQuota">月配额 (GB)</label><input id="proxyNodeQuota" type="number" min="0" step="1" value="1000"><small class="form-hint">0 表示不限</small></div>
+      <div class="form-group"><label for="proxyNodeResetDay">重置日</label><input id="proxyNodeResetDay" type="number" min="1" max="31" value="1"></div>
+      <div class="form-actions form-full"><button type="button" class="btn" onclick="closeProxyNodeModal()">取消</button><button type="submit" class="primary-action" id="proxyNodeSubmit">创建并生成安装命令</button></div>
+    </form>
   </div>
 </div>
 
@@ -1696,24 +1714,35 @@ async function loadProxyNodes() {
   const items = Array.isArray(r.nodes) ? r.nodes : [];
   body.innerHTML = items.length ? items.map((n, i) => {
     const remaining = n.quota_bytes > 0 ? Math.max(0, n.quota_bytes - n.used_bytes) : null;
-    const health = n.playback_healthy && n.config_synced && n.ingress_healthy ? 'healthy' : 'not admitted';
-    const bootstrapAction = health !== 'healthy' && ['registered','revoked'].includes(n.state) ? `<button class="btn btn-sm" onclick="regenerateProxyBootstrap('${attr(n.id)}')">重新生成安装命令</button>` : '';
-    return `<tr><td><strong>${esc(n.name)}</strong><small class="muted">${esc(n.public_address || '')}</small></td><td><span class="chip">${esc(n.state)}</span></td><td><span class="chip ${health === 'healthy' ? 'ok' : 'warn'}">${health}</span></td><td>${remaining === null ? '未设置' : `${formatBytes(n.used_bytes)} / ${formatBytes(n.quota_bytes)}`}</td><td>${Number(n.priority || i + 1)}</td><td><button class="btn btn-sm" onclick="toggleProxyNode('${attr(n.id)}',${!n.enabled})">${n.enabled ? '停用' : '启用'}</button>${bootstrapAction}<button class="btn btn-sm btn-danger" onclick="revokeProxyNode('${attr(n.id)}')">排空</button></td></tr>`;
-  }).join('') : '<tr><td colspan="6" class="table-empty">暂无反代节点</td></tr>';
+    const health = n.playback_healthy && n.config_synced && n.ingress_healthy ? 'healthy' : (n.state || 'unknown');
+    const bootstrapAction = ['registered','revoked','installing','healthy','degraded'].includes(n.state) ? `<button class="btn btn-sm" onclick="regenerateProxyBootstrap('${attr(n.id)}')">重新生成安装命令</button>` : '';
+    const chip = (value, ok) => `<span class="chip ${ok ? 'ok' : 'warn'}">${value ? '正常' : '未通过'}</span>`;
+    return `<tr><td><strong>${esc(n.name)}</strong><small class="muted">${esc(n.public_address || '未配置 HTTPS origin')}</small><small class="muted">最近心跳：${n.last_heartbeat_at ? new Date(Number(n.last_heartbeat_at)*1000).toLocaleString() : '暂无'}</small></td><td><span class="chip ${health === 'healthy' ? 'ok' : 'warn'}">${esc(n.state || 'unknown')}</span></td><td>${chip(n.playback_healthy, n.playback_healthy)}</td><td>${chip(n.ingress_healthy, n.ingress_healthy)}</td><td>${chip(n.enabled && health === 'healthy', n.enabled && health === 'healthy')}</td><td>${remaining === null ? '未设置' : `${formatBytes(n.used_bytes)} / ${formatBytes(n.quota_bytes)}`}</td><td>${Number(n.priority || i + 1)}</td><td><div class="action-pack" style="justify-content:flex-start"><button class="btn btn-sm btn-primary" onclick="switchProxyNode('${attr(n.id)}')" ${health !== 'healthy' || !n.enabled ? 'disabled' : ''}>切换到此节点</button><button class="btn btn-sm" onclick="toggleProxyNode('${attr(n.id)}',${!n.enabled})">${n.enabled ? '停用' : '启用'}</button>${bootstrapAction}<button class="btn btn-sm btn-danger" onclick="revokeProxyNode('${attr(n.id)}')">排空</button></div></td></tr>`;
+  }).join('') : '<tr><td colspan="8" class="table-empty">暂无反代节点</td></tr>';
 }
 function formatBytes(v) { const n = Number(v || 0); if (n < 1e9) return `${(n / 1e6).toFixed(1)} MB`; return `${(n / 1e9).toFixed(2)} GB`; }
-async function createProxyNode() {
-  const name = window.prompt('节点名称（仅小写字母、数字和短横线）', 'edge-new'); if (!name) return;
-  const address = window.prompt('Edge HTTPS ingress URL（必须是真实公网 HTTPS origin，例如 https://edge.example.com；DNS 需已指向该 VPS）', ''); if (!address) return;
-  const quota = Number(window.prompt('流量额度（GB，0 表示不限）', '1000') || 0);
-  const resetDay = Number(window.prompt('每月重置日（1-31）', '1') || 1);
-  const r = await authFetch('/api/admin/proxy-nodes', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name,public_address:address,quota_bytes:Math.max(0,quota)*1e9,reset_day:resetDay,reset_timezone:'Asia/Shanghai'})});
-  if (!r.ok) { toast('创建 enrollment 失败: ' + (r.error || 'unknown'), 'err'); return; }
-  const output = document.getElementById('proxyEnrollmentOutput'); output.hidden = false; output.textContent = `一次性安装命令（15 分钟内有效）\n${r.install_command}`; await loadProxyNodes(); toast('节点已创建，请在新 VPS 执行一次性命令', 'ok');
+function openProxyNodeModal() { document.getElementById('proxyNodeForm').reset(); document.getElementById('proxyNodeName').value='edge-new'; document.getElementById('proxyNodePriority').value='10'; document.getElementById('proxyNodeQuota').value='1000'; document.getElementById('proxyNodeResetDay').value='1'; document.getElementById('proxyNodeAddressError').style.display='none'; showModal('proxyNodeModal'); }
+function closeProxyNodeModal() { hideModal('proxyNodeModal'); }
+async function submitProxyNode(event) {
+  event.preventDefault();
+  const form = event.currentTarget; if (!form.reportValidity()) return;
+  const button = document.getElementById('proxyNodeSubmit'); button.disabled = true;
+  const name = document.getElementById('proxyNodeName').value.trim();
+  const address = document.getElementById('proxyNodeAddress').value.trim();
+  const quota = Number(document.getElementById('proxyNodeQuota').value || 0);
+  const resetDay = Number(document.getElementById('proxyNodeResetDay').value || 1);
+  const priority = Number(document.getElementById('proxyNodePriority').value || 0);
+  const r = await authFetch('/api/admin/proxy-nodes', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name,public_address:address,quota_bytes:Math.max(0,quota)*1e9,reset_day:resetDay,reset_timezone:'Asia/Shanghai',priority})});
+  button.disabled = false;
+  if (!r.ok) { const error = document.getElementById('proxyNodeAddressError'); error.textContent = r.error || '创建 enrollment 失败'; error.style.display='block'; toast(r.error || '创建 enrollment 失败','err'); return; }
+  closeProxyNodeModal();
+  const output = document.getElementById('proxyEnrollmentOutput'); output.hidden = false; output.textContent = `一次性安装命令（15 分钟内有效）\n${r.install_command}`; document.getElementById('proxyEnrollmentCopy').hidden = false; await loadProxyNodes(); toast('节点已创建，请执行安装命令', 'ok');
 }
 async function toggleProxyNode(id, enabled) { const r = await authFetch('/api/admin/proxy-nodes/'+encodeURIComponent(id), {method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled})}); if (!r.ok) toast('更新节点失败','err'); await loadProxyNodes(); }
-async function regenerateProxyBootstrap(id) { const r = await authFetch('/api/admin/proxy-nodes/'+encodeURIComponent(id)+'/bootstrap',{method:'POST'}); if (!r.ok) { toast('重新生成安装命令失败: ' + authErrorMessage(r.error), 'err'); return; } const output = document.getElementById('proxyEnrollmentOutput'); output.hidden = false; output.textContent = `一次性安装命令（15 分钟内有效）\n${r.install_command}`; toast('已生成新的短期安装命令', 'ok'); }
+async function regenerateProxyBootstrap(id) { const r = await authFetch('/api/admin/proxy-nodes/'+encodeURIComponent(id)+'/bootstrap',{method:'POST'}); if (!r.ok) { toast('重新生成安装命令失败: ' + authErrorMessage(r.error), 'err'); return; } const output = document.getElementById('proxyEnrollmentOutput'); output.hidden = false; output.textContent = `一次性安装命令（15 分钟内有效）\n${r.install_command}`; document.getElementById('proxyEnrollmentCopy').hidden = false; toast('已生成新的短期安装命令', 'ok'); }
+async function copyProxyEnrollmentCommand() { const output = document.getElementById('proxyEnrollmentOutput'); const command = (output?.textContent || '').split('\n').slice(1).join('\n').trim(); if (!command) return; try { await navigator.clipboard.writeText(command); toast('安装命令已复制', 'ok'); } catch (_) { toast('浏览器拒绝访问剪贴板，请手动复制', 'err'); } }
 async function revokeProxyNode(id) { if (!window.confirm('确认排空该节点？现有连接自然结束后将撤销凭据。')) return; const r=await authFetch('/api/admin/proxy-nodes/'+encodeURIComponent(id)+'/revoke',{method:'POST'}); if(!r.ok) toast('排空节点失败','err'); await loadProxyNodes(); }
+async function switchProxyNode(id) { if (window.proxySwitchInFlight) return; window.proxySwitchInFlight=true; try { const list = await authFetch('/api/admin/proxy-nodes'); if (!list.ok) { toast('切换失败: 无法读取节点','err'); return; } const ids = (list.nodes || []).map(n=>n.id); const ordered = [id].concat(ids.filter(v=>v!==id)); const r = await authFetch('/api/admin/proxy-nodes/reorder',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids:ordered})}); if (!r.ok) { toast('切换失败: '+authErrorMessage(r.error),'err'); return; } toast('已将节点置为首选；健康保护仍然生效','ok'); await loadProxyNodes(); } finally { window.proxySwitchInFlight=false; } }
 
 async function loadNodes() {
   const r = await api('list');

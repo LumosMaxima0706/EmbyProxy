@@ -35,8 +35,29 @@ func (r *Router) serveSlug(w http.ResponseWriter, req *http.Request, rawPath str
 		http.Error(w, http.StatusText(status), status)
 		return true
 	}
-	requestlog.SetRequestURI(req.Context(), "/s/"+parts[1]+"/<path>")
 	pathStart := 2
+	var redirectRoutes []mediaproxy.RedirectRoute
+	if resolver, ok := r.resolver.(*StorageResolver); ok {
+		if endpoints, ok := resolver.store.(ProxyRedirectEndpointStore); ok {
+			for _, endpoint := range mustRedirectEndpoints(resolverCtx, endpoints, parts[1]) {
+				redirectRoutes = append(redirectRoutes, mediaproxy.RedirectRoute{Scheme: endpoint.Scheme, Host: endpoint.Host, Port: endpoint.Port, BasePath: endpoint.PathPrefix})
+			}
+		}
+	}
+	// A canary-validated upstream redirect is represented as
+	// /s/<slug>/<scheme>/<host>/<port>/<path>. Only endpoints persisted by the
+	// control plane are accepted; arbitrary client-supplied hosts never become
+	// proxy targets.
+	if resolver, ok := r.resolver.(*StorageResolver); ok && len(parts) >= 5 {
+		_, selectedEdgeRequest := resolverCtx.Value(selectedNodeContextKey{}).(bool)
+		if selectedEdgeRequest {
+			if redirected, consumed, matched, _ := resolver.redirectTarget(resolverCtx, parts[1], parts[2:]); matched {
+				target = redirected
+				pathStart += consumed
+			}
+		}
+	}
+	requestlog.SetRequestURI(req.Context(), "/s/"+parts[1]+"/<path>")
 	forward := "/"
 	if len(parts) > pathStart {
 		forward = "/" + strings.Join(parts[pathStart:], "/")
@@ -57,9 +78,9 @@ func (r *Router) serveSlug(w http.ResponseWriter, req *http.Request, rawPath str
 	}
 	counted := &countingResponseWriter{ResponseWriter: w}
 	if req.Header.Get("Upgrade") != "" {
-		r.forward(w, req, forward, target, publicPath)
+		r.forward(w, req, forward, target, publicPath, redirectRoutes)
 	} else {
-		r.forward(counted, req, forward, target, publicPath)
+		r.forward(counted, req, forward, target, publicPath, redirectRoutes)
 	}
 	if meta.selected {
 		if usage, ok := r.resolver.(interface {
@@ -102,7 +123,7 @@ func (w *countingResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	return h.Hijack()
 }
 
-func (r *Router) forward(w http.ResponseWriter, req *http.Request, path string, target mediaproxy.Target, publicPath string) {
+func (r *Router) forward(w http.ResponseWriter, req *http.Request, path string, target mediaproxy.Target, publicPath string, redirectRoutes []mediaproxy.RedirectRoute) {
 	clone := req.Clone(req.Context())
 	clone.URL.Path = path
 	clone.URL.RawPath = ""
@@ -112,7 +133,7 @@ func (r *Router) forward(w http.ResponseWriter, req *http.Request, path string, 
 	if publicPath != "" {
 		// The executor remains the single proxy implementation; this route prefix
 		// only controls response Location rewriting.
-		r.executor.ServeHTTPWithPublicPrefix(w, clone, target, publicPath)
+		r.executor.ServeHTTPWithPublicPrefixAndRoutes(w, clone, target, publicPath, redirectRoutes)
 		return
 	}
 	r.executor.ServeHTTP(w, clone, target)

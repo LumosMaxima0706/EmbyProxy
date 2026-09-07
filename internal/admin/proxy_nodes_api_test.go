@@ -107,7 +107,7 @@ func TestProxyNodeBootstrapIsNoStoreAndDoesNotExposeAdminSecret(t *testing.T) {
 	if rec.Code != http.StatusOK || rec.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("bootstrap=%d headers=%v", rec.Code, rec.Header())
 	}
-	if strings.Contains(rec.Body.String(), "strong-admin-token") || !strings.Contains(rec.Body.String(), "api/edge/enroll/") || !strings.Contains(rec.Body.String(), "EMBYPROXY_INSTALL_ROOT") || !strings.Contains(rec.Body.String(), "sha256sum") || !strings.Contains(rec.Body.String(), "edge agent checksum verification failed") || !strings.Contains(rec.Body.String(), `\$CREDENTIAL`) || !strings.Contains(rec.Body.String(), `\$payload`) {
+	if strings.Contains(rec.Body.String(), "strong-admin-token") || !strings.Contains(rec.Body.String(), "api/edge/enroll/") || !strings.Contains(rec.Body.String(), "EMBYPROXY_INSTALL_ROOT") || !strings.Contains(rec.Body.String(), "sha256sum") || !strings.Contains(rec.Body.String(), "edge agent checksum verification failed") {
 		t.Fatal("bootstrap leaked secret or omitted enrollment endpoint")
 	}
 	if !strings.Contains(rec.Body.String(), "edge_isolated_media=${EMBYPROXY_ISOLATED_TEST_MEDIA:-true}") || !strings.Contains(rec.Body.String(), "edge_canary='/__isolated-media/canary'") {
@@ -134,6 +134,14 @@ func TestProxyNodeBootstrapIsNoStoreAndDoesNotExposeAdminSecret(t *testing.T) {
 		"unmanaged Caddy/configuration already exists",
 		"ports 80/443 are already occupied",
 		"apt-get update",
+		"ca-certificates curl gnupg debian-keyring debian-archive-keyring apt-transport-https",
+		"caddy-stable-archive-keyring.gpg",
+		"caddy-stable.list",
+		"https://dl.cloudsmith.io/public/caddy/stable/gpg.key",
+		"gpg --dearmor --yes",
+		"signed-by=$caddy_keyring",
+		"chown root:caddy \"$caddy_root\"",
+		"chmod 0750 \"$caddy_root\"",
 		"DEBIAN_FRONTEND=noninteractive apt-get install -y caddy",
 		"systemctl stop caddy.service",
 		"failed to stop caddy.service before configuration replacement",
@@ -141,6 +149,10 @@ func TestProxyNodeBootstrapIsNoStoreAndDoesNotExposeAdminSecret(t *testing.T) {
 		"caddy_backup=\"$caddy_marker.previous\"",
 		"caddy_restore()",
 		"systemctl stop caddy.service || true",
+		"artifact_tmp=$(mktemp \"$bin_dir/embyproxy-edge-agent.XXXXXX\")",
+		"artifact_headers=$(mktemp \"$state_dir/edge-agent.headers.XXXXXX\")",
+		"-o \"$artifact_tmp\"",
+		"mv -f \"$artifact_tmp\" \"$bin_dir/embyproxy-edge-agent\"",
 		"chown root:caddy \"$caddy_tmp\"",
 		"chmod 0640 \"$caddy_tmp\"",
 		"\"$caddy_bin\" validate --config \"$caddy_tmp\" --adapter caddyfile",
@@ -185,7 +197,7 @@ func TestProxyNodeBootstrapIsNoStoreAndDoesNotExposeAdminSecret(t *testing.T) {
 	if strings.Index(script, "printf 'managed_by=embyproxy-edge") > strings.Index(script, "mv -f \"$caddy_marker_tmp\" \"$caddy_marker\"") {
 		t.Fatal("managed marker contents must be prepared before atomic marker replacement")
 	}
-	if strings.Index(script, "mv -f \"$caddy_marker_tmp\" \"$caddy_marker\"") > strings.Index(script, "systemctl enable --now embyproxy-edge.service") {
+	if strings.Index(script, "mv -f \"$caddy_marker_tmp\" \"$caddy_marker\"") > strings.Index(script, "systemctl enable embyproxy-edge.service") {
 		t.Fatal("edge agent must start only after managed marker replacement")
 	}
 	if strings.Index(script, "\"$caddy_bin\" validate --config \"$caddy_tmp\" --adapter caddyfile") > restartIndex {
@@ -194,13 +206,28 @@ func TestProxyNodeBootstrapIsNoStoreAndDoesNotExposeAdminSecret(t *testing.T) {
 	if strings.Index(script, "systemctl restart caddy.service") > strings.LastIndex(script, "systemctl is-active --quiet caddy.service") {
 		t.Fatal("Caddy must be active-checked after restart")
 	}
-	if strings.Index(script, "systemctl is-active --quiet caddy.service") > strings.Index(script, "systemctl enable --now embyproxy-edge.service") {
+	if strings.Index(script, "systemctl is-active --quiet caddy.service") > strings.Index(script, "systemctl enable embyproxy-edge.service") {
 		t.Fatal("edge agent must start only after managed Caddy is active")
 	}
-	if strings.Index(script, "wait_http_200 'HTTPS edge ingress'") > strings.Index(script, "systemctl enable --now embyproxy-edge-heartbeat.timer") {
-		t.Fatal("heartbeat timer must start only after public ingress health")
+	if strings.Contains(script, "systemctl enable --now embyproxy-edge.service") {
+		t.Fatal("bootstrap must not rely on enable --now for an already active edge")
 	}
-	for _, retry := range []string{"wait_http_200()", "wait_attempts=\"$3\"", "wait_connect_timeout=\"$4\"", "wait_max_time=\"$5\"", "wait_http_200 'edge agent local' \"http://$edge_probe/health\" 5 2 3 4 http", "wait_http_200 'HTTPS edge ingress' \"$edge_public/health\" 9 5 5 5 https", "--proto '=https' --tlsv1.2"} {
+	if !strings.Contains(script, "systemctl enable embyproxy-edge.service") || !strings.Contains(script, "systemctl restart embyproxy-edge.service || {") {
+		t.Fatal("bootstrap must explicitly restart the edge after replacing enrolled config")
+	}
+	if strings.Index(script, "systemctl enable embyproxy-edge.service") > strings.Index(script, "systemctl restart embyproxy-edge.service || {") {
+		t.Fatal("edge unit must be enabled before restart")
+	}
+	if strings.Contains(script, "playbackHealthy:false") || !strings.Contains(script, "systemctl disable --now embyproxy-edge-heartbeat.timer") || !strings.Contains(script, "rm -f \"$unit_dir/embyproxy-edge-heartbeat.timer\"") {
+		t.Fatal("bootstrap must remove the legacy synthetic heartbeat without reinstalling it")
+	}
+	artifactDownload := strings.Index(script, "-o \"$artifact_tmp\"")
+	artifactMode := strings.Index(script, "chmod 0700 \"$artifact_tmp\"")
+	artifactReplace := strings.Index(script, "mv -f \"$artifact_tmp\" \"$bin_dir/embyproxy-edge-agent\"")
+	if artifactDownload < 0 || artifactMode < artifactDownload || artifactReplace < artifactMode {
+		t.Fatal("edge artifact must be downloaded and checked in a temporary path before atomic replacement")
+	}
+	for _, retry := range []string{"wait_http_200()", "wait_attempts=\"$3\"", "wait_connect_timeout=\"$4\"", "wait_max_time=\"$5\"", "wait_http_200 'edge agent local' \"http://$edge_probe/health\" 5 2 3 4 http", "wait_http_200 'HTTPS edge ingress' \"$edge_public/health\" 18 5 5 5 https", "--proto '=https' --tlsv1.2"} {
 		if !strings.Contains(script, retry) {
 			t.Fatalf("bootstrap omitted readiness retry contract %q", retry)
 		}

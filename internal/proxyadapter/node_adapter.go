@@ -53,6 +53,6 @@ func (r *Router) serveNode(w http.ResponseWriter, req *http.Request, rawPath str
 		forward += "/"
 	}
 	publicPath := "/" + strings.Join(parts[:strip], "/") + "/"
-	r.forward(w, req, forward, target, publicPath)
+	r.forward(w, req, forward, target, publicPath, nil)
 	return true
 }

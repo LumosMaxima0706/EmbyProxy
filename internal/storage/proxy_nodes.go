@@ -70,6 +70,16 @@ type ProxyNode struct {
 	UpdatedAt         int64  `json:"updated_at"`
 }
 
+// ProxyRedirectEndpoint is a canary-validated media redirect origin. It is
+// control-plane data, never derived from a client request.
+type ProxyRedirectEndpoint struct {
+	RouteSlug  string `json:"route_slug"`
+	Scheme     string `json:"scheme"`
+	Host       string `json:"host"`
+	Port       int    `json:"port"`
+	PathPrefix string `json:"path_prefix,omitempty"`
+}
+
 type Enrollment struct {
 	ID        string `json:"id"`
 	NodeID    string `json:"node_id"`
@@ -106,6 +116,21 @@ CREATE TABLE IF NOT EXISTS proxy_node_connections (
 	if err != nil {
 		return err
 	}
+	if _, err := s.db.ExecContext(ctx, `
+CREATE TABLE IF NOT EXISTS proxy_redirect_endpoints (
+ route_slug TEXT NOT NULL,
+ scheme TEXT NOT NULL,
+ host TEXT NOT NULL,
+ port INTEGER NOT NULL,
+ path_prefix TEXT NOT NULL DEFAULT '',
+ created_at INTEGER NOT NULL,
+ updated_at INTEGER NOT NULL,
+ PRIMARY KEY(route_slug, scheme, host, port, path_prefix)
+);
+CREATE INDEX IF NOT EXISTS idx_proxy_redirect_endpoints_route ON proxy_redirect_endpoints(route_slug)
+`); err != nil {
+		return err
+	}
 	if err := s.ensureProxyNodeColumn(ctx, "ingress_healthy", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
@@ -122,6 +147,81 @@ CREATE TABLE IF NOT EXISTS proxy_node_connections (
 		return err
 	}
 	return s.backfillProxyNodeResetSchedules(ctx, time.Now())
+}
+
+func (s *Store) ReplaceProxyRedirectEndpoints(ctx context.Context, endpoints map[string][]ProxyRedirectEndpoint) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM proxy_redirect_endpoints`); err != nil {
+		return err
+	}
+	now := time.Now().Unix()
+	for slug, values := range endpoints {
+		for _, endpoint := range values {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO proxy_redirect_endpoints(route_slug,scheme,host,port,path_prefix,created_at,updated_at) VALUES(?,?,?,?,?,?,?)`, slug, endpoint.Scheme, endpoint.Host, endpoint.Port, endpoint.PathPrefix, now, now); err != nil {
+				return err
+			}
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *Store) ReplaceProxyRedirectEndpointsForRoute(ctx context.Context, slug string, endpoints []ProxyRedirectEndpoint) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM proxy_redirect_endpoints WHERE route_slug=?`, slug); err != nil {
+		return err
+	}
+	now := time.Now().Unix()
+	for _, endpoint := range endpoints {
+		if endpoint.RouteSlug != slug {
+			return errors.New("invalid_redirect_endpoint_route")
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO proxy_redirect_endpoints(route_slug,scheme,host,port,path_prefix,created_at,updated_at) VALUES(?,?,?,?,?,?,?)`, slug, endpoint.Scheme, endpoint.Host, endpoint.Port, endpoint.PathPrefix, now, now); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *Store) ListProxyRedirectEndpoints(ctx context.Context, slug string) ([]ProxyRedirectEndpoint, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT route_slug,scheme,host,port,path_prefix FROM proxy_redirect_endpoints WHERE route_slug=? ORDER BY host,port,path_prefix`, slug)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []ProxyRedirectEndpoint{}
+	for rows.Next() {
+		var endpoint ProxyRedirectEndpoint
+		if err := rows.Scan(&endpoint.RouteSlug, &endpoint.Scheme, &endpoint.Host, &endpoint.Port, &endpoint.PathPrefix); err != nil {
+			return nil, err
+		}
+		result = append(result, endpoint)
+	}
+	return result, rows.Err()
+}
+
+func (s *Store) ListAllProxyRedirectEndpoints(ctx context.Context) (map[string][]ProxyRedirectEndpoint, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT route_slug,scheme,host,port,path_prefix FROM proxy_redirect_endpoints ORDER BY route_slug,host,port,path_prefix`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := map[string][]ProxyRedirectEndpoint{}
+	for rows.Next() {
+		var e ProxyRedirectEndpoint
+		if err := rows.Scan(&e.RouteSlug, &e.Scheme, &e.Host, &e.Port, &e.PathPrefix); err != nil {
+			return nil, err
+		}
+		result[e.RouteSlug] = append(result[e.RouteSlug], e)
+	}
+	return result, rows.Err()
 }
 
 func (s *Store) ensureProxyNodeColumn(ctx context.Context, name, definition string) error {
@@ -321,8 +421,9 @@ func (s *Store) CreateProxyNode(ctx context.Context, node ProxyNode, enrollmentT
 }
 
 // RegenerateProxyNodeEnrollment issues a fresh short-lived bootstrap token for
-// an existing, not-yet-enrolled node. Older unconsumed enrollments are revoked
-// so the operator never has multiple valid commands for the same node.
+// an existing node. Older unconsumed enrollments are revoked so the operator
+// never has multiple valid commands for the same node. A healthy node keeps
+// its stable node ID until the new installer exchanges this one-time token.
 func (s *Store) RegenerateProxyNodeEnrollment(ctx context.Context, nodeID string, enrollmentTTL time.Duration) (Enrollment, string, error) {
 	if strings.TrimSpace(nodeID) == "" || enrollmentTTL <= 0 || enrollmentTTL > 24*time.Hour {
 		return Enrollment{}, "", errors.New("invalid_enrollment")
@@ -342,7 +443,7 @@ func (s *Store) RegenerateProxyNodeEnrollment(ctx context.Context, nodeID string
 	if err := tx.QueryRowContext(ctx, `SELECT state FROM proxy_nodes WHERE id=?`, nodeID).Scan(&state); err != nil {
 		return Enrollment{}, "", err
 	}
-	if state != "registered" && state != "revoked" {
+	if state != "registered" && state != "revoked" && state != "installing" && state != "healthy" && state != "degraded" {
 		return Enrollment{}, "", errors.New("node_not_registered")
 	}
 	if state == "revoked" {

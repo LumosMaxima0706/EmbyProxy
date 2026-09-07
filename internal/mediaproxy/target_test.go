@@ -30,6 +30,21 @@ func TestTargetURLForRequestJoinsBasePathAndQuery(t *testing.T) {
 	}
 }
 
+func TestTargetURLForRequestKeepsExactRedirectBasePath(t *testing.T) {
+	target := Target{Scheme: "https", Host: "media.example", Port: 443, BasePath: "/stream", ExactBasePath: true}
+	request, err := url.Parse("/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := target.URLForRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Path != "/stream" {
+		t.Fatalf("path=%q want /stream", result.Path)
+	}
+}
+
 func TestTargetURLForCommonStreamingPaths(t *testing.T) {
 	target := Target{Scheme: "https", Host: "media.example", Port: 443, BasePath: "/emby"}
 	for _, requestPath := range []string{

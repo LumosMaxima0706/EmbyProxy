@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"embyproxy/internal/proxyadapter"
+	"embyproxy/internal/publicationprotocol"
 	"embyproxy/internal/storage"
 	"embyproxy/internal/validators"
 )
@@ -293,20 +294,21 @@ type PlaybackCanaryInput struct {
 }
 
 type PlaybackCanaryResult struct {
-	Status              string `json:"status"`
-	FailureClass        string `json:"failure_class,omitempty"`
-	ConnectivityStatus  int    `json:"connectivity_status"`
-	PlaybackInfoStatus  int    `json:"playbackinfo_status"`
-	VideoStreamStatus   int    `json:"videostream_status"`
-	MediaStatus         int    `json:"media_status"`
-	RedirectsFollowed   int    `json:"redirects_followed"`
-	EndpointsDiscovered int    `json:"endpoints_discovered"`
-	Samples             int    `json:"samples"`
-	SamplesPassed       int    `json:"samples_passed"`
-	BytesRead           int64  `json:"bytes_read"`
-	ByteGrowth          bool   `json:"byte_growth"`
-	ContentRange        bool   `json:"content_range"`
-	AcceptRanges        bool   `json:"accept_ranges"`
+	Status              string                          `json:"status"`
+	FailureClass        string                          `json:"failure_class,omitempty"`
+	ConnectivityStatus  int                             `json:"connectivity_status"`
+	PlaybackInfoStatus  int                             `json:"playbackinfo_status"`
+	VideoStreamStatus   int                             `json:"videostream_status"`
+	MediaStatus         int                             `json:"media_status"`
+	RedirectsFollowed   int                             `json:"redirects_followed"`
+	EndpointsDiscovered int                             `json:"endpoints_discovered"`
+	Samples             int                             `json:"samples"`
+	SamplesPassed       int                             `json:"samples_passed"`
+	BytesRead           int64                           `json:"bytes_read"`
+	ByteGrowth          bool                            `json:"byte_growth"`
+	ContentRange        bool                            `json:"content_range"`
+	AcceptRanges        bool                            `json:"accept_ranges"`
+	RedirectEndpoints   []publicationprotocol.EdgeRoute `json:"redirect_endpoints,omitempty"`
 }
 
 type publicationStatusView struct {
@@ -627,6 +629,16 @@ func (h *Handler) runStoredPlaybackCanary(ctx context.Context, uid, name string,
 		return result, failureClass, errors.New("playback_canary_failed")
 	}
 	verifiedAt := time.Now().Unix()
+	redirects := make([]storage.ProxyRedirectEndpoint, 0, len(result.RedirectEndpoints))
+	for _, endpoint := range result.RedirectEndpoints {
+		if endpoint.Kind != "redirect" {
+			continue
+		}
+		redirects = append(redirects, storage.ProxyRedirectEndpoint{RouteSlug: plan.RouteSlug, Scheme: endpoint.Scheme, Host: endpoint.Host, Port: endpoint.Port, PathPrefix: endpoint.BasePath})
+	}
+	if err := h.store.ReplaceProxyRedirectEndpointsForRoute(ctx, plan.RouteSlug, redirects); err != nil {
+		return result, "redirect_endpoint_persist_failed", err
+	}
 	if err := h.store.SetPublicationPlaybackVerified(ctx, uid, name, verifiedAt); err != nil {
 		return result, "PLAYBACK_VERIFICATION_REQUIRES_SYNCED_PUBLICATION", err
 	}
@@ -683,6 +695,16 @@ func (h *Handler) runStoredPlaybackCanaryWithCredential(ctx context.Context, uid
 	result, canaryErr := canary.PlaybackCanary(ctx, plan, PlaybackCanaryInput{ItemIDs: itemIDs, AccessToken: token, UserID: userID})
 	if canaryErr != nil || result.Status != "healthy" {
 		return result, result.FailureClass, errors.New("playback_canary_failed")
+	}
+	redirects := make([]storage.ProxyRedirectEndpoint, 0, len(result.RedirectEndpoints))
+	for _, endpoint := range result.RedirectEndpoints {
+		if endpoint.Kind != "redirect" {
+			continue
+		}
+		redirects = append(redirects, storage.ProxyRedirectEndpoint{RouteSlug: plan.RouteSlug, Scheme: endpoint.Scheme, Host: endpoint.Host, Port: endpoint.Port, PathPrefix: endpoint.BasePath})
+	}
+	if err := h.store.ReplaceProxyRedirectEndpointsForRoute(ctx, plan.RouteSlug, redirects); err != nil {
+		return result, "redirect_endpoint_persist_failed", err
 	}
 	if err := h.store.SetPublicationPlaybackVerified(ctx, uid, name, time.Now().Unix()); err != nil {
 		return result, "PLAYBACK_VERIFICATION_REQUIRES_SYNCED_PUBLICATION", err
@@ -992,6 +1014,17 @@ func (h *Handler) handlePublicationAPI(w http.ResponseWriter, r *http.Request, p
 			}
 			_ = h.store.SetPublicationPlaybackFailed(ctx, uid, name, failureClass, time.Now().Unix())
 			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "playback_status": "failed", "canary": result})
+			return
+		}
+		redirects := make([]storage.ProxyRedirectEndpoint, 0, len(result.RedirectEndpoints))
+		for _, endpoint := range result.RedirectEndpoints {
+			if endpoint.Kind != "redirect" {
+				continue
+			}
+			redirects = append(redirects, storage.ProxyRedirectEndpoint{RouteSlug: plan.RouteSlug, Scheme: endpoint.Scheme, Host: endpoint.Host, Port: endpoint.Port, PathPrefix: endpoint.BasePath})
+		}
+		if err := h.store.ReplaceProxyRedirectEndpointsForRoute(ctx, plan.RouteSlug, redirects); err != nil {
+			writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "reason": "redirect_endpoint_persist_failed", "failed_step": "redirect_store"})
 			return
 		}
 		verifiedAt := time.Now().Unix()

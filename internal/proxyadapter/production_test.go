@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -97,6 +98,83 @@ func TestProductionSlugRouteUsesManagedTarget(t *testing.T) {
 	}
 	if recorder.Header().Get("Location") != "/s/demo/redirect" || recorder.Header().Get("Content-Location") != "/s/demo/content" {
 		t.Fatalf("rewritten headers=%v", recorder.Header())
+	}
+}
+
+func TestProductionSelectedEdgeUsesOnlyPersistedRedirectEndpoint(t *testing.T) {
+	var redirectHits atomic.Int32
+	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		redirectHits.Add(1)
+		if r.URL.Path != "/media/video.mkv" {
+			t.Errorf("redirect path=%q", r.URL.Path)
+		}
+		w.Header().Set("Content-Range", "bytes 0-2/3")
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = w.Write([]byte("abc"))
+	}))
+	defer redirect.Close()
+	parsed, err := url.Parse(redirect.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(parsed.Port())
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := newRouteStore(t)
+	seedManagedRoute(t, store, "demo", "https://origin.example", true, true)
+	if err := store.ReplaceProxyRedirectEndpointsForRoute(context.Background(), "demo", []storage.ProxyRedirectEndpoint{{RouteSlug: "demo", Scheme: "http", Host: parsed.Hostname(), Port: port, PathPrefix: "media"}}); err != nil {
+		t.Fatal(err)
+	}
+	router := newProductionTestRouter(t, store, http.NotFoundHandler())
+	selected := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/s/demo/http/"+parsed.Hostname()+"/"+parsed.Port()+"/media/video.mkv", nil)
+	req.Header.Set(selectedNodeHeader, "1")
+	router.ServeHTTP(selected, req)
+	if selected.Code != http.StatusPartialContent || selected.Body.String() != "abc" || redirectHits.Load() != 1 {
+		t.Fatalf("selected status=%d body=%q hits=%d", selected.Code, selected.Body.String(), redirectHits.Load())
+	}
+	// The same encoded target on the controller hop must remain a normal
+	// managed-route request. It must not escape directly to the redirect host.
+	unselected := httptest.NewRecorder()
+	router.ServeHTTP(unselected, httptest.NewRequest(http.MethodGet, "/s/demo/http/"+parsed.Hostname()+"/"+parsed.Port()+"/media/video.mkv", nil))
+	if redirectHits.Load() != 1 {
+		t.Fatalf("unselected request reached redirect endpoint")
+	}
+}
+
+func TestProductionEdgeRouterResolvesPersistedRedirectOnClientFollowup(t *testing.T) {
+	var hits atomic.Int32
+	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		if r.URL.Path != "/stream" {
+			t.Fatalf("redirect path=%q", r.URL.Path)
+		}
+		w.Header().Set("Content-Range", "bytes 0-2/3")
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = w.Write([]byte("abc"))
+	}))
+	defer redirect.Close()
+	parsed, err := url.Parse(redirect.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(parsed.Port())
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := newRouteStore(t)
+	seedManagedRoute(t, store, "demo", "https://origin.example", true, true)
+	if err := store.ReplaceProxyRedirectEndpointsForRoute(context.Background(), "demo", []storage.ProxyRedirectEndpoint{{RouteSlug: "demo", Scheme: "http", Host: parsed.Hostname(), Port: port, PathPrefix: ""}}); err != nil {
+		t.Fatal(err)
+	}
+	config := mediaproxy.Config{AllowPrivateTargets: true}
+	router := NewEdgeRouter(NewStorageResolver(store, "admin"), mediaproxy.NewExecutor(config), config, http.NotFoundHandler())
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/s/demo/http/"+parsed.Hostname()+"/"+parsed.Port()+"/stream", nil)
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusPartialContent || recorder.Body.String() != "abc" || hits.Load() != 1 {
+		t.Fatalf("status=%d body=%q hits=%d", recorder.Code, recorder.Body.String(), hits.Load())
 	}
 }
 
