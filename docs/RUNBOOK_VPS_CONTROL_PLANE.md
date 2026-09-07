@@ -1123,3 +1123,46 @@ an already valid certificate; never delete or replace unrelated certificates.
 - The test DNS record is an active dependency of the accepted 161 node. Remove
   it with the restricted provider's `temp-cleanup` only after disabling or
   deleting that node and cleaning the disposable host.
+
+#### Final evidence audit (2026-09-07)
+
+- **Second clean reinstall timeline (UTC):** project-only cleanup was captured
+  as `/root/backup-phase6-clean-20260907T024018Z`; the host then passed the
+  clean-state check (single official `caddy.service`, no project edge unit or
+  state left). The Admin control plane recreated `clean-e2e-161-r1` and issued
+  a fresh short-lived bootstrap. On 161, only that generated bootstrap command
+  was run; the installer itself performed dependency/bootstrap, edge-agent,
+  official Caddy configuration, enrollment and service enablement. There was
+  no bootstrap-external `apt`, `mkdir`, `chmod`, `systemctl`, Caddy, config or
+  TLS repair. The resulting edge service started at 02:55 UTC and Caddy at
+  03:26 UTC, followed by healthy/admitted state and the normal playback chain:
+  `PlaybackInfo 200 -> VideoStream 302 -> redirect -> Range 206`, with
+  `Content-Range: bytes 0-1048575/...`, `Content-Length: 1048576` and a
+  positive 1 MiB body.
+- The `stream-failover-test.149077530.xyz` A record was created through the
+  restricted, record-scoped Spaceship provider operation used by the approved
+  deployment automation. It is not created by a user typing DNS commands on
+  the VPS, and the bootstrap does not require DNS credentials or manual DNS
+  edits. The operator/control-plane workflow must create or select the public
+  HTTPS origin before issuing the one-command bootstrap; users do not perform
+  an additional VPS-side DNS step.
+- **Real automatic failover evidence:** with active node 161, the first failed
+  ingress probe was retained, and the second consecutive failure crossed the
+  configured threshold, marked 161 degraded and selected BWG. A normal product
+  request then completed `PlaybackInfo 200 -> VideoStream 302 -> redirect ->
+  BWG media 206`; the ranged response had the requested 1 MiB
+  `Content-Range` and non-zero body bytes. After Caddy recovery, two consecutive
+  successful probes crossed the recovery threshold. Minimum dwell/cooldown and
+  hysteresis held the recovered node from immediate oscillation; no flap was
+  observed. The selector tests cover the same thresholds, hard-failure
+  fallback, dwell and hysteresis decisions.
+- **Browser acceptance:** the final embedded UI was opened in Chromium through
+  an authenticated same-origin test tunnel. The Emby node view rendered 6 real
+  rows; the reverse-proxy view rendered 5 nodes spanning `healthy`, `degraded`,
+  `installing` and `revoked`, with playback/ingress/admission chips, traffic,
+  priority, last-seen and switch/enable-disable/regenerate/drain actions. The
+  add-VPS sheet showed all required parameters in one page; invalid required
+  fields kept the create button disabled and a valid HTTPS origin enabled it.
+  Desktop (1440px) and mobile (390px) screenshots were captured; both had no
+  horizontal overflow. The final UI release includes the form-state fix from
+  commit `f6285d0`.
