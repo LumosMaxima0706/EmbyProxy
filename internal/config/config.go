@@ -57,6 +57,7 @@ type Config struct {
 	FailoverDNSAllowedRecords string
 	FailoverDNSRealApply      bool
 	FailoverMockFixture       bool
+	SpaceshipDNSAdapterPath   string
 	FailoverStateFile         string
 	Defaults                  Defaults
 }
@@ -223,6 +224,7 @@ func Load() (Config, error) {
 		FailoverDNSAllowedRecords:       strings.TrimSpace(os.Getenv("FAILOVER_DNS_ALLOWED_RECORDS")),
 		FailoverDNSRealApply:            envBool("FAILOVER_DNS_REAL_APPLY_ENABLED", false),
 		FailoverMockFixture:             envBool("FAILOVER_MOCK_FIXTURE_ENABLED", false),
+		SpaceshipDNSAdapterPath:         envString("SPACESHIP_DNS_ADAPTER", "/opt/stream-failover/spaceship_dns.py"),
 		FailoverStateFile:               envString("FAILOVER_STATE_FILE", "/var/lib/embyproxy-gsy-sidecar/failover-state.json"),
 		Defaults: Defaults{
 			CacheTTL:           10000,

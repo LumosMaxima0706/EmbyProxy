@@ -201,6 +201,22 @@ func main() {
 		}
 	}
 	adminHandler.SetFailoverController(failoverController)
+	if cfg.FailoverDNSProviderMode == string(failover.DNSProviderModeReal) || cfg.FailoverDNSProviderMode == string(failover.DNSProviderModeExternal) {
+		adminHandler.SetLifecycleDNSProvider(failover.SpaceshipRecordDeleter{AdapterPath: cfg.SpaceshipDNSAdapterPath})
+	}
+	store.SetProxyNodeDNSDeleter(func(ctx context.Context, provider, account, zone, nodeID, recordID, recordType string) error {
+		if provider != "spaceship" || account == "" || zone == "" || nodeID == "" {
+			return errors.New("dns_ownership_unverified")
+		}
+		if cfg.FailoverDNSProviderMode == string(failover.DNSProviderModeReal) || cfg.FailoverDNSProviderMode == string(failover.DNSProviderModeExternal) {
+			return failover.SpaceshipRecordDeleter{AdapterPath: cfg.SpaceshipDNSAdapterPath}.DeleteOwnedRecord(ctx, provider, account, zone, nodeID, recordID, recordType)
+		}
+		dnsProvider := failoverController.DNSProvider()
+		if dnsProvider == nil {
+			return errors.New("dns_provider_unavailable")
+		}
+		return dnsProvider.DeleteRecord(ctx, recordID)
+	})
 	adminHandler.SetDNSStatusReader(func() map[string]any {
 		run, ok, err := store.LoadLatestDNSUpdateRun(context.Background())
 		if err != nil || !ok {

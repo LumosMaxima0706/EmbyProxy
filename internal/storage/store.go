@@ -14,22 +14,33 @@ import (
 	"sync"
 	"time"
 
+	"embyproxy/internal/edgecontrol"
 	_ "modernc.org/sqlite"
 )
 
 type Store struct {
-	db              *sql.DB
-	mu              sync.RWMutex
-	nodeCache       map[string]cacheEntry[*Node]
-	nodeListCache   map[string]cacheEntry[[]Node]
-	hostIndexCache  map[string]cacheEntry[map[string]HostMatch]
-	sysConfigCache  systemConfigCacheEntry
-	sysConfigGen    uint64
-	playbackMu      sync.RWMutex
-	playbackClosed  bool
-	playbackQueue   chan PlaybackInput
-	playbackWG      sync.WaitGroup
-	playbackDropped uint64
+	db                  *sql.DB
+	mu                  sync.RWMutex
+	nodeCache           map[string]cacheEntry[*Node]
+	nodeListCache       map[string]cacheEntry[[]Node]
+	hostIndexCache      map[string]cacheEntry[map[string]HostMatch]
+	sysConfigCache      systemConfigCacheEntry
+	sysConfigGen        uint64
+	playbackMu          sync.RWMutex
+	playbackClosed      bool
+	playbackQueue       chan PlaybackInput
+	playbackWG          sync.WaitGroup
+	playbackDropped     uint64
+	proxyNodeDNSDeleter func(context.Context, string, string, string, string, string, string) error
+	decommissionMu      sync.Mutex
+	decommissionJobs    map[string]edgecontrol.Job
+}
+
+// SetProxyNodeDNSDeleter injects the record-scoped provider transport used by
+// lifecycle jobs. The callback receives only an immutable provider record ID
+// and record type; hostname-based deletion is intentionally impossible.
+func (s *Store) SetProxyNodeDNSDeleter(fn func(context.Context, string, string, string, string, string, string) error) {
+	s.proxyNodeDNSDeleter = fn
 }
 
 type KV struct {
@@ -59,6 +70,17 @@ func New(dbPath string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
 		return nil, err
 	}
+	file, err := os.OpenFile(dbPath, os.O_RDWR|os.O_CREATE, 0600)
+	if err != nil {
+		return nil, err
+	}
+	if err := file.Chmod(0600); err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	if err := file.Close(); err != nil {
+		return nil, err
+	}
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return nil, err
@@ -69,10 +91,11 @@ func New(dbPath string) (*Store, error) {
 		return nil, err
 	}
 	store := &Store{
-		db:             db,
-		nodeCache:      map[string]cacheEntry[*Node]{},
-		nodeListCache:  map[string]cacheEntry[[]Node]{},
-		hostIndexCache: map[string]cacheEntry[map[string]HostMatch]{},
+		db:               db,
+		nodeCache:        map[string]cacheEntry[*Node]{},
+		nodeListCache:    map[string]cacheEntry[[]Node]{},
+		hostIndexCache:   map[string]cacheEntry[map[string]HostMatch]{},
+		decommissionJobs: map[string]edgecontrol.Job{},
 	}
 	if err := store.InitSchema(context.Background()); err != nil {
 		_ = db.Close()

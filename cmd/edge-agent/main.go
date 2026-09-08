@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -9,28 +10,37 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	projectconfig "embyproxy/internal/config"
+	"embyproxy/internal/edgecleanup"
+	"embyproxy/internal/edgecontrol"
 	"embyproxy/internal/mediaproxy"
 	"embyproxy/internal/proxyadapter"
 	"embyproxy/internal/storage"
 )
 
 type config struct {
-	ListenAddr        string `json:"listen_addr"`
-	ProbeAddr         string `json:"probe_addr"`
-	DBPath            string `json:"db_path"`
-	Controller        string `json:"controller"`
-	NodeID            string `json:"node_id"`
-	Credential        string `json:"credential"`
-	Version           string `json:"version"`
-	Commit            string `json:"commit"`
-	CanaryPath        string `json:"canary_path"`
-	AllowPrivate      bool   `json:"allow_private_targets"`
-	IsolatedTestMedia bool   `json:"isolated_test_media"`
+	ListenAddr              string `json:"listen_addr"`
+	ProbeAddr               string `json:"probe_addr"`
+	DBPath                  string `json:"db_path"`
+	Controller              string `json:"controller"`
+	NodeID                  string `json:"node_id"`
+	Credential              string `json:"credential"`
+	Version                 string `json:"version"`
+	Commit                  string `json:"commit"`
+	CanaryPath              string `json:"canary_path"`
+	AllowPrivate            bool   `json:"allow_private_targets"`
+	IsolatedTestMedia       bool   `json:"isolated_test_media"`
+	DecommissionPublicKey   string `json:"decommission_public_key"`
+	CaddyInstalledByProject bool   `json:"caddy_installed_by_project"`
+	CaddyConfigOwned        bool   `json:"caddy_config_owned"`
+	TLSStateOwned           bool   `json:"tls_state_owned"`
+	EdgeUnitOwned           bool   `json:"edge_unit_owned"`
 }
 
 type snapshot struct {
@@ -101,6 +111,9 @@ func main() {
 	}
 	defer store.Close()
 	client := &http.Client{Timeout: 15 * time.Second}
+	decommissionKey, _ := edgecontrol.DecodePublicKey(cfg.DecommissionPublicKey)
+	nonceStore := &edgecontrol.PersistentNonceStore{Path: filepath.Join(filepath.Dir(*path), "decommission-nonces.json")}
+	configPath := *path
 	sync := func(ctx context.Context) error {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(cfg.Controller, "/")+"/api/edge/config/"+cfg.NodeID, nil)
 		if err != nil {
@@ -151,7 +164,7 @@ func main() {
 	// Healthy means the agent can sync routes and serve its configured local
 	// playback canary. Public ingress/TLS reachability is a separate concern.
 	heartbeat := func(ctx context.Context, synced, playback bool, lastErr string) {
-		body, _ := json.Marshal(map[string]any{"credential": cfg.Credential, "version": cfg.Version, "commit": cfg.Commit, "state": map[bool]string{true: "healthy", false: "degraded"}[synced && playback], "playbackHealthy": playback, "configSynced": synced, "lastError": lastErr})
+		body, _ := json.Marshal(map[string]any{"credential": cfg.Credential, "version": cfg.Version, "commit": cfg.Commit, "decommissionCapable": len(decommissionKey) == ed25519.PublicKeySize, "state": map[bool]string{true: "healthy", false: "degraded"}[synced && playback], "playbackHealthy": playback, "configSynced": synced, "lastError": lastErr})
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(cfg.Controller, "/")+"/api/edge/heartbeat/"+cfg.NodeID, strings.NewReader(string(body)))
 		if err == nil {
 			req.Header.Set("Content-Type", "application/json")
@@ -177,6 +190,50 @@ func main() {
 			time.Sleep(30 * time.Second)
 		}
 	}()
+	if len(decommissionKey) == ed25519.PublicKeySize {
+		go func() {
+			for {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(cfg.Controller, "/")+"/api/edge/decommission/"+cfg.NodeID, nil)
+				if reqErr == nil {
+					req.Header.Set("X-EmbyProxy-Node-Credential", cfg.Credential)
+					res, getErr := client.Do(req)
+					if getErr == nil && res.StatusCode == http.StatusOK {
+						var body struct {
+							Job edgecontrol.Job `json:"job"`
+						}
+						if json.NewDecoder(io.LimitReader(res.Body, 64<<10)).Decode(&body) == nil && nonceStore.Verify(body.Job, cfg.NodeID, decommissionKey, time.Now(), 20*time.Minute) == nil {
+							payload, _ := json.Marshal(map[string]string{"job_id": body.Job.JobID, "completion_token": body.Job.CompletionToken})
+							acceptReq, _ := http.NewRequest(http.MethodPost, strings.TrimRight(cfg.Controller, "/")+"/api/edge/decommission/"+cfg.NodeID+"/accept", strings.NewReader(string(payload)))
+							acceptReq.Header.Set("Content-Type", "application/json")
+							acceptReq.Header.Set("X-EmbyProxy-Cleanup-Token", body.Job.CompletionToken)
+							accepted, acceptErr := client.Do(acceptReq)
+							if accepted != nil {
+								_ = accepted.Body.Close()
+							}
+							if acceptErr == nil && accepted.StatusCode >= 200 && accepted.StatusCode < 300 {
+								script, scriptErr := edgecleanup.Script(cfg.NodeID, body.Job.JobID, cfg.Controller, body.Job.CompletionToken, edgecleanup.Ownership{CaddyInstalledByProject: cfg.CaddyInstalledByProject, CaddyConfigOwned: cfg.CaddyConfigOwned, TLSStateOwned: cfg.TLSStateOwned, EdgeUnitOwned: cfg.EdgeUnitOwned})
+								if scriptErr == nil {
+									helper := filepath.Join(filepath.Dir(configPath), "decommission-"+body.Job.JobID+".sh")
+									if os.WriteFile(helper, []byte(script), 0700) == nil {
+										// A separate transient unit avoids systemd killing the
+										// completion helper with the edge service cgroup.
+										unit := "embyproxy-edge-cleanup-" + strings.ReplaceAll(body.Job.JobID, "/", "-")
+										_ = exec.Command("systemd-run", "--unit="+unit, "--collect", "/bin/sh", helper).Start()
+									}
+								}
+							}
+						}
+					}
+					if res != nil {
+						_ = res.Body.Close()
+					}
+				}
+				cancel()
+				time.Sleep(15 * time.Second)
+			}
+		}()
+	}
 	router := proxyadapter.NewEdgeRouter(proxyadapter.NewStorageResolver(store, "admin"), mediaproxy.NewExecutor(mediaproxy.Config{AllowPrivateTargets: cfg.AllowPrivate}), mediaproxy.Config{AllowPrivateTargets: cfg.AllowPrivate}, http.NotFoundHandler())
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) })

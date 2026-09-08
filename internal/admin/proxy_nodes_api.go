@@ -2,7 +2,9 @@ package admin
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,6 +16,7 @@ import (
 	"embyproxy/internal/buildinfo"
 	"embyproxy/internal/capture"
 	"embyproxy/internal/config"
+	"embyproxy/internal/edgecontrol"
 	"embyproxy/internal/requestlog"
 	"embyproxy/internal/storage"
 )
@@ -38,6 +41,10 @@ func (h *Handler) handleProxyNodesAPI(w http.ResponseWriter, r *http.Request, pa
 			ResetTimezone           string `json:"reset_timezone"`
 			Priority                int    `json:"priority"`
 			DNSRecordID             string `json:"dns_record_id"`
+			DNSRecordType           string `json:"dns_record_type"`
+			DNSProvider             string `json:"dns_provider"`
+			DNSAccount              string `json:"dns_account"`
+			DNSZone                 string `json:"dns_zone"`
 			DNSOwned                bool   `json:"dns_owned"`
 			CaddyInstalledByProject bool   `json:"caddy_installed_by_project"`
 			CaddyConfigOwned        bool   `json:"caddy_config_owned"`
@@ -69,7 +76,10 @@ func (h *Handler) handleProxyNodesAPI(w http.ResponseWriter, r *http.Request, pa
 			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "INVALID_NODE"})
 			return
 		}
-		if err := h.store.SetProxyNodeOwnership(ctx, enrollment.NodeID, body.DNSRecordID, body.DNSOwned, body.CaddyInstalledByProject, body.CaddyConfigOwned, body.TLSStateOwned, body.EdgeUnitOwned); err != nil {
+		if body.DNSRecordType == "" {
+			body.DNSRecordType = "A"
+		}
+		if err := h.store.SetProxyNodeOwnershipBound(ctx, enrollment.NodeID, body.DNSProvider, body.DNSAccount, body.DNSZone, body.DNSRecordID, body.DNSRecordType, body.DNSOwned, body.CaddyInstalledByProject, body.CaddyConfigOwned, body.TLSStateOwned, body.EdgeUnitOwned); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": "NODE_OWNERSHIP_FAILED"})
 			return
 		}
@@ -136,6 +146,10 @@ func (h *Handler) handleProxyNodesAPI(w http.ResponseWriter, r *http.Request, pa
 				writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "NODE_NAME_CONFIRMATION_REQUIRED"})
 				return
 			}
+			if node.LastHeartbeatAt > 0 && time.Since(time.Unix(node.LastHeartbeatAt, 0)) <= 5*time.Minute && !node.DecommissionCapable {
+				writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "error": "EDGE_DECOMMISSION_UNSUPPORTED", "capability": false})
+				return
+			}
 			if node.State == "revoked" && !body.Force {
 				// Revoked nodes can be safely archived without a remote identity.
 			}
@@ -163,6 +177,20 @@ func (h *Handler) handleProxyNodesAPI(w http.ResponseWriter, r *http.Request, pa
 				writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "error": "DECOMMISSION_FAILED"})
 				return
 			}
+			// Offline nodes have no remote completion to wait for, so their
+			// owned DNS is removed immediately. Online nodes remove DNS only
+			// after the signed cleanup completion callback.
+			if h.lifecycleDNS != nil && job.RemoteCleanupPending {
+				if dnsErr := h.store.DeleteOwnedProxyNodeDNS(ctx, id); dnsErr != nil {
+					_ = h.store.MarkProxyNodeDecommissionStep(ctx, job.ID, "removing_dns", dnsErr)
+					writeJSON(w, http.StatusAccepted, map[string]any{"ok": true, "job": job, "dns_cleanup_pending": true})
+					return
+				}
+				_ = h.store.MarkProxyNodeDecommissionStep(ctx, job.ID, "removing_dns", nil)
+			}
+			if !job.RemoteCleanupPending && job.SignedJob == nil && len(h.decommissionKey) == ed25519.PrivateKeySize {
+				job, _ = h.store.IssueProxyNodeDecommissionJob(ctx, job.ID, h.decommissionKey, 15*time.Minute)
+			}
 			writeJSON(w, http.StatusAccepted, map[string]any{"ok": true, "job": job})
 			return
 		}
@@ -180,7 +208,7 @@ func (h *Handler) handleProxyNodesAPI(w http.ResponseWriter, r *http.Request, pa
 					break
 				}
 			}
-			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "node": node, "preview": map[string]any{"scheduler_exclude": true, "revoke_identity": true, "remove_controller_state": true, "remove_dns": node.DNSOwned, "cleanup_remote": node.LastHeartbeatAt > 0, "cleanup_caddy": node.CaddyConfigOwned || node.CaddyInstalledByProject, "cleanup_tls": node.TLSStateOwned, "force_required": h.proxyNodeIsActive(node) && !hasFallback}})
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "node": node, "preview": map[string]any{"scheduler_exclude": true, "revoke_identity": true, "remove_controller_state": true, "remove_dns": node.DNSOwned, "cleanup_remote": node.LastHeartbeatAt > 0, "remote_capability": node.DecommissionCapable, "cleanup_caddy": node.CaddyConfigOwned || node.CaddyInstalledByProject, "cleanup_tls": node.TLSStateOwned, "force_required": h.proxyNodeIsActive(node) && !hasFallback}})
 			return
 		}
 		if r.Method == http.MethodPost && len(parts) == 3 && parts[1] == "decommission" && parts[2] == "retry" {
@@ -341,6 +369,13 @@ func (h *Handler) handleProxyNodeJobsAPI(w http.ResponseWriter, r *http.Request,
 			writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "error": "RETRY_FAILED"})
 			return
 		}
+		if job.SignedJob == nil && job.CurrentStep == "cleaning_remote" && len(h.decommissionKey) == ed25519.PrivateKeySize {
+			job, err = h.store.IssueProxyNodeDecommissionJob(r.Context(), job.ID, h.decommissionKey, 15*time.Minute)
+			if err != nil {
+				writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "error": "RETRY_DISPATCH_FAILED"})
+				return
+			}
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "job": job})
 }
@@ -386,6 +421,10 @@ func (h *Handler) handleBootstrap(w http.ResponseWriter, r *http.Request, enroll
 	curlProtocol := "=https"
 	if strings.HasPrefix(controller, "http://") && h.cfg.AllowInsecureLoopbackEnrollment {
 		curlProtocol = "=http,https"
+	}
+	decommissionPublicKey := ""
+	if len(h.decommissionKey) == ed25519.PrivateKeySize {
+		decommissionPublicKey = edgecontrol.EncodePublicKey(h.decommissionKey.Public().(ed25519.PublicKey))
 	}
 	script := fmt.Sprintf(`#!/bin/sh
 set -eu
@@ -506,7 +545,7 @@ chmod 0700 "$artifact_tmp"
 # Atomic replacement keeps reruns safe while the currently running executable
 # still has its old inode open (direct writes would fail with curl 23/ETXTBSY).
 mv -f "$artifact_tmp" "$bin_dir/embyproxy-edge-agent"
-printf '{"listen_addr":"%%s","probe_addr":"%%s","db_path":"%%s/edge.db","controller":"%%s","node_id":"%%s","credential":"%%s","version":"bootstrap","commit":"%s","canary_path":"%%s","allow_private_targets":%%s,"isolated_test_media":%%s}\n' "$edge_listen" "$edge_probe" "$state_dir" "$CONTROLLER" "$node_id" "$credential" "$edge_canary" "$edge_allow_private" "$edge_isolated_media" > "$cfg_dir/edge-agent.json"
+printf '{"listen_addr":"%%s","probe_addr":"%%s","db_path":"%%s/edge.db","controller":"%%s","node_id":"%%s","credential":"%%s","version":"bootstrap","commit":"%s","decommission_public_key":"%s","caddy_installed_by_project":%s,"caddy_config_owned":%s,"tls_state_owned":%s,"edge_unit_owned":%s,"canary_path":"%%s","allow_private_targets":%%s,"isolated_test_media":%%s}\n' "$edge_listen" "$edge_probe" "$state_dir" "$CONTROLLER" "$node_id" "$credential" "$edge_canary" "$edge_allow_private" "$edge_isolated_media" > "$cfg_dir/edge-agent.json"
 chmod 0600 "$cfg_dir/edge-agent.json"
 cat > "$unit_dir/embyproxy-edge.service" <<UNIT
 [Unit]
@@ -734,7 +773,7 @@ CADDY
   fi
 fi
 echo 'Edge identity enrolled. This host remains unadmitted until its data-plane configuration reports a passing playback canary.'
-		`, controller, persistedEdgePublic, buildinfo.Current().Version, buildinfo.Current().Commit, curlProtocol, url.PathEscape(enrollmentID), url.PathEscape(token), controller, curlProtocol, buildinfo.Current().Commit)
+	`, controller, persistedEdgePublic, buildinfo.Current().Version, buildinfo.Current().Commit, decommissionPublicKey, map[bool]string{true: "true", false: "false"}[node.CaddyInstalledByProject], map[bool]string{true: "true", false: "false"}[node.CaddyConfigOwned], map[bool]string{true: "true", false: "false"}[node.TLSStateOwned], map[bool]string{true: "true", false: "false"}[node.EdgeUnitOwned], curlProtocol, url.PathEscape(enrollmentID), url.PathEscape(token), controller, curlProtocol, buildinfo.Current().Commit)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
@@ -791,15 +830,82 @@ func (h *Handler) handleEdgeEnrollment(w http.ResponseWriter, r *http.Request, p
 		var body struct {
 			Credential, Version, Commit, State, LastError string
 			PlaybackHealthy, ConfigSynced                 bool
+			DecommissionCapable                           bool
 		}
 		if !decodeAuthJSON(w, r, &body) {
 			return
 		}
-		if err := h.store.HeartbeatProxyNode(r.Context(), id, body.Credential, body.Version, body.Commit, body.State, body.PlaybackHealthy, body.ConfigSynced, body.LastError); err != nil {
+		if err := h.store.HeartbeatProxyNodeWithCapability(r.Context(), id, body.Credential, body.Version, body.Commit, body.State, body.PlaybackHealthy, body.ConfigSynced, body.LastError, body.DecommissionCapable); err != nil {
 			writeJSON(w, 403, map[string]any{"ok": false, "error": "HEARTBEAT_DENIED"})
 			return
 		}
 		writeJSON(w, 200, map[string]any{"ok": true})
+		return
+	}
+	if strings.HasPrefix(path, "/api/edge/decommission/") {
+		parts := strings.Split(strings.TrimPrefix(path, "/api/edge/decommission/"), "/")
+		if len(parts) < 1 || parts[0] == "" {
+			http.NotFound(w, r)
+			return
+		}
+		nodeID := parts[0]
+		if r.Method == http.MethodGet && len(parts) == 1 {
+			credential := strings.TrimSpace(r.Header.Get("X-EmbyProxy-Node-Credential"))
+			if !h.store.ValidateProxyNodeDecommissionCredential(r.Context(), nodeID, credential) {
+				http.NotFound(w, r)
+				return
+			}
+			job, err := h.store.LatestProxyNodeDecommissionJob(r.Context(), nodeID)
+			if err != nil || job == nil || job.State == "complete" || job.SignedJob == nil && job.CurrentStep != "cleaning_remote" {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			if job.SignedJob == nil {
+				job, err = h.store.IssueProxyNodeDecommissionJob(r.Context(), job.ID, h.decommissionKey, 15*time.Minute)
+				if err != nil {
+					http.Error(w, "decommission unavailable", http.StatusServiceUnavailable)
+					return
+				}
+			}
+			w.Header().Set("Cache-Control", "no-store")
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "job": job.SignedJob})
+			return
+		}
+		if len(parts) == 2 && r.Method == http.MethodPost && (parts[1] == "accept" || parts[1] == "complete") {
+			var body struct {
+				JobID           string `json:"job_id"`
+				CompletionToken string `json:"completion_token"`
+			}
+			_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<10)).Decode(&body)
+			token := strings.TrimSpace(r.Header.Get("X-EmbyProxy-Cleanup-Token"))
+			if token == "" {
+				token = strings.TrimSpace(body.CompletionToken)
+			}
+			if body.JobID == "" {
+				body.JobID = parts[0]
+			}
+			jobRecord, jobErr := h.store.GetProxyNodeDecommissionJob(r.Context(), body.JobID)
+			if jobErr != nil || jobRecord == nil || jobRecord.NodeID != nodeID {
+				writeJSON(w, http.StatusForbidden, map[string]any{"ok": false, "error": "DECOMMISSION_JOB_NODE_MISMATCH"})
+				return
+			}
+			if parts[1] == "accept" {
+				if err := h.store.AcceptProxyNodeDecommissionJob(r.Context(), body.JobID, token); err != nil {
+					writeJSON(w, http.StatusForbidden, map[string]any{"ok": false, "error": "DECOMMISSION_ACCEPT_DENIED"})
+					return
+				}
+				writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+				return
+			}
+			job, err := h.store.CompleteProxyNodeDecommission(r.Context(), body.JobID, token)
+			if err != nil {
+				writeJSON(w, http.StatusForbidden, map[string]any{"ok": false, "error": "DECOMMISSION_COMPLETE_DENIED"})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "job": job})
+			return
+		}
+		http.NotFound(w, r)
 		return
 	}
 	if r.Method == http.MethodGet && strings.HasPrefix(path, "/api/edge/artifact/") {

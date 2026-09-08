@@ -32,8 +32,12 @@ func TestProxyNodeEnrollmentIsSingleUseAndCredentialScoped(t *testing.T) {
 	if _, _, err = store.CompleteEnrollment(context.Background(), enrollment.ID, token, "v1", "abc"); err == nil {
 		t.Fatal("reused enrollment token accepted")
 	}
-	if err = store.HeartbeatProxyNode(context.Background(), node.ID, credential, "v1", "abc", "healthy", true, true, ""); err != nil {
+	if err = store.HeartbeatProxyNodeWithCapability(context.Background(), node.ID, credential, "v1", "abc", "healthy", true, true, "", true); err != nil {
 		t.Fatal(err)
+	}
+	updated, err := store.GetProxyNode(context.Background(), node.ID)
+	if err != nil || updated == nil || !updated.DecommissionCapable {
+		t.Fatalf("decommission capability not persisted: node=%+v err=%v", updated, err)
 	}
 	if err = store.HeartbeatProxyNode(context.Background(), node.ID, "wrong", "v1", "abc", "healthy", true, true, ""); err == nil {
 		t.Fatal("wrong node credential accepted")
@@ -308,7 +312,7 @@ func TestDecommissionCreatesPartialJobForUnreachableNodeAndRetryCompletes(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = store.SetProxyNodeOwnership(ctx, enrollment.NodeID, "dns-1", true, true, true, true, true); err != nil {
+	if err = store.SetProxyNodeOwnershipBound(ctx, enrollment.NodeID, "spaceship", "acct", "example.com", "dns-1", "A", true, true, true, true, true); err != nil {
 		t.Fatal(err)
 	}
 	job, err := store.DecommissionProxyNode(ctx, enrollment.NodeID, false)
@@ -329,8 +333,96 @@ func TestDecommissionCreatesPartialJobForUnreachableNodeAndRetryCompletes(t *tes
 		t.Fatal(err)
 	}
 	job, _ = store.GetProxyNodeDecommissionJob(ctx, job.ID)
-	if job.State != "complete" || job.RemoteCleanupPending {
-		t.Fatalf("retry=%+v", job)
+	if job.State != "partial" || !job.RemoteCleanupPending {
+		t.Fatalf("retry must remain pending until edge completion: %+v", job)
+	}
+}
+
+func TestSignedDecommissionCompletionIsSingleUse(t *testing.T) {
+	ctx := context.Background()
+	store, err := New(filepath.Join(t.TempDir(), "proxy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	enrollment, _, err := store.CreateProxyNode(ctx, ProxyNode{Name: "edge-online", ResetDay: 1}, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cred := "node-credential"
+	if _, err := store.DB().Exec(`UPDATE proxy_nodes SET credential_hash=?,last_heartbeat_at=?,state='healthy',playback_healthy=1,config_synced=1 WHERE id=?`, nodeHash(cred), time.Now().Unix(), enrollment.NodeID); err != nil {
+		t.Fatal(err)
+	}
+	job, err := store.DecommissionProxyNode(ctx, enrollment.NodeID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := store.ControllerDecommissionKey(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err = store.IssueProxyNodeDecommissionJob(ctx, job.ID, key, 15*time.Minute)
+	if err != nil || job.SignedJob == nil {
+		t.Fatalf("issue=%+v err=%v", job, err)
+	}
+	if err := store.AcceptProxyNodeDecommissionJob(ctx, job.ID, job.SignedJob.CompletionToken); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CompleteProxyNodeDecommission(ctx, job.ID, job.SignedJob.CompletionToken); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CompleteProxyNodeDecommission(ctx, job.ID, job.SignedJob.CompletionToken); err != nil {
+		t.Fatal(err)
+	}
+	final, _ := store.GetProxyNodeDecommissionJob(ctx, job.ID)
+	if final.State != "complete" || !final.CompletionConsumed {
+		t.Fatalf("final=%+v", final)
+	}
+}
+
+func TestOwnedDNSDeletionIsRecordScopedAndIdempotent(t *testing.T) {
+	ctx := context.Background()
+	store, err := New(filepath.Join(t.TempDir(), "proxy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	a, _, err := store.CreateProxyNode(ctx, ProxyNode{Name: "edge-dns-owned", ResetDay: 1}, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _, err := store.CreateProxyNode(ctx, ProxyNode{Name: "edge-dns-shared", ResetDay: 1}, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetProxyNodeOwnershipBound(ctx, a.NodeID, "spaceship", "acct", "example.com", "record-owned", "A", true, false, false, false, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetProxyNodeOwnership(ctx, b.NodeID, "record-shared", false, false, false, false, true); err != nil {
+		t.Fatal(err)
+	}
+	var deleted []string
+	store.SetProxyNodeDNSDeleter(func(_ context.Context, provider, account, zone, nodeID, id, typ string) error {
+		deleted = append(deleted, id+":"+typ)
+		return nil
+	})
+	if err := store.DeleteOwnedProxyNodeDNS(ctx, a.NodeID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteOwnedProxyNodeDNS(ctx, b.NodeID); err != nil {
+		t.Fatal(err)
+	}
+	if len(deleted) != 1 || deleted[0] != "record-owned:A" {
+		t.Fatalf("deleted=%v", deleted)
+	}
+	if err := store.SetProxyNodeOwnershipBound(ctx, b.NodeID, "spaceship", "acct", "example.com", "record-v6", "AAAA", true, false, false, false, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteOwnedProxyNodeDNS(ctx, b.NodeID); err != nil {
+		t.Fatal(err)
+	}
+	if len(deleted) != 2 || deleted[1] != "record-v6:AAAA" {
+		t.Fatalf("deleted=%v", deleted)
 	}
 }
 

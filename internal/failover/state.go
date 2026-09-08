@@ -120,6 +120,12 @@ func (c *Controller) SetDNSProvider(provider DNSProvider) {
 	c.pendingDNS = make(map[string]pendingDNSApply)
 }
 
+func (c *Controller) DNSProvider() DNSProvider {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.dns
+}
+
 func (c *Controller) PrepareDNSApply(ctx context.Context, change DNSChange, nodeID string) (DNSPlan, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

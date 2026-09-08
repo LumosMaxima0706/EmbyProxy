@@ -24,10 +24,33 @@ fallback, ordinary removal is rejected; force removal explicitly warns that
 playback may be interrupted.
 
 The removal job records these steps: traffic switch, drain, scheduler exclude,
-credential revocation, remote cleanup, DNS cleanup, and controller routing/state
-cleanup. A stale heartbeat produces `partial` completion and a short-lived SSH
-cleanup command. Control-plane revocation and routing cleanup still complete;
-the job can be retried after the VPS becomes reachable.
+signed remote-cleanup dispatch, remote acceptance, remote cleanup completion,
+owned DNS cleanup, credential revocation, and controller routing/state cleanup.
+For an online edge, the controller signs a fixed `DECOMMISSION` job containing
+job ID, node ID, nonce, TTL, and a single-use completion token. The edge polls
+that control channel, verifies the pinned Controller Ed25519 public key, and
+can execute only the fixed self-uninstall cleanup. A short-lived transient
+cleanup helper reports completion after the edge service has stopped; it has no
+normal node credential and is idempotent.
+
+An unreachable edge is excluded and revoked immediately, and owned DNS is
+removed by immutable provider record ID. The job remains `partial` with
+`remote_cleanup_pending=true` and exposes the short-lived manual cleanup
+command. Retry re-drives the failed DNS/dispatch/completion step only; it never
+restores credentials or scheduler eligibility. The production Spaceship mode
+uses the existing restricted adapter's `delete-record --record-id ... --type
+A|AAAA` operation. A missing record is successful, and non-owned records are
+never selected.
+
+The Controller signing key is stored only in the private Controller SQLite KV
+store (`edgecontrol:decommission:ed25519`) and is not emitted in bootstrap,
+admin responses, or logs. Edges pin the public key in their local config. The
+key is intentionally stable across Controller restarts; rotation requires an
+overlap window in which old edges are re-enrolled with the new public key before
+the old key is retired. Until that coordinated rollout, mixed versions keep
+normal heartbeat/playback working, while an edge that does not advertise
+`decommission_capable` is shown as remote cleanup unsupported rather than being
+promised a complete removal.
 
 ## Ownership
 

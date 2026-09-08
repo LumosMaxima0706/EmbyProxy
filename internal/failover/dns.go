@@ -8,6 +8,7 @@ import (
 )
 
 type DNSRecord struct {
+	ID    string
 	Name  string
 	Type  string
 	Value string
@@ -43,6 +44,9 @@ type DNSPropagation struct {
 
 type DNSProvider interface {
 	GetRecord(ctx context.Context, name, recordType string) (DNSRecord, error)
+	// DeleteRecord must address one provider record by its immutable ID. A
+	// provider implementation must treat an already absent record as success.
+	DeleteRecord(ctx context.Context, recordID string) error
 	UpdateARecord(ctx context.Context, name, value string, ttl int) error
 	UpdateAAAARecord(ctx context.Context, name, value string, ttl int) error
 	UpdateCNAMERecord(ctx context.Context, name, value string, ttl int) error
@@ -77,13 +81,27 @@ func (m *MockDNSProvider) GetRecord(_ context.Context, name, recordType string) 
 	return record, nil
 }
 
+func (m *MockDNSProvider) DeleteRecord(_ context.Context, recordID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for key, record := range m.records {
+		if record.ID == recordID || (recordID != "" && recordID == key) {
+			delete(m.records, key)
+			m.ApplyCount++
+			return nil
+		}
+	}
+	// DELETE is idempotent: provider 404 is a successful desired state.
+	return nil
+}
+
 func (m *MockDNSProvider) update(name, recordType, value string, ttl int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.FailApply {
 		return errors.New("mock_apply_failed")
 	}
-	m.records[m.key(name, recordType)] = DNSRecord{Name: name, Type: recordType, Value: value, TTL: ttl}
+	m.records[m.key(name, recordType)] = DNSRecord{ID: m.key(name, recordType), Name: name, Type: recordType, Value: value, TTL: ttl}
 	m.ApplyCount++
 	return nil
 }

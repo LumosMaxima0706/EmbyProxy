@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	_ "embed"
 	"encoding/json"
 	"errors"
@@ -86,6 +87,10 @@ type Handler struct {
 	publicationSyncer   PublicationSyncer
 	playbackCredentials publicationCredentialStore
 	publicationMu       sync.Mutex
+	decommissionKey     ed25519.PrivateKey
+	lifecycleDNS        interface {
+		DeleteRecord(context.Context, string) error
+	}
 }
 
 // readExternalFailoverState reads the policy runner's state file without
@@ -118,6 +123,15 @@ func (h *Handler) SetDNSStatusReader(reader func() map[string]any) {
 	h.dnsStatusReader = reader
 }
 
+// SetLifecycleDNSProvider supplies the record-scoped provider used only by
+// decommission cleanup. It is deliberately separate from failover updates so
+// a node job cannot mutate a failover target by accident.
+func (h *Handler) SetLifecycleDNSProvider(provider interface {
+	DeleteRecord(context.Context, string) error
+}) {
+	h.lifecycleDNS = provider
+}
+
 func New(cfg config.Config, store *storage.Store, checker *auth.Checker, tg *telegram.Service, log *logging.Logger, reset ResetFunc, imageCaches ...ImageCacheManager) *Handler {
 	var imageCache ImageCacheManager
 	if len(imageCaches) > 0 {
@@ -131,6 +145,11 @@ func New(cfg config.Config, store *storage.Store, checker *auth.Checker, tg *tel
 		log:        log,
 		resetRoute: reset,
 		imageCache: imageCache,
+	}
+	if store != nil {
+		if key, err := store.ControllerDecommissionKey(context.Background()); err == nil {
+			h.decommissionKey = key
+		}
 	}
 	if credentials, err := newFilePlaybackCredentialStore(cfg.PlaybackCredentialDir); err == nil {
 		h.playbackCredentials = credentials

@@ -27,6 +27,22 @@ func TestMockDNSApplyAndVerify(t *testing.T) {
 	}
 }
 
+func TestMockDNSDeleteIsIdempotent(t *testing.T) {
+	mock := NewMockDNSProvider()
+	if err := mock.DeleteRecord(context.Background(), "missing-record"); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.UpdateARecord(context.Background(), "edge.example", "192.0.2.20", 60); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.DeleteRecord(context.Background(), "edge.example|A"); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.DeleteRecord(context.Background(), "edge.example|A"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestDNSFailureDoesNotCommitActiveState(t *testing.T) {
 	mock := NewMockDNSProvider()
 	mock.FailApply = true
