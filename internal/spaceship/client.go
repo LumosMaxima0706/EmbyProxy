@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -29,9 +30,44 @@ type Record struct {
 type recordsResponse struct {
 	Records []Record `json:"records"`
 }
-type HTTPError struct{ Status int }
+type HTTPError struct {
+	Status int
+	Detail string
+}
 
 func (e *HTTPError) Error() string { return fmt.Sprintf("spaceship_http_%d", e.Status) }
+
+func safeDetail(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	var obj struct {
+		Detail  string `json:"detail"`
+		Message string `json:"message"`
+		Title   string `json:"title"`
+	}
+	if json.Unmarshal([]byte(raw), &obj) == nil {
+		for _, value := range []string{obj.Detail, obj.Message, obj.Title} {
+			if value != "" {
+				raw = value
+				break
+			}
+		}
+	}
+	if len(raw) > 256 {
+		raw = raw[:256]
+	}
+	if strings.ContainsAny(raw, "\x00\r\n") {
+		raw = strings.Map(func(r rune) rune {
+			if r == '\r' || r == '\n' || r == 0 {
+				return ' '
+			}
+			return r
+		}, raw)
+	}
+	return raw
+}
 
 func (c *Client) enabled() bool {
 	return c != nil && c.APIKey != "" && c.APISecret != "" && c.ManagedDomain != ""
@@ -68,6 +104,12 @@ func (c *Client) do(ctx context.Context, method, domain string, body any, out an
 	if err != nil {
 		return err
 	}
+	if method == http.MethodGet {
+		q := req.URL.Query()
+		q.Set("take", "100")
+		q.Set("skip", "0")
+		req.URL.RawQuery = q.Encode()
+	}
 	req.Header.Set("X-API-Key", c.APIKey)
 	req.Header.Set("X-API-Secret", c.APISecret)
 	req.Header.Set("Accept", "application/json")
@@ -83,11 +125,9 @@ func (c *Client) do(ctx context.Context, method, domain string, body any, out an
 		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusNotFound {
-		return nil
-	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return &HTTPError{Status: resp.StatusCode}
+		detail, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return &HTTPError{Status: resp.StatusCode, Detail: safeDetail(string(detail))}
 	}
 	if out == nil {
 		return nil
@@ -110,15 +150,40 @@ func (c *Client) List(ctx context.Context, domain string) ([]Record, error) {
 	return list, nil
 }
 func (c *Client) Test(ctx context.Context) error { _, err := c.List(ctx, c.ManagedDomain); return err }
-func (c *Client) TestStatus(ctx context.Context) (int, error) {
+func (c *Client) TestStatus(ctx context.Context) (int, string, error) {
 	_, err := c.List(ctx, c.ManagedDomain)
 	if err == nil {
-		return http.StatusOK, nil
+		return http.StatusOK, "", nil
 	}
 	if e, ok := err.(*HTTPError); ok {
-		return e.Status, err
+		return e.Status, e.Detail, err
 	}
-	return http.StatusBadGateway, err
+	return http.StatusServiceUnavailable, "network or TLS error", err
+}
+
+func (c *Client) AuthoritativeProvider(ctx context.Context) (string, []string) {
+	managed := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(c.ManagedDomain)), ".")
+	if managed == "" {
+		return "Unknown", nil
+	}
+	resolver := net.DefaultResolver
+	ns, err := resolver.LookupNS(ctx, managed)
+	if err != nil || len(ns) == 0 {
+		return "Unknown", nil
+	}
+	values := make([]string, 0, len(ns))
+	spaceshipNS := true
+	for _, item := range ns {
+		host := strings.TrimSuffix(strings.ToLower(item.Host), ".")
+		values = append(values, host)
+		if !strings.Contains(host, "spaceship") {
+			spaceshipNS = false
+		}
+	}
+	if spaceshipNS {
+		return "Spaceship", values
+	}
+	return "Custom", values
 }
 func (c *Client) EnsureA(ctx context.Context, prefix string, ip netip.Addr, ttl int) (Record, error) {
 	if ttl == 0 {

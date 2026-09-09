@@ -88,9 +88,9 @@ func (h *Handler) handleDNSAutomationAPI(w http.ResponseWriter, r *http.Request,
 		}
 	}
 	if r.URL.Query().Get("test") == "true" {
-		status, err := (&spaceship.Client{BaseURL: h.cfg.SpaceshipAPIBaseURL, APIKey: key, APISecret: secret, ManagedDomain: body.ManagedDomain}).TestStatus(ctx)
+		status, detail, err := (&spaceship.Client{BaseURL: h.cfg.SpaceshipAPIBaseURL, APIKey: key, APISecret: secret, ManagedDomain: body.ManagedDomain}).TestStatus(ctx)
 		if err != nil {
-			writeJSON(w, status, map[string]any{"ok": false, "error": spaceshipErrorCode(status)})
+			writeJSON(w, status, map[string]any{"ok": false, "error": spaceshipErrorCode(status), "provider": "spaceship", "operation": "dns_records_get", "http_status": status, "detail": detail})
 			return
 		}
 		writeJSON(w, 200, map[string]any{"ok": true, "configured": true, "permissions": map[string]any{"dnsrecords_read": true}})
@@ -119,15 +119,23 @@ func (h *Handler) handleDNSAutomationAPI(w http.ResponseWriter, r *http.Request,
 }
 func spaceshipErrorCode(status int) string {
 	switch status {
+	case 400:
+		return "SPACESHIP_BAD_REQUEST"
 	case 401:
-		return "SPACESHIP_CREDENTIALS_INVALID"
+		return "SPACESHIP_AUTH_FAILED"
 	case 403:
-		return "SPACESHIP_READ_PERMISSION_DENIED"
+		return "SPACESHIP_PERMISSION_DENIED"
 	case 404:
-		return "SPACESHIP_MANAGED_DOMAIN_NOT_FOUND"
+		return "SPACESHIP_DOMAIN_NOT_FOUND"
+	case 422:
+		return "SPACESHIP_UNPROCESSABLE"
 	case 429:
 		return "SPACESHIP_RATE_LIMITED"
+	case 500, 503, 504:
+		return "SPACESHIP_UPSTREAM_ERROR"
+	case 502:
+		return "SPACESHIP_NETWORK_ERROR"
 	default:
-		return "SPACESHIP_READ_FAILED"
+		return "SPACESHIP_NETWORK_ERROR"
 	}
 }
