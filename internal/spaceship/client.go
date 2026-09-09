@@ -31,6 +31,10 @@ type recordsResponse struct {
 	Records []Record `json:"records"`
 	Items   []Record `json:"items"`
 }
+type recordsWriteRequest struct {
+	Force bool     `json:"force"`
+	Items []Record `json:"items"`
+}
 type HTTPError struct {
 	Status int
 	Detail string
@@ -231,8 +235,7 @@ func (c *Client) EnsureA(ctx context.Context, prefix string, ip netip.Addr, ttl 
 	if same != nil {
 		return Record{}, errors.New("dns_record_conflict")
 	}
-	records = append(records, Record{Name: prefix, Type: "A", Address: ip.String(), TTL: ttl})
-	if err := c.putRecords(ctx, c.ManagedDomain, records); err != nil {
+	if err := c.putRecords(ctx, c.ManagedDomain, []Record{{Name: prefix, Type: "A", Address: ip.String(), TTL: ttl}}); err != nil {
 		return Record{}, err
 	}
 	verified, err := c.List(ctx, c.ManagedDomain)
@@ -248,5 +251,5 @@ func (c *Client) EnsureA(ctx context.Context, prefix string, ip netip.Addr, ttl 
 	return Record{}, errors.New("dns_record_not_verified")
 }
 func (c *Client) putRecords(ctx context.Context, domain string, records []Record) error {
-	return c.do(ctx, http.MethodPut, domain, records, nil)
+	return c.do(ctx, http.MethodPut, domain, recordsWriteRequest{Force: true, Items: records}, nil)
 }

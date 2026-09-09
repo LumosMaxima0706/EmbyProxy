@@ -57,11 +57,11 @@ func TestClientPutShape(t *testing.T) {
 			_, _ = w.Write([]byte(`{"records":[]}`))
 			return
 		}
-		var body []Record
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body) != 1 {
+		var body recordsWriteRequest
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || !body.Force || len(body.Items) != 1 {
 			t.Fatalf("unexpected put body: %+v err=%v", body, err)
 		}
-		_, _ = w.Write([]byte(`{}`))
+		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer srv.Close()
 	c := &Client{BaseURL: srv.URL, APIKey: "k", APISecret: "s", ManagedDomain: "example.com"}
