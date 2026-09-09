@@ -15,8 +15,36 @@ import (
 	"time"
 
 	"embyproxy/internal/config"
+	"embyproxy/internal/spaceship"
 	"embyproxy/internal/storage"
 )
+
+func TestProxyNodeAPIAutomaticDNSCreatesPendingWithoutHealth(t *testing.T) {
+	h := newAuthTestHandler(t, config.Config{AdminToken: "strong-admin-token", EnrollmentControllerURL: "https://controller.149077530.xyz"})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Logf("dns request %s %s", r.Method, r.URL.Path)
+		if r.Method == http.MethodGet {
+			_, _ = w.Write([]byte(`{"records":[{"id":"r1","name":"rak","type":"A","address":"1.2.3.4","ttl":300}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+	h.dnsAutomation = &spaceship.Client{BaseURL: srv.URL, APIKey: "k", APISecret: "s", ManagedDomain: "example.com"}
+	login := serveAdminJSON(t, h, http.MethodPost, "/admin/auth/login", map[string]any{"token": "strong-admin-token"}, nil)
+	cookie := login.Result().Cookies()[0]
+	created := serveAdminJSON(t, h, http.MethodPost, "/api/admin/proxy-nodes", map[string]any{"name": "edge-auto", "domain_prefix": "rak", "public_ipv4": "1.2.3.4", "reset_day": 1}, cookie)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create=%d %s", created.Code, created.Body.String())
+	}
+	var body map[string]any
+	_ = json.Unmarshal(created.Body.Bytes(), &body)
+	nodeID := body["enrollment"].(map[string]any)["node_id"].(string)
+	node, err := h.store.GetProxyNode(context.Background(), nodeID)
+	if err != nil || node == nil || node.State != "pending" || node.PublicAddress != "https://rak.example.com" {
+		t.Fatalf("node=%+v err=%v", node, err)
+	}
+}
 
 func TestProxyNodeAPICreatesOneTimeEnrollmentAndHeartbeat(t *testing.T) {
 	h := newAuthTestHandler(t, config.Config{AdminToken: "strong-admin-token", EnrollmentControllerURL: "https://controller.149077530.xyz"})

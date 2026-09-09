@@ -572,6 +572,7 @@ tr:last-child td{border-bottom:0}
         </section>
 
         <section id="tabProxyNodes" class="stats-deck" style="display:none">
+          <div class="context-card" id="dnsAutomationCard"><div class="stats-top"><div><strong>DNS 自动化</strong><p class="form-hint">Spaceship 凭据仅提交到 Controller，保存后不会再次显示。</p></div><button class="btn btn-sm" onclick="testDNSAutomation()">测试连接</button></div><div class="form-grid"><input id="dnsManagedDomain" placeholder="托管域名"><input id="dnsAPIKey" type="password" placeholder="API Key"><input id="dnsAPISecret" type="password" placeholder="API Secret"><input id="dnsTTL" type="number" value="300" min="30" max="86400"><button class="primary-action" onclick="saveDNSAutomation()">保存 DNS 配置</button></div><div id="dnsAutomationStatus" class="form-hint"></div></div>
           <div class="stats-top"><div><strong>反代节点</strong><p class="form-hint">调度、连接和远端生命周期统一管理。已移除节点默认隐藏。</p></div><button class="primary-action" onclick="openProxyNodeModal()">添加反代 VPS</button></div>
           <div class="signal-grid proxy-summary" id="proxyNodeSummary"></div>
           <div class="stats-top proxy-filterbar"><select id="proxyNodeFilter" class="select-input" onchange="renderProxyNodeTable()"><option value="active">可用</option><option value="all">全部</option><option value="issue">异常（degraded）</option><option value="disabled">已停用/撤销</option><option value="removed">已移除</option></select><button class="btn" onclick="loadProxyNodes()">刷新</button></div>
@@ -719,8 +720,10 @@ tr:last-child td{border-bottom:0}
       <div class="form-section">基本信息</div>
       <div class="form-group"><label for="proxyNodeName">节点名称</label><input id="proxyNodeName" required pattern="[a-z0-9][a-z0-9-]{1,62}" value="edge-new" placeholder="edge-new"><small class="form-hint">小写字母、数字和短横线</small></div>
       <div class="form-group"><label for="proxyNodePriority">优先级</label><input id="proxyNodePriority" type="number" min="0" max="10000" value="10"></div>
-      <div class="form-section">HTTPS 入口</div>
-      <div class="form-group form-full"><label for="proxyNodeAddress">公网 HTTPS origin</label><input id="proxyNodeAddress" type="url" required placeholder="https://edge.example.com"><small class="form-hint">必须是可由 Controller 访问并能返回 /health=200 的 HTTPS origin。</small><div id="proxyNodeAddressError" class="login-err" style="display:none"></div></div>
+      <div class="form-section">自动 DNS / HTTPS 入口</div>
+      <div class="form-group"><label for="proxyNodePrefix">域名前缀</label><input id="proxyNodePrefix" pattern="[a-z0-9-]{1,63}" placeholder="rak"><small class="form-hint">启用 DNS 自动化后自动生成 FQDN</small></div>
+      <div class="form-group"><label for="proxyNodeIPv4">VPS 公网 IPv4</label><input id="proxyNodeIPv4" type="text" pattern="[0-9.]{7,15}" placeholder="1.2.3.4"></div>
+      <div class="form-group form-full"><label for="proxyNodeAddress">HTTPS origin（兼容手工模式）</label><input id="proxyNodeAddress" type="url" placeholder="https://edge.example.com"><small class="form-hint">自动模式填写前缀和 IPv4；无需预先安装 Edge 或通过 /health。</small><div id="proxyNodeAddressError" class="login-err" style="display:none"></div></div>
       <div class="form-section">配额策略</div>
       <div class="form-group"><label for="proxyNodeQuota">月配额 (GB)</label><input id="proxyNodeQuota" type="number" min="0" step="1" value="1000"><small class="form-hint">0 表示不限</small></div>
       <div class="form-group"><label for="proxyNodeResetDay">重置日</label><input id="proxyNodeResetDay" type="number" min="1" max="31" value="1"></div>
@@ -1769,6 +1772,8 @@ function renderProxyNodeTable() {
 function toggleProxyMenu(id, event) { event?.stopPropagation(); document.querySelectorAll('.proxy-menu').forEach(el=>{ if(el.id!=='proxy-menu-'+id) el.hidden=true; }); const menu=document.getElementById('proxy-menu-'+id); if(menu) menu.hidden=!menu.hidden; }
 document.addEventListener('click',()=>document.querySelectorAll('.proxy-menu').forEach(el=>el.hidden=true));
 function formatBytes(v) { const n = Number(v || 0); if (n < 1e9) return `${(n / 1e6).toFixed(1)} MB`; return `${(n / 1e9).toFixed(2)} GB`; }
+async function saveDNSAutomation(){const body={provider:'spaceship',managed_domain:document.getElementById('dnsManagedDomain').value.trim(),api_key:document.getElementById('dnsAPIKey').value,api_secret:document.getElementById('dnsAPISecret').value,ttl:Number(document.getElementById('dnsTTL').value||300)};const r=await authFetch('/api/admin/dns/automation',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});document.getElementById('dnsAutomationStatus').textContent=r.ok?'Connected':'保存失败: '+(r.error||'unknown');}
+async function testDNSAutomation(){const body={provider:'spaceship',managed_domain:document.getElementById('dnsManagedDomain').value.trim(),api_key:document.getElementById('dnsAPIKey').value,api_secret:document.getElementById('dnsAPISecret').value,ttl:Number(document.getElementById('dnsTTL').value||300)};const r=await authFetch('/api/admin/dns/automation?test=true',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});document.getElementById('dnsAutomationStatus').textContent=r.ok?'Read permission OK':'测试失败: '+(r.error||'unknown');}
 function syncProxyNodeFormValidity() {
   const form = document.getElementById('proxyNodeForm');
   const button = document.getElementById('proxyNodeSubmit');
@@ -1782,10 +1787,12 @@ async function submitProxyNode(event) {
   const button = document.getElementById('proxyNodeSubmit'); button.disabled = true;
   const name = document.getElementById('proxyNodeName').value.trim();
   const address = document.getElementById('proxyNodeAddress').value.trim();
+  const domainPrefix = document.getElementById('proxyNodePrefix').value.trim().toLowerCase();
+  const publicIPv4 = document.getElementById('proxyNodeIPv4').value.trim();
   const quota = Number(document.getElementById('proxyNodeQuota').value || 0);
   const resetDay = Number(document.getElementById('proxyNodeResetDay').value || 1);
   const priority = Number(document.getElementById('proxyNodePriority').value || 0);
-  const r = await authFetch('/api/admin/proxy-nodes', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name,public_address:address,quota_bytes:Math.max(0,quota)*1e9,reset_day:resetDay,reset_timezone:'Asia/Shanghai',priority})});
+  const r = await authFetch('/api/admin/proxy-nodes', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name,public_address:address,domain_prefix:domainPrefix,public_ipv4:publicIPv4,quota_bytes:Math.max(0,quota)*1e9,reset_day:resetDay,reset_timezone:'Asia/Shanghai',priority})});
   button.disabled = false;
   if (!r.ok) { const error = document.getElementById('proxyNodeAddressError'); error.textContent = r.error || '创建 enrollment 失败'; error.style.display='block'; toast(r.error || '创建 enrollment 失败','err'); return; }
   closeProxyNodeModal();

@@ -58,6 +58,11 @@ type Config struct {
 	FailoverDNSRealApply      bool
 	FailoverMockFixture       bool
 	SpaceshipDNSAdapterPath   string
+	SpaceshipAPIBaseURL       string
+	SpaceshipAPIKey           string
+	SpaceshipAPISecret        string
+	SpaceshipManagedDomain    string
+	SpaceshipDefaultTTL       int
 	FailoverStateFile         string
 	Defaults                  Defaults
 }
@@ -225,6 +230,11 @@ func Load() (Config, error) {
 		FailoverDNSRealApply:            envBool("FAILOVER_DNS_REAL_APPLY_ENABLED", false),
 		FailoverMockFixture:             envBool("FAILOVER_MOCK_FIXTURE_ENABLED", false),
 		SpaceshipDNSAdapterPath:         envString("SPACESHIP_DNS_ADAPTER", "/opt/stream-failover/spaceship_dns.py"),
+		SpaceshipAPIBaseURL:             envString("SPACESHIP_API_BASE_URL", "https://spaceship.dev/api"),
+		SpaceshipAPIKey:                 strings.TrimSpace(os.Getenv("SPACESHIP_API_KEY")),
+		SpaceshipAPISecret:              strings.TrimSpace(os.Getenv("SPACESHIP_API_SECRET")),
+		SpaceshipManagedDomain:          strings.TrimSuffix(strings.ToLower(strings.TrimSpace(os.Getenv("SPACESHIP_MANAGED_DOMAIN"))), "."),
+		SpaceshipDefaultTTL:             300,
 		FailoverStateFile:               envString("FAILOVER_STATE_FILE", "/var/lib/embyproxy-gsy-sidecar/failover-state.json"),
 		Defaults: Defaults{
 			CacheTTL:           10000,

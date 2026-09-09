@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"strings"
@@ -35,6 +36,8 @@ func (h *Handler) handleProxyNodesAPI(w http.ResponseWriter, r *http.Request, pa
 	if r.Method == http.MethodPost && path == "/api/admin/proxy-nodes" {
 		var body struct {
 			Name                    string `json:"name"`
+			DomainPrefix            string `json:"domain_prefix"`
+			PublicIPv4              string `json:"public_ipv4"`
 			PublicAddress           string `json:"public_address"`
 			QuotaBytes              int64  `json:"quota_bytes"`
 			ResetDay                int    `json:"reset_day"`
@@ -54,7 +57,33 @@ func (h *Handler) handleProxyNodesAPI(w http.ResponseWriter, r *http.Request, pa
 		if !decodeAuthJSON(w, r, &body) {
 			return
 		}
-		if strings.TrimSpace(body.PublicAddress) != "" {
+		// Automatic onboarding derives a stable HTTPS origin from a managed
+		// domain and public IPv4; no network/TLS probe is performed here.
+		if strings.TrimSpace(body.DomainPrefix) != "" || strings.TrimSpace(body.PublicIPv4) != "" {
+			prefix := strings.ToLower(strings.TrimSpace(body.DomainPrefix))
+			addr, parseErr := netip.ParseAddr(strings.TrimSpace(body.PublicIPv4))
+			if prefix == "" || strings.ContainsAny(prefix, "._/\\?#") || parseErr != nil || !addr.Is4() {
+				writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "INVALID_DNS_PREFIX_OR_IP"})
+				return
+			}
+			if h.dnsAutomation == nil || h.dnsAutomation.ManagedDomain == "" {
+				writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "DNS_AUTOMATION_NOT_CONFIGURED"})
+				return
+			}
+			record, dnsErr := h.dnsAutomation.EnsureA(ctx, prefix, addr, h.cfg.SpaceshipDefaultTTL)
+			if dnsErr != nil {
+				code := "DNS_CREATE_FAILED"
+				if strings.Contains(dnsErr.Error(), "conflict") {
+					code = "DNS_RECORD_CONFLICT"
+				}
+				writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": code})
+				return
+			}
+			body.PublicAddress = "https://" + prefix + "." + h.dnsAutomation.ManagedDomain
+			body.DNSRecordID, body.DNSRecordType = record.ID, "A"
+			accountSum := sha256.Sum256([]byte(h.dnsAutomation.APIKey))
+			body.DNSProvider, body.DNSAccount, body.DNSZone, body.DNSOwned = "spaceship", fmt.Sprintf("sha256:%x", accountSum[:8]), h.dnsAutomation.ManagedDomain, true
+		} else if strings.TrimSpace(body.PublicAddress) != "" {
 			if normalized, normalizeErr := config.NormalizeEdgePublicOrigin(body.PublicAddress); normalizeErr != nil {
 				writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "INVALID_EDGE_PUBLIC_ORIGIN"})
 				return
@@ -82,6 +111,11 @@ func (h *Handler) handleProxyNodesAPI(w http.ResponseWriter, r *http.Request, pa
 		if err := h.store.SetProxyNodeOwnershipBound(ctx, enrollment.NodeID, body.DNSProvider, body.DNSAccount, body.DNSZone, body.DNSRecordID, body.DNSRecordType, body.DNSOwned, body.CaddyInstalledByProject, body.CaddyConfigOwned, body.TLSStateOwned, body.EdgeUnitOwned); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": "NODE_OWNERSHIP_FAILED"})
 			return
+		}
+		if body.DomainPrefix != "" && h.dnsAutomation != nil {
+			fqdn := strings.ToLower(strings.TrimSpace(body.DomainPrefix)) + "." + h.dnsAutomation.ManagedDomain
+			_ = h.store.SetProxyNodeDNSMetadata(ctx, enrollment.NodeID, fqdn, strings.TrimSpace(body.PublicIPv4), "pending", "")
+			_ = h.store.SetProxyNodePending(ctx, enrollment.NodeID)
 		}
 		writeJSON(w, http.StatusCreated, map[string]any{"ok": true, "enrollment": enrollment, "install_command": buildEnrollmentCommand(controllerURL, enrollment.ID, token)})
 		return

@@ -31,6 +31,7 @@ import (
 	"embyproxy/internal/logging"
 	"embyproxy/internal/proxy"
 	"embyproxy/internal/requestlog"
+	"embyproxy/internal/spaceship"
 	"embyproxy/internal/statslog"
 	"embyproxy/internal/storage"
 	"embyproxy/internal/telegram"
@@ -91,6 +92,7 @@ type Handler struct {
 	lifecycleDNS        interface {
 		DeleteRecord(context.Context, string) error
 	}
+	dnsAutomation *spaceship.Client
 }
 
 // readExternalFailoverState reads the policy runner's state file without
@@ -145,6 +147,19 @@ func New(cfg config.Config, store *storage.Store, checker *auth.Checker, tg *tel
 		log:        log,
 		resetRoute: reset,
 		imageCache: imageCache,
+	}
+	if cfg.SpaceshipManagedDomain != "" {
+		h.dnsAutomation = &spaceship.Client{BaseURL: cfg.SpaceshipAPIBaseURL, APIKey: cfg.SpaceshipAPIKey, APISecret: cfg.SpaceshipAPISecret, ManagedDomain: cfg.SpaceshipManagedDomain}
+	}
+	var saved dnsAutomationStored
+	if store != nil {
+		if ok, err := store.KV().GetJSON(context.Background(), "dns:automation", &saved); err == nil && ok {
+			if key, e1 := storage.DecryptSecret(saved.APIKeyCipher); e1 == nil {
+				if secret, e2 := storage.DecryptSecret(saved.APISecretCipher); e2 == nil {
+					h.dnsAutomation = &spaceship.Client{BaseURL: cfg.SpaceshipAPIBaseURL, APIKey: key, APISecret: secret, ManagedDomain: saved.Domain}
+				}
+			}
+		}
 	}
 	if store != nil {
 		if key, err := store.ControllerDecommissionKey(context.Background()); err == nil {
@@ -211,6 +226,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if strings.HasPrefix(path, "/api/admin/failover/") || strings.HasPrefix(path, "/api/admin/traffic/") || strings.HasPrefix(path, "/api/admin/dns/") {
+		if path == "/api/admin/dns/automation" {
+			h.handleDNSAutomationAPI(w, r, path)
+			return
+		}
 		h.handleFailoverAPI(w, r, path)
 		return
 	}

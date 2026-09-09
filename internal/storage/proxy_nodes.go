@@ -79,6 +79,10 @@ type ProxyNode struct {
 	DNSAccount              string `json:"dns_account,omitempty"`
 	DNSZone                 string `json:"dns_zone,omitempty"`
 	DNSOwned                bool   `json:"dns_owned"`
+	DNSFQDN                 string `json:"dns_fqdn,omitempty"`
+	DNSExpectedIP           string `json:"dns_expected_ip,omitempty"`
+	DNSState                string `json:"dns_state,omitempty"`
+	DNSLastError            string `json:"dns_last_error,omitempty"`
 	CaddyInstalledByProject bool   `json:"caddy_installed_by_project"`
 	CaddyConfigOwned        bool   `json:"caddy_config_owned"`
 	TLSStateOwned           bool   `json:"tls_state_owned"`
@@ -162,6 +166,7 @@ CREATE TABLE IF NOT EXISTS proxy_node_ownership (
  node_id TEXT PRIMARY KEY, dns_provider TEXT NOT NULL DEFAULT '', dns_account TEXT NOT NULL DEFAULT '', dns_zone TEXT NOT NULL DEFAULT '', dns_record_id TEXT NOT NULL DEFAULT '', dns_record_type TEXT NOT NULL DEFAULT 'A', dns_owned INTEGER NOT NULL DEFAULT 0,
  caddy_installed_by_project INTEGER NOT NULL DEFAULT 0, caddy_config_owned INTEGER NOT NULL DEFAULT 0,
  tls_state_owned INTEGER NOT NULL DEFAULT 0, edge_unit_owned INTEGER NOT NULL DEFAULT 0,
+	dns_fqdn TEXT NOT NULL DEFAULT '', dns_expected_ip TEXT NOT NULL DEFAULT '', dns_state TEXT NOT NULL DEFAULT '', dns_last_error TEXT NOT NULL DEFAULT '',
  FOREIGN KEY(node_id) REFERENCES proxy_nodes(id) ON DELETE CASCADE
 );
 CREATE TABLE IF NOT EXISTS proxy_node_decommission_jobs (
@@ -218,6 +223,11 @@ CREATE INDEX IF NOT EXISTS idx_proxy_redirect_endpoints_route ON proxy_redirect_
 	}
 	for _, col := range []string{"dns_provider", "dns_account", "dns_zone"} {
 		if err := s.ensureProxyNodeOwnershipColumn(ctx, col, "TEXT NOT NULL DEFAULT ''"); err != nil {
+			return err
+		}
+	}
+	for _, col := range []struct{ name, def string }{{"dns_fqdn", "TEXT NOT NULL DEFAULT ''"}, {"dns_expected_ip", "TEXT NOT NULL DEFAULT ''"}, {"dns_state", "TEXT NOT NULL DEFAULT ''"}, {"dns_last_error", "TEXT NOT NULL DEFAULT ''"}} {
+		if err := s.ensureProxyNodeOwnershipColumn(ctx, col.name, col.def); err != nil {
 			return err
 		}
 	}
@@ -505,9 +515,9 @@ func (s *Store) loadProxyNodeOwnership(ctx context.Context, n *ProxyNode) error 
 	if n == nil {
 		return nil
 	}
-	var dnsID, dnsType, provider, account, zone string
+	var dnsID, dnsType, provider, account, zone, fqdn, expectedIP, dnsState, dnsLastError string
 	var dnsOwned, caddyInstalled, caddyConfig, tlsOwned, unitOwned int
-	err := s.db.QueryRowContext(ctx, `SELECT dns_provider,dns_account,dns_zone,dns_record_id,dns_record_type,dns_owned,caddy_installed_by_project,caddy_config_owned,tls_state_owned,edge_unit_owned FROM proxy_node_ownership WHERE node_id=?`, n.ID).Scan(&provider, &account, &zone, &dnsID, &dnsType, &dnsOwned, &caddyInstalled, &caddyConfig, &tlsOwned, &unitOwned)
+	err := s.db.QueryRowContext(ctx, `SELECT dns_provider,dns_account,dns_zone,dns_record_id,dns_record_type,dns_owned,caddy_installed_by_project,caddy_config_owned,tls_state_owned,edge_unit_owned,dns_fqdn,dns_expected_ip,dns_state,dns_last_error FROM proxy_node_ownership WHERE node_id=?`, n.ID).Scan(&provider, &account, &zone, &dnsID, &dnsType, &dnsOwned, &caddyInstalled, &caddyConfig, &tlsOwned, &unitOwned, &fqdn, &expectedIP, &dnsState, &dnsLastError)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
@@ -518,6 +528,7 @@ func (s *Store) loadProxyNodeOwnership(ctx context.Context, n *ProxyNode) error 
 	n.DNSProvider, n.DNSAccount, n.DNSZone = provider, account, zone
 	n.CaddyInstalledByProject, n.CaddyConfigOwned = caddyInstalled != 0, caddyConfig != 0
 	n.TLSStateOwned, n.EdgeUnitOwned = tlsOwned != 0, unitOwned != 0
+	n.DNSFQDN, n.DNSExpectedIP, n.DNSState, n.DNSLastError = fqdn, expectedIP, dnsState, dnsLastError
 	return nil
 }
 
@@ -924,6 +935,18 @@ func (s *Store) SetProxyNodeOwnershipBound(ctx context.Context, nodeID, provider
 		return errors.New("unsupported_owned_dns_type")
 	}
 	_, err := s.db.ExecContext(ctx, `INSERT INTO proxy_node_ownership(node_id,dns_provider,dns_account,dns_zone,dns_record_id,dns_record_type,dns_owned,caddy_installed_by_project,caddy_config_owned,tls_state_owned,edge_unit_owned) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(node_id) DO UPDATE SET dns_provider=excluded.dns_provider,dns_account=excluded.dns_account,dns_zone=excluded.dns_zone,dns_record_id=excluded.dns_record_id,dns_record_type=excluded.dns_record_type,dns_owned=excluded.dns_owned,caddy_installed_by_project=excluded.caddy_installed_by_project,caddy_config_owned=excluded.caddy_config_owned,tls_state_owned=excluded.tls_state_owned,edge_unit_owned=excluded.edge_unit_owned`, nodeID, provider, account, zone, dnsRecordID, dnsRecordType, boolInt(dnsOwned), boolInt(caddyInstalled), boolInt(caddyConfig), boolInt(tlsOwned), boolInt(unitOwned))
+	return err
+}
+
+// SetProxyNodeDNSMetadata records the immutable onboarding intent and current
+// provider state separately from ownership flags.
+func (s *Store) SetProxyNodeDNSMetadata(ctx context.Context, nodeID, fqdn, expectedIP, state, lastError string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE proxy_node_ownership SET dns_fqdn=?,dns_expected_ip=?,dns_state=?,dns_last_error=? WHERE node_id=?`, fqdn, expectedIP, state, lastError, nodeID)
+	return err
+}
+
+func (s *Store) SetProxyNodePending(ctx context.Context, nodeID string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE proxy_nodes SET state='pending',enabled=0,updated_at=? WHERE id=?`, time.Now().Unix(), nodeID)
 	return err
 }
 
