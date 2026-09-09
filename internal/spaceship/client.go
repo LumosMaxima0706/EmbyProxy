@@ -29,6 +29,7 @@ type Record struct {
 }
 type recordsResponse struct {
 	Records []Record `json:"records"`
+	Items   []Record `json:"items"`
 }
 type HTTPError struct {
 	Status int
@@ -142,6 +143,9 @@ func (c *Client) List(ctx context.Context, domain string) ([]Record, error) {
 	var wrapped recordsResponse
 	if json.Unmarshal(raw, &wrapped) == nil && wrapped.Records != nil {
 		return wrapped.Records, nil
+	}
+	if json.Unmarshal(raw, &wrapped) == nil && wrapped.Items != nil {
+		return wrapped.Items, nil
 	}
 	var list []Record
 	if err := json.Unmarshal(raw, &list); err != nil {

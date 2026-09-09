@@ -97,3 +97,26 @@ func TestListUsesPaginationAndPreservesStatus(t *testing.T) {
 		})
 	}
 }
+
+func TestListAcceptsSpaceshipItemsResponse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("take") != "100" || r.URL.Query().Get("skip") != "0" {
+			t.Fatalf("query=%s", r.URL.RawQuery)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"items":[{"name":"rak","type":"A","address":"1.2.3.4","ttl":300}],"total":1}`))
+	}))
+	defer srv.Close()
+	c := &Client{BaseURL: srv.URL, APIKey: "k", APISecret: "s", ManagedDomain: "example.com"}
+	records, err := c.List(context.Background(), "example.com")
+	if err != nil {
+		t.Fatalf("list error=%v", err)
+	}
+	if len(records) != 1 || records[0].Name != "rak" || records[0].Address != "1.2.3.4" {
+		t.Fatalf("records=%+v", records)
+	}
+	status, detail, err := c.TestStatus(context.Background())
+	if status != http.StatusOK || detail != "" || err != nil {
+		t.Fatalf("test status=%d detail=%q err=%v", status, detail, err)
+	}
+}
