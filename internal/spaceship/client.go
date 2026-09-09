@@ -158,7 +158,7 @@ func (c *Client) TestStatus(ctx context.Context) (int, string, error) {
 	if e, ok := err.(*HTTPError); ok {
 		return e.Status, e.Detail, err
 	}
-	return http.StatusServiceUnavailable, "network or TLS error", err
+	return 0, "network or TLS error", err
 }
 
 func (c *Client) AuthoritativeProvider(ctx context.Context) (string, []string) {

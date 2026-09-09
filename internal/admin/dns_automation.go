@@ -135,6 +135,8 @@ func spaceshipErrorCode(status int) string {
 		return "SPACESHIP_UPSTREAM_ERROR"
 	case 502:
 		return "SPACESHIP_NETWORK_ERROR"
+	case 0:
+		return "SPACESHIP_NETWORK_ERROR"
 	default:
 		return "SPACESHIP_NETWORK_ERROR"
 	}
