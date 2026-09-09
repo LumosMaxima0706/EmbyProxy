@@ -29,6 +29,9 @@ type Record struct {
 type recordsResponse struct {
 	Records []Record `json:"records"`
 }
+type HTTPError struct{ Status int }
+
+func (e *HTTPError) Error() string { return fmt.Sprintf("spaceship_http_%d", e.Status) }
 
 func (c *Client) enabled() bool {
 	return c != nil && c.APIKey != "" && c.APISecret != "" && c.ManagedDomain != ""
@@ -84,7 +87,7 @@ func (c *Client) do(ctx context.Context, method, domain string, body any, out an
 		return nil
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("spaceship_http_%d", resp.StatusCode)
+		return &HTTPError{Status: resp.StatusCode}
 	}
 	if out == nil {
 		return nil
@@ -107,6 +110,16 @@ func (c *Client) List(ctx context.Context, domain string) ([]Record, error) {
 	return list, nil
 }
 func (c *Client) Test(ctx context.Context) error { _, err := c.List(ctx, c.ManagedDomain); return err }
+func (c *Client) TestStatus(ctx context.Context) (int, error) {
+	_, err := c.List(ctx, c.ManagedDomain)
+	if err == nil {
+		return http.StatusOK, nil
+	}
+	if e, ok := err.(*HTTPError); ok {
+		return e.Status, err
+	}
+	return http.StatusBadGateway, err
+}
 func (c *Client) EnsureA(ctx context.Context, prefix string, ip netip.Addr, ttl int) (Record, error) {
 	if ttl == 0 {
 		ttl = 300
