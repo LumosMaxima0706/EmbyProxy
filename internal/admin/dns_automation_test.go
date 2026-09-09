@@ -55,3 +55,47 @@ func TestDNSAutomationValidationErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestDNSAutomationTestMapsNetworkFailureToValidHTTPStatus(t *testing.T) {
+	t.Setenv("SPACESHIP_SECRET_ENCRYPTION_KEY", "test-master-key-for-dns-automation")
+	h := newAuthTestHandler(t, config.Config{AdminToken: "strong-admin-token"})
+	login := serveAdminJSON(t, h, http.MethodPost, "/admin/auth/login", map[string]any{"token": "strong-admin-token"}, nil)
+	if login.Code != http.StatusOK {
+		t.Fatalf("login status=%d body=%s", login.Code, login.Body.String())
+	}
+	cookie := login.Result().Cookies()[0]
+	// Saving is deliberately local-only; the test request below exercises
+	// the persisted credential read path against an unavailable provider.
+	save := serveAdminJSON(t, h, http.MethodPost, "/api/admin/dns/automation", map[string]any{
+		"managed_domain": "example.com",
+		"api_key":        "opaque_key",
+		"api_secret":     "opaque_secret",
+		"ttl":            300,
+	}, cookie)
+	if save.Code != http.StatusOK {
+		t.Fatalf("save status=%d body=%s", save.Code, save.Body.String())
+	}
+	h.cfg.SpaceshipAPIBaseURL = "http://127.0.0.1:1"
+	probe := serveAdminJSON(t, h, http.MethodPost, "/api/admin/dns/automation?test=true", map[string]any{
+		"managed_domain": "example.com",
+		"api_key":        "",
+		"api_secret":     "",
+		"ttl":            300,
+	}, cookie)
+	if probe.Code != http.StatusServiceUnavailable {
+		t.Fatalf("network probe status=%d body=%s", probe.Code, probe.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(probe.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["error"] != "SPACESHIP_NETWORK_ERROR" {
+		t.Fatalf("error=%v body=%s", body["error"], probe.Body.String())
+	}
+	if got, ok := body["http_status"].(float64); !ok || got != 0 {
+		t.Fatalf("http_status=%v body=%s", body["http_status"], probe.Body.String())
+	}
+	if strings.Contains(probe.Body.String(), "opaque_key") || strings.Contains(probe.Body.String(), "opaque_secret") {
+		t.Fatalf("response leaked credential: %s", probe.Body.String())
+	}
+}

@@ -90,7 +90,15 @@ func (h *Handler) handleDNSAutomationAPI(w http.ResponseWriter, r *http.Request,
 	if r.URL.Query().Get("test") == "true" {
 		status, detail, err := (&spaceship.Client{BaseURL: h.cfg.SpaceshipAPIBaseURL, APIKey: key, APISecret: secret, ManagedDomain: body.ManagedDomain}).TestStatus(ctx)
 		if err != nil {
-			writeJSON(w, status, map[string]any{"ok": false, "error": spaceshipErrorCode(status), "provider": "spaceship", "operation": "dns_records_get", "http_status": status, "detail": detail})
+			// TestStatus uses zero when no HTTP response was received (for
+			// example, a network or TLS failure). net/http cannot write
+			// status zero, so expose a valid service error while retaining
+			// the zero upstream status in the diagnostic payload.
+			responseStatus := status
+			if responseStatus <= 0 {
+				responseStatus = http.StatusServiceUnavailable
+			}
+			writeJSON(w, responseStatus, map[string]any{"ok": false, "error": spaceshipErrorCode(status), "provider": "spaceship", "operation": "dns_records_get", "http_status": status, "detail": detail})
 			return
 		}
 		writeJSON(w, 200, map[string]any{"ok": true, "configured": true, "permissions": map[string]any{"dnsrecords_read": true}})
