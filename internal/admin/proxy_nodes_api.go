@@ -91,13 +91,6 @@ func (h *Handler) handleProxyNodesAPI(w http.ResponseWriter, r *http.Request, pa
 			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "INVALID_RESET_DAY"})
 			return
 		}
-		if exists, err := h.store.ProxyNodeNameExists(ctx, name); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": "NODE_LOOKUP_FAILED"})
-			return
-		} else if exists {
-			writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "error": "NODE_NAME_EXISTS"})
-			return
-		}
 		// Automatic onboarding derives a stable HTTPS origin from a managed
 		// domain and public IPv4; no network/TLS probe is performed here.
 		if autoDNS {
@@ -114,6 +107,15 @@ func (h *Handler) handleProxyNodesAPI(w http.ResponseWriter, r *http.Request, pa
 				writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "DNS_AUTOMATION_NOT_CONFIGURED"})
 				return
 			}
+			fqdn := prefix + "." + strings.TrimSuffix(strings.ToLower(strings.TrimSpace(h.dnsAutomation.ManagedDomain)), ".")
+			body.PublicAddress = "https://" + fqdn
+			if exists, err := h.store.ProxyNodeNameExists(ctx, name); err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": "NODE_LOOKUP_FAILED"})
+				return
+			} else if exists {
+				writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "error": "NODE_NAME_EXISTS"})
+				return
+			}
 			record, dnsErr := h.dnsAutomation.EnsureA(ctx, prefix, addr, h.cfg.SpaceshipDefaultTTL)
 			if dnsErr != nil {
 				code := "DNS_CREATE_FAILED"
@@ -123,7 +125,6 @@ func (h *Handler) handleProxyNodesAPI(w http.ResponseWriter, r *http.Request, pa
 				writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": code})
 				return
 			}
-			body.PublicAddress = "https://" + prefix + "." + h.dnsAutomation.ManagedDomain
 			body.DNSRecordID, body.DNSRecordType = record.ID, "A"
 			accountSum := sha256.Sum256([]byte(h.dnsAutomation.APIKey))
 			body.DNSProvider, body.DNSAccount, body.DNSZone, body.DNSOwned = "spaceship", fmt.Sprintf("sha256:%x", accountSum[:8]), h.dnsAutomation.ManagedDomain, true
