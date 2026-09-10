@@ -817,16 +817,50 @@ CADDY
     rm -f "$unit_dir/embyproxy-edge-heartbeat.timer" "$unit_dir/embyproxy-edge-heartbeat.service" "$lib_dir/embyproxy-edge-heartbeat"
     systemctl daemon-reload
   fi
-  # Always restart after replacing the enrolled config. enable --now is a
-  # no-op for an already active unit and would leave a rerun using stale
-  # credentials and settings.
-  systemctl enable embyproxy-edge.service
-  systemctl restart embyproxy-edge.service || {
-    echo 'failed to restart embyproxy-edge.service' >&2
+  edge_startup_diagnostics() {
+    echo 'EDGE STARTUP: FAIL' >&2
     systemctl status embyproxy-edge.service --no-pager || true
     journalctl -u embyproxy-edge.service -n 80 --no-pager || true
+  }
+  echo 'IDENTITY ENROLLMENT: PASS'
+  systemctl enable embyproxy-edge.service || {
+    echo 'failed to enable embyproxy-edge.service' >&2
+    edge_startup_diagnostics
     exit 1
   }
+  # Restart is required for both fresh installs and reinstalling an already
+  # active unit after replacing its binary, config, or unit file.
+  systemctl restart embyproxy-edge.service || {
+    echo 'failed to restart embyproxy-edge.service' >&2
+    edge_startup_diagnostics
+    exit 1
+  }
+  wait_edge_local_health() {
+    edge_wait_seconds=0
+    edge_wait_timeout=60
+    while [ "$edge_wait_seconds" -lt "$edge_wait_timeout" ]; do
+      if ! systemctl is-active --quiet embyproxy-edge.service; then
+        edge_state=$(systemctl is-active embyproxy-edge.service 2>/dev/null || true)
+        if [ "$edge_state" = failed ]; then
+          edge_startup_diagnostics
+          return 1
+        fi
+      else
+        edge_health_status=$(curl --silent --show-error --connect-timeout 2 --max-time 3 -o /dev/null -w '%%{http_code}' "http://$edge_probe/health" || true)
+        if [ "$edge_health_status" = 200 ]; then
+          echo 'EDGE STARTUP: PASS'
+          echo 'LOCAL HEALTH: PASS'
+          return 0
+        fi
+      fi
+      sleep 1
+      edge_wait_seconds=$((edge_wait_seconds + 1))
+    done
+    echo 'edge agent startup timed out after 60 seconds' >&2
+    edge_startup_diagnostics
+    return 1
+  }
+  wait_edge_local_health || exit 1
   wait_http_200() {
     wait_label="$1"
     wait_url="$2"
@@ -850,14 +884,13 @@ CADDY
     echo "$wait_label health check failed after $wait_attempts attempts (last HTTP status: $wait_status)" >&2
     return 1
   }
-  wait_http_200 'edge agent local' "http://$edge_probe/health" 5 2 3 4 http || exit 1
   if [ "$ingress_mode" = external ]; then
     wait_http_200 'external HTTPS ingress' "$edge_public/health" 18 5 5 5 https || exit 1
   else
     wait_http_200 'HTTPS edge ingress' "$edge_public/health" 18 5 5 5 https || exit 1
   fi
 fi
-echo 'Edge identity enrolled. This host remains unadmitted until its data-plane configuration reports a passing playback canary.'
+echo 'ADMISSION: PENDING (data-plane playback canary required).'
 	`, controller, persistedEdgePublic, buildinfo.Current().Version, buildinfo.Current().Commit, curlProtocol, url.PathEscape(enrollmentID), url.PathEscape(token), controller, curlProtocol, buildinfo.Current().Commit, decommissionPublicKey, map[bool]string{true: "true", false: "false"}[node.CaddyInstalledByProject], map[bool]string{true: "true", false: "false"}[node.CaddyConfigOwned], map[bool]string{true: "true", false: "false"}[node.TLSStateOwned], map[bool]string{true: "true", false: "false"}[node.EdgeUnitOwned])
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")

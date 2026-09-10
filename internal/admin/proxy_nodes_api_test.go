@@ -324,14 +324,32 @@ func TestProxyNodeBootstrapIsNoStoreAndDoesNotExposeAdminSecret(t *testing.T) {
 	if strings.Index(script, "systemctl is-active --quiet caddy.service") > strings.Index(script, "systemctl enable embyproxy-edge.service") {
 		t.Fatal("edge agent must start only after managed Caddy is active")
 	}
+	if !strings.Contains(script, "systemctl enable embyproxy-edge.service || {") || !strings.Contains(script, "systemctl restart embyproxy-edge.service || {") {
+		t.Fatal("bootstrap must enable and restart the edge after replacing enrolled config")
+	}
 	if strings.Contains(script, "systemctl enable --now embyproxy-edge.service") {
-		t.Fatal("bootstrap must not rely on enable --now for an already active edge")
+		t.Fatal("bootstrap must use explicit enable and restart semantics")
 	}
-	if !strings.Contains(script, "systemctl enable embyproxy-edge.service") || !strings.Contains(script, "systemctl restart embyproxy-edge.service || {") {
-		t.Fatal("bootstrap must explicitly restart the edge after replacing enrolled config")
+	if strings.Index(script, "systemctl daemon-reload") > strings.Index(script, "systemctl enable embyproxy-edge.service") {
+		t.Fatal("edge must be started only after daemon-reload")
 	}
-	if strings.Index(script, "systemctl enable embyproxy-edge.service") > strings.Index(script, "systemctl restart embyproxy-edge.service || {") {
-		t.Fatal("edge unit must be enabled before restart")
+	if strings.Index(script, "systemctl restart embyproxy-edge.service || {") > strings.Index(script, "wait_edge_local_health || exit 1") {
+		t.Fatal("local health must be checked after edge startup")
+	}
+	for _, failure := range []string{
+		"failed to enable embyproxy-edge.service",
+		"failed to restart embyproxy-edge.service",
+		"if [ \"$edge_state\" = failed ]; then",
+		"edge agent startup timed out after 60 seconds",
+		"edge_startup_diagnostics",
+		"wait_edge_local_health || exit 1",
+	} {
+		if !strings.Contains(script, failure) {
+			t.Fatalf("bootstrap omitted non-zero startup failure handling %q", failure)
+		}
+	}
+	if strings.Count(script, "systemctl restart embyproxy-edge.service || {") != 1 {
+		t.Fatal("fresh, inactive, and active installs must share one explicit edge restart")
 	}
 	if strings.Contains(script, "playbackHealthy:false") || !strings.Contains(script, "systemctl disable --now embyproxy-edge-heartbeat.timer") || !strings.Contains(script, "rm -f \"$unit_dir/embyproxy-edge-heartbeat.timer\"") {
 		t.Fatal("bootstrap must remove the legacy synthetic heartbeat without reinstalling it")
@@ -342,7 +360,7 @@ func TestProxyNodeBootstrapIsNoStoreAndDoesNotExposeAdminSecret(t *testing.T) {
 	if artifactDownload < 0 || artifactMode < artifactDownload || artifactReplace < artifactMode {
 		t.Fatal("edge artifact must be downloaded and checked in a temporary path before atomic replacement")
 	}
-	for _, retry := range []string{"wait_http_200()", "wait_attempts=\"$3\"", "wait_connect_timeout=\"$4\"", "wait_max_time=\"$5\"", "wait_http_200 'edge agent local' \"http://$edge_probe/health\" 5 2 3 4 http", "wait_http_200 'HTTPS edge ingress' \"$edge_public/health\" 18 5 5 5 https", "--proto '=https' --tlsv1.2"} {
+	for _, retry := range []string{"wait_edge_local_health()", "edge_wait_timeout=60", "systemctl is-active --quiet embyproxy-edge.service", "http://$edge_probe/health", "EDGE STARTUP: PASS", "LOCAL HEALTH: PASS", "systemctl restart embyproxy-edge.service || {", "wait_http_200()", "wait_attempts=\"$3\"", "wait_connect_timeout=\"$4\"", "wait_max_time=\"$5\"", "wait_http_200 'HTTPS edge ingress' \"$edge_public/health\" 18 5 5 5 https", "--proto '=https' --tlsv1.2"} {
 		if !strings.Contains(script, retry) {
 			t.Fatalf("bootstrap omitted readiness retry contract %q", retry)
 		}
