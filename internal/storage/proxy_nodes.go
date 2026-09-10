@@ -578,6 +578,18 @@ func validNodeName(value string) bool {
 	return !strings.HasPrefix(value, "-") && !strings.HasSuffix(value, "-")
 }
 
+// ValidProxyNodeName exposes the same validation used by persistence so the
+// HTTP layer can reject malformed onboarding input before any DNS side effect.
+func ValidProxyNodeName(value string) bool {
+	return validNodeName(strings.ToLower(strings.TrimSpace(value)))
+}
+
+func (s *Store) ProxyNodeNameExists(ctx context.Context, name string) (bool, error) {
+	var exists int
+	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM proxy_nodes WHERE name=?)`, strings.ToLower(strings.TrimSpace(name))).Scan(&exists)
+	return exists != 0, err
+}
+
 func (s *Store) CreateProxyNode(ctx context.Context, node ProxyNode, enrollmentTTL time.Duration) (Enrollment, string, error) {
 	node.Name = strings.ToLower(strings.TrimSpace(node.Name))
 	if !validNodeName(node.Name) || node.QuotaBytes < 0 || node.ResetDay < 1 || node.ResetDay > 31 || enrollmentTTL <= 0 || enrollmentTTL > 24*time.Hour {

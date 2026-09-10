@@ -55,15 +55,59 @@ func (h *Handler) handleProxyNodesAPI(w http.ResponseWriter, r *http.Request, pa
 			EdgeUnitOwned           bool   `json:"edge_unit_owned"`
 		}
 		if !decodeAuthJSON(w, r, &body) {
+			if h.log != nil {
+				h.log.Info("proxy-node", "node create request decode failed", map[string]any{"event": "proxy_node_create_decode_failed"})
+			}
+			return
+		}
+		name := strings.ToLower(strings.TrimSpace(body.Name))
+		prefix := strings.ToLower(strings.TrimSpace(body.DomainPrefix))
+		publicIPv4 := strings.TrimSpace(body.PublicIPv4)
+		autoDNS := prefix != "" || publicIPv4 != ""
+		if h.log != nil {
+			h.log.Info("proxy-node", "node create request decoded", map[string]any{
+				"event": "proxy_node_create_request",
+				"name":  name, "namePresent": strings.TrimSpace(body.Name) != "",
+				"dnsPrefix": prefix, "dnsPrefixPresent": strings.TrimSpace(body.DomainPrefix) != "",
+				"publicIPv4": publicIPv4, "publicIPv4Present": publicIPv4 != "",
+				"priority": body.Priority, "quotaBytes": body.QuotaBytes,
+				"resetDay": body.ResetDay, "originPresent": strings.TrimSpace(body.PublicAddress) != "",
+				"autoDNS": autoDNS,
+			})
+		}
+		if !storage.ValidProxyNodeName(name) {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "INVALID_NODE_NAME"})
+			return
+		}
+		if body.Priority < 0 || body.Priority > 10000 {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "INVALID_PRIORITY"})
+			return
+		}
+		if body.QuotaBytes < 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "INVALID_MONTHLY_QUOTA"})
+			return
+		}
+		if body.ResetDay < 1 || body.ResetDay > 31 {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "INVALID_RESET_DAY"})
+			return
+		}
+		if exists, err := h.store.ProxyNodeNameExists(ctx, name); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": "NODE_LOOKUP_FAILED"})
+			return
+		} else if exists {
+			writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "error": "NODE_NAME_EXISTS"})
 			return
 		}
 		// Automatic onboarding derives a stable HTTPS origin from a managed
 		// domain and public IPv4; no network/TLS probe is performed here.
-		if strings.TrimSpace(body.DomainPrefix) != "" || strings.TrimSpace(body.PublicIPv4) != "" {
-			prefix := strings.ToLower(strings.TrimSpace(body.DomainPrefix))
-			addr, parseErr := netip.ParseAddr(strings.TrimSpace(body.PublicIPv4))
-			if prefix == "" || strings.ContainsAny(prefix, "._/\\?#") || parseErr != nil || !addr.Is4() {
-				writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "INVALID_DNS_PREFIX_OR_IP"})
+		if autoDNS {
+			if prefix == "" || strings.ContainsAny(prefix, "._/\\?#") || strings.HasPrefix(prefix, "-") || strings.HasSuffix(prefix, "-") || len(prefix) > 63 {
+				writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "INVALID_DNS_PREFIX"})
+				return
+			}
+			addr, parseErr := netip.ParseAddr(publicIPv4)
+			if parseErr != nil || !addr.Is4() {
+				writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "INVALID_PUBLIC_IPV4"})
 				return
 			}
 			if h.dnsAutomation == nil || h.dnsAutomation.ManagedDomain == "" {
@@ -85,14 +129,14 @@ func (h *Handler) handleProxyNodesAPI(w http.ResponseWriter, r *http.Request, pa
 			body.DNSProvider, body.DNSAccount, body.DNSZone, body.DNSOwned = "spaceship", fmt.Sprintf("sha256:%x", accountSum[:8]), h.dnsAutomation.ManagedDomain, true
 		} else if strings.TrimSpace(body.PublicAddress) != "" {
 			if normalized, normalizeErr := config.NormalizeEdgePublicOrigin(body.PublicAddress); normalizeErr != nil {
-				writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "INVALID_EDGE_PUBLIC_ORIGIN"})
+				writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "INVALID_ORIGIN"})
 				return
 			} else {
 				body.PublicAddress = normalized
 			}
 		}
 		if strings.TrimSpace(body.PublicAddress) == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "EDGE_PUBLIC_HTTPS_ORIGIN_REQUIRED"})
+			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "INVALID_ORIGIN"})
 			return
 		}
 		controllerURL, err := config.NormalizeEnrollmentControllerURL(h.cfg.EnrollmentControllerURL, false)
@@ -100,9 +144,15 @@ func (h *Handler) handleProxyNodesAPI(w http.ResponseWriter, r *http.Request, pa
 			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "error": "CONTROLLER_PUBLIC_URL_NOT_CONFIGURED"})
 			return
 		}
-		enrollment, token, err := h.store.CreateProxyNode(ctx, storage.ProxyNode{Name: body.Name, PublicAddress: body.PublicAddress, QuotaBytes: body.QuotaBytes, ResetDay: body.ResetDay, ResetTimezone: body.ResetTimezone, Priority: body.Priority}, 15*time.Minute)
+		enrollment, token, err := h.store.CreateProxyNode(ctx, storage.ProxyNode{Name: name, PublicAddress: body.PublicAddress, QuotaBytes: body.QuotaBytes, ResetDay: body.ResetDay, ResetTimezone: body.ResetTimezone, Priority: body.Priority}, 15*time.Minute)
 		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "INVALID_NODE"})
+			if strings.Contains(err.Error(), "UNIQUE constraint failed: proxy_nodes.name") {
+				writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "error": "NODE_NAME_EXISTS"})
+			} else if strings.Contains(err.Error(), "invalid_reset_timezone") {
+				writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "INVALID_RESET_TIMEZONE"})
+			} else {
+				writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "NODE_CREATE_FAILED"})
+			}
 			return
 		}
 		if body.DNSRecordType == "" {

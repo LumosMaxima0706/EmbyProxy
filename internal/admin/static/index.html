@@ -1496,6 +1496,16 @@ function authErrorMessage(error) {
     CROSS_SITE_REQUEST: '请求来源校验失败，请从当前管理页面重试',
     SESSION_REQUIRED: '该操作需要重新登录',
     SETUP_EXPIRED: '绑定二维码已过期，请重新生成',
+    INVALID_NODE_NAME: '节点名称无效：仅支持小写字母、数字和短横线',
+    NODE_NAME_EXISTS: '节点名称已存在，请使用其他名称或打开已有节点重新生成安装命令',
+    INVALID_DNS_PREFIX: '域名前缀无效：仅支持小写字母、数字和短横线',
+    INVALID_PUBLIC_IPV4: 'VPS 公网 IPv4 地址无效',
+    INVALID_PRIORITY: '优先级必须在 0 到 10000 之间',
+    INVALID_MONTHLY_QUOTA: '月配额不能为负数',
+    INVALID_RESET_DAY: '重置日必须在 1 到 31 之间',
+    INVALID_ORIGIN: 'HTTPS origin 无效；自动 DNS 模式请填写域名前缀和 IPv4',
+    NODE_LOOKUP_FAILED: '检查节点名称失败，请稍后重试',
+    NODE_CREATE_FAILED: '节点持久化失败，请检查输入后重试',
   };
   return messages[error] || '登录失败，请重试';
 }

@@ -46,6 +46,90 @@ func TestProxyNodeAPIAutomaticDNSCreatesPendingWithoutHealth(t *testing.T) {
 	}
 }
 
+func TestProxyNodeAPIAutomaticDNSAcceptsFreshVPSInputAndGeneratesOrigin(t *testing.T) {
+	h := newAuthTestHandler(t, config.Config{AdminToken: "strong-admin-token", EnrollmentControllerURL: "https://controller.149077530.xyz"})
+	createdRecord := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			if createdRecord {
+				_, _ = w.Write([]byte(`{"items":[{"name":"rak-test","type":"A","address":"198.200.42.120","ttl":300}],"total":1}`))
+			} else {
+				_, _ = w.Write([]byte(`{"items":[],"total":0}`))
+			}
+			return
+		}
+		createdRecord = true
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	h.dnsAutomation = &spaceship.Client{BaseURL: srv.URL, APIKey: "k", APISecret: "s", ManagedDomain: "149077530.xyz"}
+	login := serveAdminJSON(t, h, http.MethodPost, "/admin/auth/login", map[string]any{"token": "strong-admin-token"}, nil)
+	cookie := login.Result().Cookies()[0]
+	created := serveAdminJSON(t, h, http.MethodPost, "/api/admin/proxy-nodes", map[string]any{
+		"name": "raksmart-test", "domain_prefix": "rak-test", "public_ipv4": "198.200.42.120",
+		"quota_bytes": int64(1000) * 1_000_000_000, "reset_day": 7, "priority": 10,
+	}, cookie)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create=%d %s", created.Code, created.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(created.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	nodeID := body["enrollment"].(map[string]any)["node_id"].(string)
+	node, err := h.store.GetProxyNode(context.Background(), nodeID)
+	if err != nil || node == nil || node.State != "pending" || node.PublicAddress != "https://rak-test.149077530.xyz" || node.ResetDay != 7 || node.Priority != 10 {
+		t.Fatalf("node=%+v err=%v", node, err)
+	}
+}
+
+func TestProxyNodeAPIDuplicateNameIsSpecificAndDoesNotWriteDNS(t *testing.T) {
+	h := newAuthTestHandler(t, config.Config{AdminToken: "strong-admin-token", EnrollmentControllerURL: "https://controller.149077530.xyz"})
+	if _, _, err := h.store.CreateProxyNode(context.Background(), storage.ProxyNode{Name: "raksmart", ResetDay: 7}, 15*time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	getCalls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		getCalls++
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	h.dnsAutomation = &spaceship.Client{BaseURL: srv.URL, APIKey: "k", APISecret: "s", ManagedDomain: "149077530.xyz"}
+	login := serveAdminJSON(t, h, http.MethodPost, "/admin/auth/login", map[string]any{"token": "strong-admin-token"}, nil)
+	cookie := login.Result().Cookies()[0]
+	resp := serveAdminJSON(t, h, http.MethodPost, "/api/admin/proxy-nodes", map[string]any{
+		"name": "raksmart", "domain_prefix": "rak", "public_ipv4": "198.200.42.120", "quota_bytes": 1_000_000_000, "reset_day": 7, "priority": 10,
+	}, cookie)
+	if resp.Code != http.StatusConflict || !strings.Contains(resp.Body.String(), `"error":"NODE_NAME_EXISTS"`) {
+		t.Fatalf("response=%d %s", resp.Code, resp.Body.String())
+	}
+	if getCalls != 0 {
+		t.Fatalf("DNS was contacted before duplicate-name validation: %d", getCalls)
+	}
+}
+
+func TestProxyNodeAPILocalValidationErrorsBeforeDNS(t *testing.T) {
+	h := newAuthTestHandler(t, config.Config{AdminToken: "strong-admin-token", EnrollmentControllerURL: "https://controller.149077530.xyz"})
+	getCalls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		getCalls++
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	h.dnsAutomation = &spaceship.Client{BaseURL: srv.URL, APIKey: "k", APISecret: "s", ManagedDomain: "149077530.xyz"}
+	login := serveAdminJSON(t, h, http.MethodPost, "/admin/auth/login", map[string]any{"token": "strong-admin-token"}, nil)
+	cookie := login.Result().Cookies()[0]
+	resp := serveAdminJSON(t, h, http.MethodPost, "/api/admin/proxy-nodes", map[string]any{
+		"name": "raksmart-invalid", "domain_prefix": "rak", "public_ipv4": "not-an-ip", "reset_day": 7, "priority": 10,
+	}, cookie)
+	if resp.Code != http.StatusBadRequest || !strings.Contains(resp.Body.String(), `"error":"INVALID_PUBLIC_IPV4"`) {
+		t.Fatalf("response=%d %s", resp.Code, resp.Body.String())
+	}
+	if getCalls != 0 {
+		t.Fatalf("DNS was contacted before local validation: %d", getCalls)
+	}
+}
+
 func TestProxyNodeAPICreatesOneTimeEnrollmentAndHeartbeat(t *testing.T) {
 	h := newAuthTestHandler(t, config.Config{AdminToken: "strong-admin-token", EnrollmentControllerURL: "https://controller.149077530.xyz"})
 	login := serveAdminJSON(t, h, http.MethodPost, "/admin/auth/login", map[string]any{"token": "strong-admin-token"}, nil)
