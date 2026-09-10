@@ -222,6 +222,9 @@ func TestProxyNodeBootstrapIsNoStoreAndDoesNotExposeAdminSecret(t *testing.T) {
 	if strings.Contains(rec.Body.String(), "strong-admin-token") || !strings.Contains(rec.Body.String(), "api/edge/enroll/") || !strings.Contains(rec.Body.String(), "EMBYPROXY_INSTALL_ROOT") || !strings.Contains(rec.Body.String(), "sha256sum") || !strings.Contains(rec.Body.String(), "edge agent checksum verification failed") {
 		t.Fatal("bootstrap leaked secret or omitted enrollment endpoint")
 	}
+	if strings.Contains(rec.Body.String(), "/api/edge/enroll/false/false") || !strings.Contains(rec.Body.String(), "/api/edge/enroll/"+strings.TrimSpace(parts[0])) {
+		t.Fatal("bootstrap enrollment URL did not preserve the generated enrollment identity")
+	}
 	if !strings.Contains(rec.Body.String(), "edge_isolated_media=${EMBYPROXY_ISOLATED_TEST_MEDIA:-true}") || !strings.Contains(rec.Body.String(), "edge_canary='/__isolated-media/canary'") {
 		t.Fatal("bootstrap does not provide the built-in playback canary by default")
 	}

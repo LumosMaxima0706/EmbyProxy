@@ -858,7 +858,7 @@ CADDY
   fi
 fi
 echo 'Edge identity enrolled. This host remains unadmitted until its data-plane configuration reports a passing playback canary.'
-	`, controller, persistedEdgePublic, buildinfo.Current().Version, buildinfo.Current().Commit, decommissionPublicKey, map[bool]string{true: "true", false: "false"}[node.CaddyInstalledByProject], map[bool]string{true: "true", false: "false"}[node.CaddyConfigOwned], map[bool]string{true: "true", false: "false"}[node.TLSStateOwned], map[bool]string{true: "true", false: "false"}[node.EdgeUnitOwned], curlProtocol, url.PathEscape(enrollmentID), url.PathEscape(token), controller, curlProtocol, buildinfo.Current().Commit)
+	`, controller, persistedEdgePublic, buildinfo.Current().Version, buildinfo.Current().Commit, curlProtocol, url.PathEscape(enrollmentID), url.PathEscape(token), controller, curlProtocol, buildinfo.Current().Commit, decommissionPublicKey, map[bool]string{true: "true", false: "false"}[node.CaddyInstalledByProject], map[bool]string{true: "true", false: "false"}[node.CaddyConfigOwned], map[bool]string{true: "true", false: "false"}[node.TLSStateOwned], map[bool]string{true: "true", false: "false"}[node.EdgeUnitOwned])
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
