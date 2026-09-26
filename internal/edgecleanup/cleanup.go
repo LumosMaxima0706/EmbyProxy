@@ -36,7 +36,6 @@ systemctl disable embyproxy-edge.service 2>/dev/null || true
 %s
 systemctl daemon-reload 2>/dev/null || true
 rm -f "$config_path" "$config_dir/identity.env" "$config_dir/bootstrap.sh"
-rmdir "$config_dir" 2>/dev/null || true
 %s
 find "$state_dir" -xdev -depth -type f -delete 2>/dev/null || true
 find "$state_dir" -xdev -depth -type d -empty -delete 2>/dev/null || true
@@ -46,6 +45,7 @@ curl --fail --silent --show-error --proto '=https' --tlsv1.2 -X POST \
   --data "{\"job_id\":\"$job_id\",\"completion_token\":\"$completion_token\"}" \
   "$controller/api/edge/decommission/$node_id/complete" || true
 rm -f -- "$0"
+rmdir "$config_dir" 2>/dev/null || true
 `, nodeID, jobID, controllerURL, completionToken,
 		unitCleanup(ownership.EdgeUnitOwned), caddyCleanup(ownership)), nil
 }

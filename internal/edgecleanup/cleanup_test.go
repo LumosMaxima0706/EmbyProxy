@@ -1,6 +1,7 @@
 package edgecleanup
 
 import (
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -21,6 +22,14 @@ func TestScriptOwnershipGuards(t *testing.T) {
 	shared, err := Script("node", "job", "https://controller.example", "token", Ownership{})
 	if err != nil || strings.Contains(shared, "rm -f /etc/caddy/Caddyfile") || strings.Contains(shared, "rm -f /usr/local/bin/embyproxy-edge-agent") {
 		t.Fatalf("shared cleanup unsafe: %v", err)
+	}
+	if strings.Index(script, `rm -f -- "$0"`) > strings.LastIndex(script, `rmdir "$config_dir"`) {
+		t.Fatal("cleanup helper must remove itself before removing its config directory")
+	}
+	cmd := exec.Command("sh", "-n")
+	cmd.Stdin = strings.NewReader(script)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("cleanup shell syntax: %v: %s", err, out)
 	}
 	if strings.Contains(shared, "systemctl stop caddy.service") || strings.Contains(shared, "systemctl disable caddy.service") {
 		t.Fatal("shared Caddy must not be stopped or disabled")
