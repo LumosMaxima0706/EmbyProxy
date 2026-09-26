@@ -594,4 +594,16 @@ func TestEdgeRuntimeOwnershipRequiresNodeCredentialAndPreservesDNSOwnership(t *t
 	if !updated.DNSOwned || updated.DNSRecordID != "record-1" || updated.DNSProvider != "spaceship" {
 		t.Fatalf("DNS ownership changed: %+v", updated)
 	}
+	downgrade := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{}`))
+	downgrade.Header.Set("Content-Type", "application/json")
+	downgrade.Header.Set("X-EmbyProxy-Node-Credential", credential)
+	downgradeRec := httptest.NewRecorder()
+	h.ServeHTTP(downgradeRec, downgrade)
+	if downgradeRec.Code != http.StatusOK {
+		t.Fatalf("ownership assertion retry=%d %s", downgradeRec.Code, downgradeRec.Body.String())
+	}
+	updated, err = h.store.GetProxyNode(context.Background(), node.ID)
+	if err != nil || !updated.CaddyInstalledByProject || !updated.CaddyConfigOwned || !updated.TLSStateOwned || !updated.EdgeUnitOwned {
+		t.Fatalf("runtime ownership was downgraded: %+v err=%v", updated, err)
+	}
 }
