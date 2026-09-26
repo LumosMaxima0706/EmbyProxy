@@ -36,6 +36,7 @@ systemctl disable embyproxy-edge.service 2>/dev/null || true
 %s
 systemctl daemon-reload 2>/dev/null || true
 rm -f "$config_path" "$config_dir/identity.env" "$config_dir/bootstrap.sh"
+rmdir "$config_dir" 2>/dev/null || true
 %s
 find "$state_dir" -xdev -depth -type f -delete 2>/dev/null || true
 find "$state_dir" -xdev -depth -type d -empty -delete 2>/dev/null || true
@@ -60,6 +61,10 @@ func caddyCleanup(o Ownership) string {
 	if !o.CaddyConfigOwned && !o.TLSStateOwned {
 		return "# Caddy/TLS ownership was not asserted; preserve shared Caddy"
 	}
+	serviceCleanup := ""
+	if o.CaddyConfigOwned {
+		serviceCleanup = "systemctl stop caddy.service 2>/dev/null || true; systemctl disable caddy.service 2>/dev/null || true; "
+	}
 	line := "if [ -f /var/lib/embyproxy-edge/caddy-managed ] && grep -Fx 'managed_by=embyproxy-edge' /var/lib/embyproxy-edge/caddy-managed >/dev/null 2>&1; then"
 	if o.CaddyConfigOwned {
 		line += " rm -f /etc/caddy/Caddyfile;"
@@ -71,5 +76,5 @@ func caddyCleanup(o Ownership) string {
 	if o.CaddyInstalledByProject {
 		line += " # Caddy purge intentionally remains gated by an external dependency check."
 	}
-	return line
+	return serviceCleanup + line
 }
