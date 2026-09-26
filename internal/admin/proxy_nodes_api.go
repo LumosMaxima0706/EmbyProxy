@@ -35,24 +35,25 @@ func (h *Handler) handleProxyNodesAPI(w http.ResponseWriter, r *http.Request, pa
 	}
 	if r.Method == http.MethodPost && path == "/api/admin/proxy-nodes" {
 		var body struct {
-			Name                    string `json:"name"`
-			DomainPrefix            string `json:"domain_prefix"`
-			PublicIPv4              string `json:"public_ipv4"`
-			PublicAddress           string `json:"public_address"`
-			QuotaBytes              int64  `json:"quota_bytes"`
-			ResetDay                int    `json:"reset_day"`
-			ResetTimezone           string `json:"reset_timezone"`
-			Priority                int    `json:"priority"`
-			DNSRecordID             string `json:"dns_record_id"`
-			DNSRecordType           string `json:"dns_record_type"`
-			DNSProvider             string `json:"dns_provider"`
-			DNSAccount              string `json:"dns_account"`
-			DNSZone                 string `json:"dns_zone"`
-			DNSOwned                bool   `json:"dns_owned"`
-			CaddyInstalledByProject bool   `json:"caddy_installed_by_project"`
-			CaddyConfigOwned        bool   `json:"caddy_config_owned"`
-			TLSStateOwned           bool   `json:"tls_state_owned"`
-			EdgeUnitOwned           bool   `json:"edge_unit_owned"`
+			Name                    string  `json:"name"`
+			DomainPrefix            string  `json:"domain_prefix"`
+			PublicIPv4              string  `json:"public_ipv4"`
+			PublicAddress           string  `json:"public_address"`
+			QuotaBytes              int64   `json:"quota_bytes"`
+			ThresholdPercent        float64 `json:"threshold_percent"`
+			ResetDay                int     `json:"reset_day"`
+			ResetTimezone           string  `json:"reset_timezone"`
+			Priority                int     `json:"priority"`
+			DNSRecordID             string  `json:"dns_record_id"`
+			DNSRecordType           string  `json:"dns_record_type"`
+			DNSProvider             string  `json:"dns_provider"`
+			DNSAccount              string  `json:"dns_account"`
+			DNSZone                 string  `json:"dns_zone"`
+			DNSOwned                bool    `json:"dns_owned"`
+			CaddyInstalledByProject bool    `json:"caddy_installed_by_project"`
+			CaddyConfigOwned        bool    `json:"caddy_config_owned"`
+			TLSStateOwned           bool    `json:"tls_state_owned"`
+			EdgeUnitOwned           bool    `json:"edge_unit_owned"`
 		}
 		if !decodeAuthJSON(w, r, &body) {
 			if h.log != nil {
@@ -83,8 +84,15 @@ func (h *Handler) handleProxyNodesAPI(w http.ResponseWriter, r *http.Request, pa
 			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "INVALID_PRIORITY"})
 			return
 		}
+		if body.ThresholdPercent == 0 {
+			body.ThresholdPercent = 95
+		}
 		if body.QuotaBytes < 0 {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "INVALID_MONTHLY_QUOTA"})
+			return
+		}
+		if body.ThresholdPercent < 1 || body.ThresholdPercent > 100 {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "INVALID_TRAFFIC_THRESHOLD"})
 			return
 		}
 		if body.ResetDay < 1 || body.ResetDay > 31 {
@@ -145,7 +153,7 @@ func (h *Handler) handleProxyNodesAPI(w http.ResponseWriter, r *http.Request, pa
 			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "error": "CONTROLLER_PUBLIC_URL_NOT_CONFIGURED"})
 			return
 		}
-		enrollment, token, err := h.store.CreateProxyNode(ctx, storage.ProxyNode{Name: name, PublicAddress: body.PublicAddress, QuotaBytes: body.QuotaBytes, ResetDay: body.ResetDay, ResetTimezone: body.ResetTimezone, Priority: body.Priority}, 15*time.Minute)
+		enrollment, token, err := h.store.CreateProxyNode(ctx, storage.ProxyNode{Name: name, PublicAddress: body.PublicAddress, QuotaBytes: body.QuotaBytes, ThresholdPercent: body.ThresholdPercent, ResetDay: body.ResetDay, ResetTimezone: body.ResetTimezone, Priority: body.Priority}, 15*time.Minute)
 		if err != nil {
 			if strings.Contains(err.Error(), "UNIQUE constraint failed: proxy_nodes.name") {
 				writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "error": "NODE_NAME_EXISTS"})
@@ -371,6 +379,9 @@ func (h *Handler) handleProxyNodesAPI(w http.ResponseWriter, r *http.Request, pa
 			}
 			if v, ok := body["quota_bytes"].(float64); ok {
 				n.QuotaBytes = int64(v)
+			}
+			if v, ok := body["threshold_percent"].(float64); ok {
+				n.ThresholdPercent = v
 			}
 			if v, ok := body["reset_day"].(float64); ok {
 				n.ResetDay = int(v)

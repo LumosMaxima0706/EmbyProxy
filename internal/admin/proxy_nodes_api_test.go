@@ -536,8 +536,36 @@ func TestProxyNodeQuotaSchedulePatchAndManualReset(t *testing.T) {
 	}
 }
 
+func TestProxyNodeTrafficThresholdCreatePatchAndValidation(t *testing.T) {
+	h := newAuthTestHandler(t, config.Config{AdminToken: "strong-admin-token", EnrollmentControllerURL: "https://owner-admin.149077530.xyz"})
+	login := serveAdminJSON(t, h, http.MethodPost, "/admin/auth/login", map[string]any{"token": "strong-admin-token"}, nil)
+	cookie := login.Result().Cookies()[0]
+	created := serveAdminJSON(t, h, http.MethodPost, "/api/admin/proxy-nodes", map[string]any{"name": "edge-threshold", "public_address": "https://edge-threshold.example.net", "quota_bytes": 1000, "reset_day": 1, "reset_timezone": "UTC"}, cookie)
+	var body map[string]any
+	if err := json.Unmarshal(created.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	id := body["enrollment"].(map[string]any)["node_id"].(string)
+	node, _ := h.store.GetProxyNode(context.Background(), id)
+	if node.ThresholdPercent != 95 {
+		t.Fatalf("default threshold=%v", node.ThresholdPercent)
+	}
+	patched := serveAdminJSON(t, h, http.MethodPatch, "/api/admin/proxy-nodes/"+id, map[string]any{"threshold_percent": 80}, cookie)
+	if patched.Code != http.StatusOK {
+		t.Fatalf("patch=%d %s", patched.Code, patched.Body.String())
+	}
+	node, _ = h.store.GetProxyNode(context.Background(), id)
+	if node.ThresholdPercent != 80 {
+		t.Fatalf("patched threshold=%v", node.ThresholdPercent)
+	}
+	invalid := serveAdminJSON(t, h, http.MethodPatch, "/api/admin/proxy-nodes/"+id, map[string]any{"threshold_percent": 101}, cookie)
+	if invalid.Code != http.StatusBadRequest {
+		t.Fatalf("invalid=%d %s", invalid.Code, invalid.Body.String())
+	}
+}
+
 func TestProxyNodeQuotaControlsRemainInAdminUI(t *testing.T) {
-	for _, required := range []string{"proxyQuotaModal", "openProxyQuotaModal", "saveProxyQuota", "resetProxyUsage", "/reset-usage", "已用流量校准", "重置时区"} {
+	for _, required := range []string{"proxyQuotaModal", "openProxyQuotaModal", "saveProxyQuota", "resetProxyUsage", "/reset-usage", "已用流量校准", "重置时区", "proxyThresholdPercent", "切换阈值"} {
 		if !strings.Contains(indexHTML, required) {
 			t.Fatalf("admin UI missing quota control %q", required)
 		}

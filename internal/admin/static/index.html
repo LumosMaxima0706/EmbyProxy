@@ -726,6 +726,7 @@ tr:last-child td{border-bottom:0}
       <div class="form-group form-full"><label for="proxyNodeAddress">HTTPS origin（兼容手工模式）</label><input id="proxyNodeAddress" type="url" placeholder="https://edge.example.com"><small class="form-hint">自动模式填写前缀和 IPv4；无需预先安装 Edge 或通过 /health。</small><div id="proxyNodeAddressError" class="login-err" style="display:none"></div></div>
       <div class="form-section">配额策略</div>
       <div class="form-group"><label for="proxyNodeQuota">月配额 (GB)</label><input id="proxyNodeQuota" type="number" min="0" step="1" value="1000"><small class="form-hint">0 表示不限</small></div>
+      <div class="form-group"><label for="proxyNodeThreshold">切换阈值 (%)</label><input id="proxyNodeThreshold" type="number" min="1" max="100" step="0.1" value="95"></div>
       <div class="form-group"><label for="proxyNodeResetDay">重置日</label><input id="proxyNodeResetDay" type="number" min="1" max="31" value="1"></div>
       <div class="form-actions form-full"><button type="button" class="btn" onclick="closeProxyNodeModal()">取消</button><button type="submit" class="primary-action" id="proxyNodeSubmit">创建并生成安装命令</button></div>
     </form>
@@ -738,6 +739,7 @@ tr:last-child td{border-bottom:0}
     <form id="proxyQuotaForm" class="form-grid" onsubmit="saveProxyQuota(event)">
       <div class="form-group"><label for="proxyQuotaGB">月配额 (GB)</label><input id="proxyQuotaGB" type="number" min="0" step="0.001" required><small class="form-hint">0 表示不限</small></div>
       <div class="form-group"><label for="proxyUsedGB">已用流量校准 (GB)</label><input id="proxyUsedGB" type="number" min="0" step="0.001" required></div>
+      <div class="form-group"><label for="proxyThresholdPercent">切换阈值 (%)</label><input id="proxyThresholdPercent" type="number" min="1" max="100" step="0.1" required><small class="form-hint">达到阈值后自动切换到下一可用节点</small></div>
       <div class="form-group"><label for="proxyResetDay">每月重置日</label><input id="proxyResetDay" type="number" min="1" max="31" required></div>
       <div class="form-group"><label for="proxyResetTimezone">重置时区</label><input id="proxyResetTimezone" list="proxyTimezoneOptions" required><datalist id="proxyTimezoneOptions"><option value="Asia/Shanghai"><option value="UTC"><option value="America/Los_Angeles"></datalist></div>
       <div class="form-group form-full"><small class="form-hint" id="proxyNextReset"></small></div>
@@ -1790,7 +1792,7 @@ function renderProxyNodeTable() {
     const remoteCleanupReady = n.decommission_capable || !n.last_heartbeat_at || (Date.now()/1000 - Number(n.last_heartbeat_at)) > 300;
     const removeLabel = remoteCleanupReady ? '彻底移除' : '从控制面移除（远端不支持）';
     const menu = `<div class="proxy-action-menu"><button class="btn btn-sm proxy-more" aria-label="更多操作" onclick="toggleProxyMenu('${attr(n.id)}',event)">⋯</button><div class="proxy-menu" id="proxy-menu-${attr(n.id)}" hidden>${n.state!=='removed'?`<button onclick="viewProxyNodeDetails('${attr(n.id)}')">详情</button>`:''}${n.state!=='revoked'&&n.state!=='removed'?`<button onclick="openProxyQuotaModal('${attr(n.id)}')">流量与重置</button><button onclick="drainProxyNode('${attr(n.id)}')">排空现有连接</button>`:''}${n.state!=='revoked'&&n.state!=='removed'?`<button onclick="toggleProxyNode('${attr(n.id)}',${!n.enabled})">${n.enabled?'禁用调度':'启用调度'}</button>`:''}<button onclick="regenerateProxyBootstrap('${attr(n.id)}')">重新接入/重装</button>${n.state!=='revoked'&&n.state!=='removed'?`<button onclick="revokeProxyIdentity('${attr(n.id)}')">撤销身份</button>`:''}<button onclick="openDecommissionModal('${attr(n.id)}')">${removeLabel}</button></div></div>`;
-    return `<tr><td><strong>${esc(n.name)}</strong><small class="muted">${esc(n.public_address || '未配置 HTTPS origin')}</small><small class="muted">最近心跳：${n.last_heartbeat_at ? new Date(Number(n.last_heartbeat_at)*1000).toLocaleString() : '暂无'}</small></td><td><span class="chip ${health === 'healthy' ? 'ok' : (n.state==='revoked'?'err':'warn')}">${esc(n.state || 'unknown')}</span></td><td>${chip(n.playback_healthy, n.playback_healthy)}</td><td>${chip(n.ingress_healthy, n.ingress_healthy)}</td><td>${chip(n.enabled && health === 'healthy', n.enabled && health === 'healthy')}</td><td>${remaining === null ? '未设置' : `${formatBytes(n.used_bytes)} / ${formatBytes(n.quota_bytes)}`}</td><td>${Number(n.priority || i + 1)}</td><td><div class="action-pack" style="justify-content:flex-start">${primary}${menu}</div></td></tr>`;
+    return `<tr><td><strong>${esc(n.name)}</strong><small class="muted">${esc(n.public_address || '未配置 HTTPS origin')}</small><small class="muted">最近心跳：${n.last_heartbeat_at ? new Date(Number(n.last_heartbeat_at)*1000).toLocaleString() : '暂无'}</small></td><td><span class="chip ${health === 'healthy' ? 'ok' : (n.state==='revoked'?'err':'warn')}">${esc(n.state || 'unknown')}</span></td><td>${chip(n.playback_healthy, n.playback_healthy)}</td><td>${chip(n.ingress_healthy, n.ingress_healthy)}</td><td>${chip(n.enabled && health === 'healthy', n.enabled && health === 'healthy')}</td><td>${remaining === null ? '未设置' : `${formatBytes(n.used_bytes)} / ${formatBytes(n.quota_bytes)} · ${Number(n.threshold_percent||100)}%`}</td><td>${Number(n.priority || i + 1)}</td><td><div class="action-pack" style="justify-content:flex-start">${primary}${menu}</div></td></tr>`;
   }).join('') : '<tr><td colspan="8" class="table-empty">当前筛选暂无节点</td></tr>';
 }
 function toggleProxyMenu(id, event) { event?.stopPropagation(); document.querySelectorAll('.proxy-menu').forEach(el=>{ if(el.id!=='proxy-menu-'+id) el.hidden=true; }); const menu=document.getElementById('proxy-menu-'+id); if(menu) menu.hidden=!menu.hidden; }
@@ -1803,7 +1805,7 @@ function syncProxyNodeFormValidity() {
   const button = document.getElementById('proxyNodeSubmit');
   if (form && button) button.disabled = !form.checkValidity();
 }
-function openProxyNodeModal() { document.getElementById('proxyNodeForm').reset(); document.getElementById('proxyNodeName').value='edge-new'; document.getElementById('proxyNodePriority').value='10'; document.getElementById('proxyNodeQuota').value='1000'; document.getElementById('proxyNodeResetDay').value='1'; document.getElementById('proxyNodeAddressError').style.display='none'; showModal('proxyNodeModal'); syncProxyNodeFormValidity(); }
+function openProxyNodeModal() { document.getElementById('proxyNodeForm').reset(); document.getElementById('proxyNodeName').value='edge-new'; document.getElementById('proxyNodePriority').value='10'; document.getElementById('proxyNodeQuota').value='1000'; document.getElementById('proxyNodeThreshold').value='95'; document.getElementById('proxyNodeResetDay').value='1'; document.getElementById('proxyNodeAddressError').style.display='none'; showModal('proxyNodeModal'); syncProxyNodeFormValidity(); }
 function closeProxyNodeModal() { hideModal('proxyNodeModal'); }
 async function submitProxyNode(event) {
   event.preventDefault();
@@ -1814,9 +1816,10 @@ async function submitProxyNode(event) {
   const domainPrefix = document.getElementById('proxyNodePrefix').value.trim().toLowerCase();
   const publicIPv4 = document.getElementById('proxyNodeIPv4').value.trim();
   const quota = Number(document.getElementById('proxyNodeQuota').value || 0);
+  const thresholdPercent = Number(document.getElementById('proxyNodeThreshold').value || 95);
   const resetDay = Number(document.getElementById('proxyNodeResetDay').value || 1);
   const priority = Number(document.getElementById('proxyNodePriority').value || 0);
-  const r = await authFetch('/api/admin/proxy-nodes', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name,public_address:address,domain_prefix:domainPrefix,public_ipv4:publicIPv4,quota_bytes:Math.max(0,quota)*1e9,reset_day:resetDay,reset_timezone:'Asia/Shanghai',priority})});
+  const r = await authFetch('/api/admin/proxy-nodes', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name,public_address:address,domain_prefix:domainPrefix,public_ipv4:publicIPv4,quota_bytes:Math.max(0,quota)*1e9,threshold_percent:thresholdPercent,reset_day:resetDay,reset_timezone:'Asia/Shanghai',priority})});
   button.disabled = false;
   if (!r.ok) { const error = document.getElementById('proxyNodeAddressError'); error.textContent = r.error || '创建 enrollment 失败'; error.style.display='block'; toast(r.error || '创建 enrollment 失败','err'); return; }
   closeProxyNodeModal();
@@ -1829,6 +1832,7 @@ function openProxyQuotaModal(id) {
   document.getElementById('proxyQuotaNodeName').textContent=node.name;
   document.getElementById('proxyQuotaGB').value=(Number(node.quota_bytes||0)/1e9).toFixed(3);
   document.getElementById('proxyUsedGB').value=(Number(node.used_bytes||0)/1e9).toFixed(3);
+  document.getElementById('proxyThresholdPercent').value=Number(node.threshold_percent||100);
   document.getElementById('proxyResetDay').value=Number(node.reset_day||1);
   document.getElementById('proxyResetTimezone').value=node.reset_timezone||'Asia/Shanghai';
   document.getElementById('proxyNextReset').textContent=node.next_reset_at ? `下次重置：${new Date(Number(node.next_reset_at)*1000).toLocaleString()}` : '下次重置时间将在保存后计算';
@@ -1837,7 +1841,7 @@ function openProxyQuotaModal(id) {
 function closeProxyQuotaModal(){ hideModal('proxyQuotaModal'); proxyQuotaNodeId=''; }
 async function saveProxyQuota(event) {
   event.preventDefault(); const form=event.currentTarget; if(!form.reportValidity()||!proxyQuotaNodeId) return;
-  const body={quota_bytes:Math.round(Number(document.getElementById('proxyQuotaGB').value||0)*1e9),used_bytes:Math.round(Number(document.getElementById('proxyUsedGB').value||0)*1e9),reset_day:Number(document.getElementById('proxyResetDay').value),reset_timezone:document.getElementById('proxyResetTimezone').value.trim()};
+  const body={quota_bytes:Math.round(Number(document.getElementById('proxyQuotaGB').value||0)*1e9),used_bytes:Math.round(Number(document.getElementById('proxyUsedGB').value||0)*1e9),threshold_percent:Number(document.getElementById('proxyThresholdPercent').value),reset_day:Number(document.getElementById('proxyResetDay').value),reset_timezone:document.getElementById('proxyResetTimezone').value.trim()};
   const r=await authFetch('/api/admin/proxy-nodes/'+encodeURIComponent(proxyQuotaNodeId),{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   if(!r.ok){toast('保存流量配置失败: '+authErrorMessage(r.error),'err');return;}
   closeProxyQuotaModal(); await loadProxyNodes(); toast('流量配置已保存','ok');

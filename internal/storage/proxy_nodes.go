@@ -51,43 +51,44 @@ func NextMonthlyReset(now time.Time, resetDay int, timezone string) (time.Time, 
 // ProxyNode is an independently enrolled data-plane node. Secrets never leave
 // this package after enrollment and are stored only as SHA-256 verifiers.
 type ProxyNode struct {
-	ID                      string `json:"id"`
-	Name                    string `json:"name"`
-	PublicAddress           string `json:"public_address"`
-	Enabled                 bool   `json:"enabled"`
-	State                   string `json:"state"`
-	Priority                int    `json:"priority"`
-	QuotaBytes              int64  `json:"quota_bytes"`
-	UsedBytes               int64  `json:"used_bytes"`
-	ResetDay                int    `json:"reset_day"`
-	ResetTimezone           string `json:"reset_timezone"`
-	NextResetAt             int64  `json:"next_reset_at"`
-	LastHeartbeatAt         int64  `json:"last_heartbeat_at"`
-	PlaybackHealthy         bool   `json:"playback_healthy"`
-	IngressHealthy          bool   `json:"ingress_healthy"`
-	ConfigSynced            bool   `json:"config_synced"`
-	AgentVersion            string `json:"agent_version"`
-	AgentCommit             string `json:"agent_commit"`
-	DecommissionCapable     bool   `json:"decommission_capable"`
-	LastError               string `json:"last_error,omitempty"`
-	ActiveConnections       int    `json:"active_connections"`
-	CreatedAt               int64  `json:"created_at"`
-	UpdatedAt               int64  `json:"updated_at"`
-	DNSRecordID             string `json:"dns_record_id,omitempty"`
-	DNSRecordType           string `json:"dns_record_type,omitempty"`
-	DNSProvider             string `json:"dns_provider,omitempty"`
-	DNSAccount              string `json:"dns_account,omitempty"`
-	DNSZone                 string `json:"dns_zone,omitempty"`
-	DNSOwned                bool   `json:"dns_owned"`
-	DNSFQDN                 string `json:"dns_fqdn,omitempty"`
-	DNSExpectedIP           string `json:"dns_expected_ip,omitempty"`
-	DNSState                string `json:"dns_state,omitempty"`
-	DNSLastError            string `json:"dns_last_error,omitempty"`
-	CaddyInstalledByProject bool   `json:"caddy_installed_by_project"`
-	CaddyConfigOwned        bool   `json:"caddy_config_owned"`
-	TLSStateOwned           bool   `json:"tls_state_owned"`
-	EdgeUnitOwned           bool   `json:"edge_unit_owned"`
-	RemoteCleanupPending    bool   `json:"remote_cleanup_pending"`
+	ID                      string  `json:"id"`
+	Name                    string  `json:"name"`
+	PublicAddress           string  `json:"public_address"`
+	Enabled                 bool    `json:"enabled"`
+	State                   string  `json:"state"`
+	Priority                int     `json:"priority"`
+	QuotaBytes              int64   `json:"quota_bytes"`
+	UsedBytes               int64   `json:"used_bytes"`
+	ThresholdPercent        float64 `json:"threshold_percent"`
+	ResetDay                int     `json:"reset_day"`
+	ResetTimezone           string  `json:"reset_timezone"`
+	NextResetAt             int64   `json:"next_reset_at"`
+	LastHeartbeatAt         int64   `json:"last_heartbeat_at"`
+	PlaybackHealthy         bool    `json:"playback_healthy"`
+	IngressHealthy          bool    `json:"ingress_healthy"`
+	ConfigSynced            bool    `json:"config_synced"`
+	AgentVersion            string  `json:"agent_version"`
+	AgentCommit             string  `json:"agent_commit"`
+	DecommissionCapable     bool    `json:"decommission_capable"`
+	LastError               string  `json:"last_error,omitempty"`
+	ActiveConnections       int     `json:"active_connections"`
+	CreatedAt               int64   `json:"created_at"`
+	UpdatedAt               int64   `json:"updated_at"`
+	DNSRecordID             string  `json:"dns_record_id,omitempty"`
+	DNSRecordType           string  `json:"dns_record_type,omitempty"`
+	DNSProvider             string  `json:"dns_provider,omitempty"`
+	DNSAccount              string  `json:"dns_account,omitempty"`
+	DNSZone                 string  `json:"dns_zone,omitempty"`
+	DNSOwned                bool    `json:"dns_owned"`
+	DNSFQDN                 string  `json:"dns_fqdn,omitempty"`
+	DNSExpectedIP           string  `json:"dns_expected_ip,omitempty"`
+	DNSState                string  `json:"dns_state,omitempty"`
+	DNSLastError            string  `json:"dns_last_error,omitempty"`
+	CaddyInstalledByProject bool    `json:"caddy_installed_by_project"`
+	CaddyConfigOwned        bool    `json:"caddy_config_owned"`
+	TLSStateOwned           bool    `json:"tls_state_owned"`
+	EdgeUnitOwned           bool    `json:"edge_unit_owned"`
+	RemoteCleanupPending    bool    `json:"remote_cleanup_pending"`
 }
 
 type ProxyNodeDecommissionJob struct {
@@ -145,7 +146,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 CREATE TABLE IF NOT EXISTS proxy_nodes (
  id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, public_address TEXT NOT NULL DEFAULT '',
  enabled INTEGER NOT NULL DEFAULT 1, state TEXT NOT NULL DEFAULT 'registered', priority INTEGER NOT NULL DEFAULT 0,
- quota_bytes INTEGER NOT NULL DEFAULT 0, used_bytes INTEGER NOT NULL DEFAULT 0,
+ quota_bytes INTEGER NOT NULL DEFAULT 0, used_bytes INTEGER NOT NULL DEFAULT 0, threshold_percent REAL NOT NULL DEFAULT 100,
  reset_day INTEGER NOT NULL DEFAULT 1, reset_timezone TEXT NOT NULL DEFAULT 'Asia/Shanghai', next_reset_at INTEGER NOT NULL DEFAULT 0,
  last_heartbeat_at INTEGER NOT NULL DEFAULT 0, playback_healthy INTEGER NOT NULL DEFAULT 0, ingress_healthy INTEGER NOT NULL DEFAULT 0, config_synced INTEGER NOT NULL DEFAULT 0,
 	 agent_version TEXT NOT NULL DEFAULT '', agent_commit TEXT NOT NULL DEFAULT '', decommission_capable INTEGER NOT NULL DEFAULT 0, credential_hash TEXT NOT NULL DEFAULT '',
@@ -206,6 +207,9 @@ CREATE INDEX IF NOT EXISTS idx_proxy_redirect_endpoints_route ON proxy_redirect_
 		return err
 	}
 	if err := s.ensureProxyNodeColumn(ctx, "decommission_capable", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := s.ensureProxyNodeColumn(ctx, "threshold_percent", "REAL NOT NULL DEFAULT 100"); err != nil {
 		return err
 	}
 	for _, col := range []struct{ name, def string }{
@@ -592,7 +596,10 @@ func (s *Store) ProxyNodeNameExists(ctx context.Context, name string) (bool, err
 
 func (s *Store) CreateProxyNode(ctx context.Context, node ProxyNode, enrollmentTTL time.Duration) (Enrollment, string, error) {
 	node.Name = strings.ToLower(strings.TrimSpace(node.Name))
-	if !validNodeName(node.Name) || node.QuotaBytes < 0 || node.ResetDay < 1 || node.ResetDay > 31 || enrollmentTTL <= 0 || enrollmentTTL > 24*time.Hour {
+	if node.ThresholdPercent == 0 {
+		node.ThresholdPercent = 100
+	}
+	if !validNodeName(node.Name) || node.QuotaBytes < 0 || node.ThresholdPercent <= 0 || node.ThresholdPercent > 100 || node.ResetDay < 1 || node.ResetDay > 31 || enrollmentTTL <= 0 || enrollmentTTL > 24*time.Hour {
 		return Enrollment{}, "", errors.New("invalid_proxy_node")
 	}
 	if node.ResetTimezone == "" {
@@ -621,7 +628,7 @@ func (s *Store) CreateProxyNode(ctx context.Context, node ProxyNode, enrollmentT
 		return Enrollment{}, "", err
 	}
 	defer tx.Rollback()
-	if _, err = tx.ExecContext(ctx, `INSERT INTO proxy_nodes (id,name,public_address,enabled,state,priority,quota_bytes,used_bytes,reset_day,reset_timezone,next_reset_at,last_heartbeat_at,playback_healthy,ingress_healthy,config_synced,agent_version,agent_commit,credential_hash,last_error,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, node.ID, node.Name, node.PublicAddress, 1, node.State, node.Priority, node.QuotaBytes, 0, node.ResetDay, node.ResetTimezone, node.NextResetAt, 0, 0, 0, 0, "", "", "", "", now, now); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT INTO proxy_nodes (id,name,public_address,enabled,state,priority,quota_bytes,used_bytes,threshold_percent,reset_day,reset_timezone,next_reset_at,last_heartbeat_at,playback_healthy,ingress_healthy,config_synced,agent_version,agent_commit,credential_hash,last_error,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, node.ID, node.Name, node.PublicAddress, 1, node.State, node.Priority, node.QuotaBytes, 0, node.ThresholdPercent, node.ResetDay, node.ResetTimezone, node.NextResetAt, 0, 0, 0, 0, "", "", "", "", now, now); err != nil {
 		return Enrollment{}, "", err
 	}
 	if _, err = tx.ExecContext(ctx, `INSERT INTO proxy_node_enrollments (id,node_id,token_hash,expires_at,created_at) VALUES (?,?,?,?,?)`, enrollment.ID, node.ID, nodeHash(token), enrollment.ExpiresAt, now); err != nil {
@@ -684,14 +691,14 @@ func scanProxyNode(row interface{ Scan(...any) error }) (ProxyNode, error) {
 	var enabled, playback, synced int
 	var ingress int
 	var capable int
-	err := row.Scan(&n.ID, &n.Name, &n.PublicAddress, &enabled, &n.State, &n.Priority, &n.QuotaBytes, &n.UsedBytes, &n.ResetDay, &n.ResetTimezone, &n.NextResetAt, &n.LastHeartbeatAt, &playback, &ingress, &synced, &n.AgentVersion, &n.AgentCommit, &capable, &n.LastError, &n.CreatedAt, &n.UpdatedAt)
+	err := row.Scan(&n.ID, &n.Name, &n.PublicAddress, &enabled, &n.State, &n.Priority, &n.QuotaBytes, &n.UsedBytes, &n.ThresholdPercent, &n.ResetDay, &n.ResetTimezone, &n.NextResetAt, &n.LastHeartbeatAt, &playback, &ingress, &synced, &n.AgentVersion, &n.AgentCommit, &capable, &n.LastError, &n.CreatedAt, &n.UpdatedAt)
 	n.Enabled, n.PlaybackHealthy, n.IngressHealthy, n.ConfigSynced = enabled != 0, playback != 0, ingress != 0, synced != 0
 	n.DecommissionCapable = capable != 0
 	n.RemoteCleanupPending = n.LastError == "remote_cleanup_pending"
 	return n, err
 }
 
-const proxyNodeFields = `id,name,public_address,enabled,state,priority,quota_bytes,used_bytes,reset_day,reset_timezone,next_reset_at,last_heartbeat_at,playback_healthy,ingress_healthy,config_synced,agent_version,agent_commit,decommission_capable,last_error,created_at,updated_at`
+const proxyNodeFields = `id,name,public_address,enabled,state,priority,quota_bytes,used_bytes,threshold_percent,reset_day,reset_timezone,next_reset_at,last_heartbeat_at,playback_healthy,ingress_healthy,config_synced,agent_version,agent_commit,decommission_capable,last_error,created_at,updated_at`
 
 func (s *Store) ListProxyNodes(ctx context.Context) ([]ProxyNode, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT `+proxyNodeFields+` FROM proxy_nodes ORDER BY priority, name`)
@@ -729,11 +736,14 @@ func (s *Store) ReplaceProxyNodeSnapshot(ctx context.Context, nodes []ProxyNode)
 	defer tx.Rollback()
 	seen := make(map[string]struct{}, len(nodes))
 	for _, n := range nodes {
-		if n.ID == "" || !validNodeName(n.Name) || n.ResetDay < 1 || n.ResetDay > 31 {
+		if n.ThresholdPercent == 0 {
+			n.ThresholdPercent = 100
+		}
+		if n.ID == "" || !validNodeName(n.Name) || n.ThresholdPercent <= 0 || n.ThresholdPercent > 100 || n.ResetDay < 1 || n.ResetDay > 31 {
 			return errors.New("invalid_proxy_node_snapshot")
 		}
 		seen[n.ID] = struct{}{}
-		_, err = tx.ExecContext(ctx, `INSERT INTO proxy_nodes (id,name,public_address,enabled,state,priority,quota_bytes,used_bytes,reset_day,reset_timezone,next_reset_at,last_heartbeat_at,playback_healthy,ingress_healthy,config_synced,agent_version,agent_commit,credential_hash,last_error,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,public_address=excluded.public_address,enabled=excluded.enabled,state=excluded.state,priority=excluded.priority,quota_bytes=excluded.quota_bytes,used_bytes=excluded.used_bytes,reset_day=excluded.reset_day,reset_timezone=excluded.reset_timezone,next_reset_at=excluded.next_reset_at,last_heartbeat_at=excluded.last_heartbeat_at,playback_healthy=excluded.playback_healthy,ingress_healthy=excluded.ingress_healthy,config_synced=excluded.config_synced,agent_version=excluded.agent_version,agent_commit=excluded.agent_commit,last_error=excluded.last_error,updated_at=excluded.updated_at`, n.ID, n.Name, n.PublicAddress, boolInt(n.Enabled), n.State, n.Priority, n.QuotaBytes, n.UsedBytes, n.ResetDay, n.ResetTimezone, n.NextResetAt, n.LastHeartbeatAt, boolInt(n.PlaybackHealthy), boolInt(n.IngressHealthy), boolInt(n.ConfigSynced), n.AgentVersion, n.AgentCommit, "", redactFailoverStorageText(n.LastError), n.CreatedAt, n.UpdatedAt)
+		_, err = tx.ExecContext(ctx, `INSERT INTO proxy_nodes (id,name,public_address,enabled,state,priority,quota_bytes,used_bytes,threshold_percent,reset_day,reset_timezone,next_reset_at,last_heartbeat_at,playback_healthy,ingress_healthy,config_synced,agent_version,agent_commit,credential_hash,last_error,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,public_address=excluded.public_address,enabled=excluded.enabled,state=excluded.state,priority=excluded.priority,quota_bytes=excluded.quota_bytes,used_bytes=excluded.used_bytes,threshold_percent=excluded.threshold_percent,reset_day=excluded.reset_day,reset_timezone=excluded.reset_timezone,next_reset_at=excluded.next_reset_at,last_heartbeat_at=excluded.last_heartbeat_at,playback_healthy=excluded.playback_healthy,ingress_healthy=excluded.ingress_healthy,config_synced=excluded.config_synced,agent_version=excluded.agent_version,agent_commit=excluded.agent_commit,last_error=excluded.last_error,updated_at=excluded.updated_at`, n.ID, n.Name, n.PublicAddress, boolInt(n.Enabled), n.State, n.Priority, n.QuotaBytes, n.UsedBytes, n.ThresholdPercent, n.ResetDay, n.ResetTimezone, n.NextResetAt, n.LastHeartbeatAt, boolInt(n.PlaybackHealthy), boolInt(n.IngressHealthy), boolInt(n.ConfigSynced), n.AgentVersion, n.AgentCommit, "", redactFailoverStorageText(n.LastError), n.CreatedAt, n.UpdatedAt)
 		if err != nil {
 			return err
 		}
@@ -787,10 +797,10 @@ func (s *Store) GetProxyNodeForEnrollment(ctx context.Context, enrollmentID stri
 	return &node, nil
 }
 func (s *Store) UpdateProxyNode(ctx context.Context, n ProxyNode) error {
-	if n.ID == "" || !validNodeName(n.Name) || n.QuotaBytes < 0 || n.UsedBytes < 0 || n.ResetDay < 1 || n.ResetDay > 31 {
+	if n.ID == "" || !validNodeName(n.Name) || n.QuotaBytes < 0 || n.UsedBytes < 0 || n.ThresholdPercent <= 0 || n.ThresholdPercent > 100 || n.ResetDay < 1 || n.ResetDay > 31 {
 		return errors.New("invalid_proxy_node")
 	}
-	_, err := s.db.ExecContext(ctx, `UPDATE proxy_nodes SET name=?,public_address=?,enabled=?,state=?,priority=?,quota_bytes=?,used_bytes=?,reset_day=?,reset_timezone=?,next_reset_at=?,playback_healthy=?,ingress_healthy=?,config_synced=?,last_error=?,updated_at=? WHERE id=?`, n.Name, n.PublicAddress, boolInt(n.Enabled), n.State, n.Priority, n.QuotaBytes, n.UsedBytes, n.ResetDay, n.ResetTimezone, n.NextResetAt, boolInt(n.PlaybackHealthy), boolInt(n.IngressHealthy), boolInt(n.ConfigSynced), redactFailoverStorageText(n.LastError), time.Now().Unix(), n.ID)
+	_, err := s.db.ExecContext(ctx, `UPDATE proxy_nodes SET name=?,public_address=?,enabled=?,state=?,priority=?,quota_bytes=?,used_bytes=?,threshold_percent=?,reset_day=?,reset_timezone=?,next_reset_at=?,playback_healthy=?,ingress_healthy=?,config_synced=?,last_error=?,updated_at=? WHERE id=?`, n.Name, n.PublicAddress, boolInt(n.Enabled), n.State, n.Priority, n.QuotaBytes, n.UsedBytes, n.ThresholdPercent, n.ResetDay, n.ResetTimezone, n.NextResetAt, boolInt(n.PlaybackHealthy), boolInt(n.IngressHealthy), boolInt(n.ConfigSynced), redactFailoverStorageText(n.LastError), time.Now().Unix(), n.ID)
 	return err
 }
 

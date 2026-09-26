@@ -33,6 +33,22 @@ func TestSelectSmartExcludesExhaustedAndStale(t *testing.T) {
 	}
 }
 
+func TestSelectExcludesNodeAtConfiguredTrafficThreshold(t *testing.T) {
+	now := time.Now()
+	base := func(id string, priority int) storage.ProxyNode {
+		return storage.ProxyNode{ID: id, Name: id, Priority: priority, Enabled: true, State: "healthy", LastHeartbeatAt: now.Unix(), PlaybackHealthy: true, ConfigSynced: true, IngressHealthy: true, PublicAddress: "https://edge.example.net", QuotaBytes: 1000, ThresholdPercent: 80}
+	}
+	primary, fallback := base("primary", 1), base("fallback", 2)
+	primary.UsedBytes = 799
+	if decision, ok := Select([]storage.ProxyNode{primary, fallback}, "manual", "", now); !ok || decision.NodeID != "primary" {
+		t.Fatalf("below threshold decision=%+v ok=%v", decision, ok)
+	}
+	primary.UsedBytes = 800
+	if decision, ok := Select([]storage.ProxyNode{primary, fallback}, "manual", "", now); !ok || decision.NodeID != "fallback" {
+		t.Fatalf("at threshold decision=%+v ok=%v", decision, ok)
+	}
+}
+
 func TestSelectWithPolicyHysteresisAndImmediateFailover(t *testing.T) {
 	now := time.Unix(1700000000, 0)
 	base := func(id string) storage.ProxyNode {

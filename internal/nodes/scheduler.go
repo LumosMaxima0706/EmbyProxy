@@ -29,7 +29,7 @@ func Eligible(node storage.ProxyNode, now time.Time) bool {
 	return node.Enabled && node.State == "healthy" &&
 		node.LastHeartbeatAt > 0 && now.Sub(time.Unix(node.LastHeartbeatAt, 0)) <= heartbeatFreshness &&
 		node.PlaybackHealthy && node.ConfigSynced && node.IngressHealthy && secureOrigin(node.PublicAddress) &&
-		(node.QuotaBytes == 0 || node.UsedBytes < node.QuotaBytes)
+		(node.QuotaBytes == 0 || float64(node.UsedBytes)*100 < float64(node.QuotaBytes)*thresholdPercent(node))
 }
 
 func secureOrigin(raw string) bool {
@@ -124,11 +124,19 @@ func decisionPriority(values []storage.ProxyNode, id string) int {
 	return int(^uint(0) >> 1)
 }
 
+func thresholdPercent(node storage.ProxyNode) float64 {
+	if node.ThresholdPercent <= 0 || node.ThresholdPercent > 100 {
+		return 100
+	}
+	return node.ThresholdPercent
+}
+
 func quotaScore(node storage.ProxyNode, now time.Time) float64 {
 	if node.QuotaBytes <= 0 {
 		return 0.5
 	}
-	remaining := float64(node.QuotaBytes-node.UsedBytes) / float64(node.QuotaBytes)
+	limit := float64(node.QuotaBytes) * thresholdPercent(node) / 100
+	remaining := (limit - float64(node.UsedBytes)) / limit
 	if remaining < 0 {
 		remaining = 0
 	}

@@ -44,6 +44,39 @@ func TestProxyNodeEnrollmentIsSingleUseAndCredentialScoped(t *testing.T) {
 	}
 }
 
+func TestProxyNodeTrafficThresholdPersistsAndDefaults(t *testing.T) {
+	ctx := context.Background()
+	store, err := New(filepath.Join(t.TempDir(), "proxy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	first, _, err := store.CreateProxyNode(ctx, ProxyNode{Name: "edge-threshold-default", ResetDay: 1}, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	node, err := store.GetProxyNode(ctx, first.NodeID)
+	if err != nil || node.ThresholdPercent != 100 {
+		t.Fatalf("default node=%+v err=%v", node, err)
+	}
+	second, _, err := store.CreateProxyNode(ctx, ProxyNode{Name: "edge-threshold-custom", ThresholdPercent: 82.5, ResetDay: 1}, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	node, err = store.GetProxyNode(ctx, second.NodeID)
+	if err != nil || node.ThresholdPercent != 82.5 {
+		t.Fatalf("custom node=%+v err=%v", node, err)
+	}
+	node.ThresholdPercent = 77
+	if err := store.UpdateProxyNode(ctx, *node); err != nil {
+		t.Fatal(err)
+	}
+	node, err = store.GetProxyNode(ctx, second.NodeID)
+	if err != nil || node.ThresholdPercent != 77 {
+		t.Fatalf("updated node=%+v err=%v", node, err)
+	}
+}
+
 func TestProxyNodeIngressHealthIsIndependentFromPlayback(t *testing.T) {
 	ctx := context.Background()
 	store, err := New(filepath.Join(t.TempDir(), "proxy.db"))
