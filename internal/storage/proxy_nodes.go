@@ -950,6 +950,20 @@ func (s *Store) SetProxyNodeOwnershipBound(ctx context.Context, nodeID, provider
 	return err
 }
 
+// SetProxyNodeRuntimeOwnership updates only resources created on the edge.
+// DNS ownership is controller-managed and must never be mutable by an edge.
+func (s *Store) SetProxyNodeRuntimeOwnership(ctx context.Context, nodeID string, caddyInstalled, caddyConfig, tlsOwned, unitOwned bool) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE proxy_node_ownership SET caddy_installed_by_project=?,caddy_config_owned=?,tls_state_owned=?,edge_unit_owned=? WHERE node_id=?`, boolInt(caddyInstalled), boolInt(caddyConfig), boolInt(tlsOwned), boolInt(unitOwned), nodeID)
+	if err != nil {
+		return err
+	}
+	changed, _ := result.RowsAffected()
+	if changed != 1 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 // SetProxyNodeDNSMetadata records the immutable onboarding intent and current
 // provider state separately from ownership flags.
 func (s *Store) SetProxyNodeDNSMetadata(ctx context.Context, nodeID, fqdn, expectedIP, state, lastError string) error {

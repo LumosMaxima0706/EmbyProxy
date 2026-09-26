@@ -632,6 +632,10 @@ chmod 0700 "$artifact_tmp"
 mv -f "$artifact_tmp" "$bin_dir/embyproxy-edge-agent"
 printf '{"listen_addr":"%%s","probe_addr":"%%s","db_path":"%%s/edge.db","controller":"%%s","node_id":"%%s","credential":"%%s","version":"bootstrap","commit":"%s","decommission_public_key":"%s","caddy_installed_by_project":%s,"caddy_config_owned":%s,"tls_state_owned":%s,"edge_unit_owned":%s,"canary_path":"%%s","allow_private_targets":%%s,"isolated_test_media":%%s}\n' "$edge_listen" "$edge_probe" "$state_dir" "$CONTROLLER" "$node_id" "$credential" "$edge_canary" "$edge_allow_private" "$edge_isolated_media" > "$cfg_dir/edge-agent.json"
 chmod 0600 "$cfg_dir/edge-agent.json"
+runtime_caddy_installed=%s
+runtime_caddy_config=%s
+runtime_tls_state=%s
+runtime_edge_unit=%s
 cat > "$unit_dir/embyproxy-edge.service" <<UNIT
 [Unit]
 Description=EmbyProxy enrolled edge agent
@@ -807,7 +811,35 @@ CADDY
       journalctl -u caddy.service -n 80 --no-pager || true
       exit 1
     fi
+    if [ "$caddy_before_installed" != true ]; then runtime_caddy_installed=true; fi
+    runtime_caddy_config=true
+    runtime_tls_state=true
   fi
+  runtime_edge_unit=true
+  ownership_tmp=$(mktemp "$state_dir/edge-agent.ownership.XXXXXX")
+  sed \
+    -e "s/\"caddy_installed_by_project\":[a-z]*/\"caddy_installed_by_project\":$runtime_caddy_installed/" \
+    -e "s/\"caddy_config_owned\":[a-z]*/\"caddy_config_owned\":$runtime_caddy_config/" \
+    -e "s/\"tls_state_owned\":[a-z]*/\"tls_state_owned\":$runtime_tls_state/" \
+    -e "s/\"edge_unit_owned\":[a-z]*/\"edge_unit_owned\":$runtime_edge_unit/" \
+    "$cfg_dir/edge-agent.json" > "$ownership_tmp"
+  chmod 0600 "$ownership_tmp"
+  mv -f "$ownership_tmp" "$cfg_dir/edge-agent.json"
+  ownership_payload=$(printf '{"caddy_installed_by_project":%%s,"caddy_config_owned":%%s,"tls_state_owned":%%s,"edge_unit_owned":%%s}' "$runtime_caddy_installed" "$runtime_caddy_config" "$runtime_tls_state" "$runtime_edge_unit")
+  ownership_attempt=1
+  ownership_recorded=false
+  while [ "$ownership_attempt" -le 3 ]; do
+    if curl --fail --silent --show-error --proto '%s' --tlsv1.2 \
+      -H 'Content-Type: application/json' \
+      -H "X-EmbyProxy-Node-Credential: $credential" \
+      --data "$ownership_payload" "$CONTROLLER/api/edge/ownership/$node_id" >/dev/null; then
+      ownership_recorded=true
+      break
+    fi
+    sleep 2
+    ownership_attempt=$((ownership_attempt + 1))
+  done
+  [ "$ownership_recorded" = true ] || { echo 'failed to record edge resource ownership' >&2; exit 1; }
   systemctl daemon-reload
   # Older installers emitted a synthetic heartbeat timer that reported false
   # health and could overwrite the agent's real heartbeat. Remove only those
@@ -891,11 +923,18 @@ CADDY
   fi
 fi
 echo 'ADMISSION: PENDING (data-plane playback canary required).'
-	`, controller, persistedEdgePublic, buildinfo.Current().Version, buildinfo.Current().Commit, curlProtocol, url.PathEscape(enrollmentID), url.PathEscape(token), controller, curlProtocol, buildinfo.Current().Commit, decommissionPublicKey, map[bool]string{true: "true", false: "false"}[node.CaddyInstalledByProject], map[bool]string{true: "true", false: "false"}[node.CaddyConfigOwned], map[bool]string{true: "true", false: "false"}[node.TLSStateOwned], map[bool]string{true: "true", false: "false"}[node.EdgeUnitOwned])
+	`, controller, persistedEdgePublic, buildinfo.Current().Version, buildinfo.Current().Commit, curlProtocol, url.PathEscape(enrollmentID), url.PathEscape(token), controller, curlProtocol, buildinfo.Current().Commit, decommissionPublicKey, boolText(node.CaddyInstalledByProject), boolText(node.CaddyConfigOwned), boolText(node.TLSStateOwned), boolText(node.EdgeUnitOwned), boolText(node.CaddyInstalledByProject), boolText(node.CaddyConfigOwned), boolText(node.TLSStateOwned), boolText(node.EdgeUnitOwned), curlProtocol)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(script))
+}
+
+func boolText(value bool) string {
+	if value {
+		return "true"
+	}
+	return "false"
 }
 
 func (h *Handler) handleEdgeEnrollment(w http.ResponseWriter, r *http.Request, path string) {
@@ -958,6 +997,29 @@ func (h *Handler) handleEdgeEnrollment(w http.ResponseWriter, r *http.Request, p
 			return
 		}
 		writeJSON(w, 200, map[string]any{"ok": true})
+		return
+	}
+	if r.Method == http.MethodPost && strings.HasPrefix(path, "/api/edge/ownership/") {
+		id := strings.TrimPrefix(path, "/api/edge/ownership/")
+		credential := strings.TrimSpace(r.Header.Get("X-EmbyProxy-Node-Credential"))
+		if id == "" || credential == "" || !h.store.ValidateProxyNodeCredential(r.Context(), id, credential) {
+			http.NotFound(w, r)
+			return
+		}
+		var body struct {
+			CaddyInstalledByProject bool `json:"caddy_installed_by_project"`
+			CaddyConfigOwned        bool `json:"caddy_config_owned"`
+			TLSStateOwned           bool `json:"tls_state_owned"`
+			EdgeUnitOwned           bool `json:"edge_unit_owned"`
+		}
+		if !decodeAuthJSON(w, r, &body) {
+			return
+		}
+		if err := h.store.SetProxyNodeRuntimeOwnership(r.Context(), id, body.CaddyInstalledByProject, body.CaddyConfigOwned, body.TLSStateOwned, body.EdgeUnitOwned); err != nil {
+			writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "error": "OWNERSHIP_UPDATE_FAILED"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 		return
 	}
 	if strings.HasPrefix(path, "/api/edge/decommission/") {

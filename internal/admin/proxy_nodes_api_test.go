@@ -282,6 +282,11 @@ func TestProxyNodeBootstrapIsNoStoreAndDoesNotExposeAdminSecret(t *testing.T) {
 			t.Fatalf("bootstrap omitted Caddy safety branch %q", required)
 		}
 	}
+	for _, required := range []string{"/api/edge/ownership/$node_id", "X-EmbyProxy-Node-Credential: $credential", "ownership_attempt=1", "failed to record edge resource ownership", "edge-agent.ownership.XXXXXX"} {
+		if !strings.Contains(script, required) {
+			t.Fatalf("bootstrap omitted ownership reconciliation %q", required)
+		}
+	}
 	if strings.Contains(script, "embyproxy-edge-caddy.service") {
 		t.Fatal("bootstrap must not create a competing Caddy service")
 	}
@@ -541,5 +546,52 @@ func TestEdgeArtifactAndSnapshotRequireNodeCredential(t *testing.T) {
 	h.ServeHTTP(snapshotRec, snapshotReq)
 	if snapshotRec.Code != http.StatusOK || !strings.Contains(snapshotRec.Body.String(), `"slug":"demo"`) || strings.Contains(snapshotRec.Body.String(), "strong-admin-token") || strings.Contains(snapshotRec.Body.String(), credential) {
 		t.Fatalf("snapshot response status=%d body=%s", snapshotRec.Code, snapshotRec.Body.String())
+	}
+}
+
+func TestEdgeRuntimeOwnershipRequiresNodeCredentialAndPreservesDNSOwnership(t *testing.T) {
+	h := newAuthTestHandler(t, config.Config{AdminToken: "strong-admin-token"})
+	enrollment, token, err := h.store.CreateProxyNode(context.Background(), storage.ProxyNode{Name: "edge-ownership", ResetDay: 1}, 15*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	node, credential, err := h.store.CompleteEnrollment(context.Background(), enrollment.ID, token, "v1", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.store.SetProxyNodeOwnershipBound(context.Background(), node.ID, "spaceship", "acct", "example.com", "record-1", "A", true, false, false, false, false); err != nil {
+		t.Fatal(err)
+	}
+	path := "/api/edge/ownership/" + node.ID
+	payload := `{"caddy_installed_by_project":true,"caddy_config_owned":true,"tls_state_owned":true,"edge_unit_owned":true}`
+	for _, value := range []string{"", "wrong"} {
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(payload))
+		req.Header.Set("Content-Type", "application/json")
+		if value != "" {
+			req.Header.Set("X-EmbyProxy-Node-Credential", value)
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("credential %q status=%d", value, rec.Code)
+		}
+	}
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-EmbyProxy-Node-Credential", credential)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("ownership update=%d %s", rec.Code, rec.Body.String())
+	}
+	updated, err := h.store.GetProxyNode(context.Background(), node.ID)
+	if err != nil || updated == nil {
+		t.Fatal(err)
+	}
+	if !updated.CaddyInstalledByProject || !updated.CaddyConfigOwned || !updated.TLSStateOwned || !updated.EdgeUnitOwned {
+		t.Fatalf("runtime ownership not recorded: %+v", updated)
+	}
+	if !updated.DNSOwned || updated.DNSRecordID != "record-1" || updated.DNSProvider != "spaceship" {
+		t.Fatalf("DNS ownership changed: %+v", updated)
 	}
 }
