@@ -402,7 +402,7 @@ func TestOwnedDNSDeletionIsRecordScopedAndIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	var deleted []string
-	store.SetProxyNodeDNSDeleter(func(_ context.Context, provider, account, zone, nodeID, id, typ string) error {
+	store.SetProxyNodeDNSDeleter(func(_ context.Context, provider, account, zone, nodeID, id, typ, fqdn, expectedIP string) error {
 		deleted = append(deleted, id+":"+typ)
 		return nil
 	})
@@ -423,6 +423,36 @@ func TestOwnedDNSDeletionIsRecordScopedAndIdempotent(t *testing.T) {
 	}
 	if len(deleted) != 2 || deleted[1] != "record-v6:AAAA" {
 		t.Fatalf("deleted=%v", deleted)
+	}
+}
+
+func TestProxyNodeDNSDeletionFallsBackToOwnedNameAndAddress(t *testing.T) {
+	ctx := context.Background()
+	store, err := New(filepath.Join(t.TempDir(), "proxy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	enrollment, _, err := store.CreateProxyNode(ctx, ProxyNode{Name: "edge-no-record-id", PublicAddress: "https://edge.example.com", ResetDay: 1}, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetProxyNodeOwnershipBound(ctx, enrollment.NodeID, "spaceship", "acct", "example.com", "", "A", true, false, false, false, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetProxyNodeDNSMetadata(ctx, enrollment.NodeID, "edge.example.com", "1.2.3.4", "pending", ""); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	store.SetProxyNodeDNSDeleter(func(_ context.Context, provider, account, zone, nodeID, id, typ, fqdn, expectedIP string) error {
+		called = provider == "spaceship" && account == "acct" && zone == "example.com" && nodeID == enrollment.NodeID && id == "" && typ == "A" && fqdn == "edge.example.com" && expectedIP == "1.2.3.4"
+		return nil
+	})
+	if err := store.DeleteOwnedProxyNodeDNS(ctx, enrollment.NodeID); err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("owned name/address fallback was not used")
 	}
 }
 

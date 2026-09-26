@@ -74,7 +74,7 @@ func TestListUsesPaginationAndPreservesStatus(t *testing.T) {
 	for _, code := range []int{200, 400, 401, 403, 404, 429} {
 		t.Run(fmt.Sprint(code), func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Query().Get("take") != "100" || r.URL.Query().Get("skip") != "0" {
+				if r.URL.Query().Get("take") != "500" || r.URL.Query().Get("skip") != "0" {
 					t.Errorf("query=%s", r.URL.RawQuery)
 				}
 				w.WriteHeader(code)
@@ -100,7 +100,7 @@ func TestListUsesPaginationAndPreservesStatus(t *testing.T) {
 
 func TestListAcceptsSpaceshipItemsResponse(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("take") != "100" || r.URL.Query().Get("skip") != "0" {
+		if r.URL.Query().Get("take") != "500" || r.URL.Query().Get("skip") != "0" {
 			t.Fatalf("query=%s", r.URL.RawQuery)
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -118,5 +118,69 @@ func TestListAcceptsSpaceshipItemsResponse(t *testing.T) {
 	status, detail, err := c.TestStatus(context.Background())
 	if status != http.StatusOK || detail != "" || err != nil {
 		t.Fatalf("test status=%d detail=%q err=%v", status, detail, err)
+	}
+}
+
+func TestDeleteExactUsesScopedPayloadAndPreservesUnrelatedRecords(t *testing.T) {
+	calls := 0
+	remaining := []Record{{Name: "keep", Type: "A", Address: "5.6.7.8", TTL: 300}}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			calls++
+			items := remaining
+			if calls == 1 {
+				items = append([]Record{{Name: "remove", Type: "A", Address: "1.2.3.4", TTL: 300}}, remaining...)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"items": items, "total": len(items)})
+		case http.MethodDelete:
+			var body []map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body) != 1 || len(body[0]) != 3 || body[0]["name"] != "remove" || body[0]["type"] != "A" || body[0]["address"] != "1.2.3.4" {
+				t.Fatalf("delete body=%+v err=%v", body, err)
+			}
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Fatalf("unexpected method %s", r.Method)
+		}
+	}))
+	defer srv.Close()
+	c := &Client{BaseURL: srv.URL, APIKey: "k", APISecret: "s", ManagedDomain: "example.com"}
+	if err := c.DeleteExact(context.Background(), "remove.example.com", "A", "1.2.3.4"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDeleteExactRejectsChangedAddressAndInvalidIdentity(t *testing.T) {
+	deleteCalls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			deleteCalls++
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"items": []Record{{Name: "remove", Type: "A", Address: "9.9.9.9", TTL: 300}}, "total": 1})
+	}))
+	defer srv.Close()
+	c := &Client{BaseURL: srv.URL, APIKey: "k", APISecret: "s", ManagedDomain: "example.com"}
+	if err := c.DeleteExact(context.Background(), "remove.example.com", "A", "1.2.3.4"); err == nil {
+		t.Fatal("changed address accepted")
+	}
+	if err := c.DeleteExact(context.Background(), "remove.example.com", "A", "not-an-ip"); err == nil {
+		t.Fatal("invalid address accepted")
+	}
+	if err := c.DeleteExact(context.Background(), "outside.test", "A", "1.2.3.4"); err == nil {
+		t.Fatal("outside domain accepted")
+	}
+	if deleteCalls != 0 {
+		t.Fatalf("delete calls=%d", deleteCalls)
+	}
+}
+
+func TestListRejectsIncompleteSpaceshipPage(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"items":[{"name":"one","type":"A","address":"1.2.3.4"}],"total":501}`))
+	}))
+	defer srv.Close()
+	c := &Client{BaseURL: srv.URL, APIKey: "k", APISecret: "s", ManagedDomain: "example.com"}
+	if _, err := c.List(context.Background(), "example.com"); err == nil {
+		t.Fatal("incomplete provider page accepted")
 	}
 }

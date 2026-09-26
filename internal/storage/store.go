@@ -31,7 +31,7 @@ type Store struct {
 	playbackQueue       chan PlaybackInput
 	playbackWG          sync.WaitGroup
 	playbackDropped     uint64
-	proxyNodeDNSDeleter func(context.Context, string, string, string, string, string, string) error
+	proxyNodeDNSDeleter func(context.Context, string, string, string, string, string, string, string, string) error
 	decommissionMu      sync.Mutex
 	decommissionJobs    map[string]edgecontrol.Job
 }
@@ -39,7 +39,7 @@ type Store struct {
 // SetProxyNodeDNSDeleter injects the record-scoped provider transport used by
 // lifecycle jobs. The callback receives only an immutable provider record ID
 // and record type; hostname-based deletion is intentionally impossible.
-func (s *Store) SetProxyNodeDNSDeleter(fn func(context.Context, string, string, string, string, string, string) error) {
+func (s *Store) SetProxyNodeDNSDeleter(fn func(context.Context, string, string, string, string, string, string, string, string) error) {
 	s.proxyNodeDNSDeleter = fn
 }
 

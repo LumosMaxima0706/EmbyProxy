@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
 	_ "embed"
 	"encoding/json"
 	"errors"
@@ -132,6 +133,18 @@ func (h *Handler) SetLifecycleDNSProvider(provider interface {
 	DeleteRecord(context.Context, string) error
 }) {
 	h.lifecycleDNS = provider
+}
+
+func (h *Handler) DeleteManagedProxyNodeDNS(ctx context.Context, account, zone, fqdn, recordType, expectedIP string) error {
+	if h.dnsAutomation == nil || strings.TrimSpace(account) == "" {
+		return errors.New("dns_provider_unavailable")
+	}
+	sum := sha256.Sum256([]byte(h.dnsAutomation.APIKey))
+	wantAccount := fmt.Sprintf("sha256:%x", sum[:8])
+	if account != wantAccount || !strings.EqualFold(strings.TrimSuffix(zone, "."), strings.TrimSuffix(h.dnsAutomation.ManagedDomain, ".")) {
+		return errors.New("dns_ownership_unverified")
+	}
+	return h.dnsAutomation.DeleteExact(ctx, fqdn, recordType, expectedIP)
 }
 
 func New(cfg config.Config, store *storage.Store, checker *auth.Checker, tg *telegram.Service, log *logging.Logger, reset ResetFunc, imageCaches ...ImageCacheManager) *Handler {

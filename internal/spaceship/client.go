@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 )
@@ -30,10 +31,16 @@ type Record struct {
 type recordsResponse struct {
 	Records []Record `json:"records"`
 	Items   []Record `json:"items"`
+	Total   int      `json:"total"`
 }
 type recordsWriteRequest struct {
 	Force bool     `json:"force"`
 	Items []Record `json:"items"`
+}
+type recordDeleteRequest struct {
+	Type    string `json:"type"`
+	Name    string `json:"name"`
+	Address string `json:"address"`
 }
 type HTTPError struct {
 	Status int
@@ -111,7 +118,7 @@ func (c *Client) do(ctx context.Context, method, domain string, body any, out an
 	}
 	if method == http.MethodGet {
 		q := req.URL.Query()
-		q.Set("take", "100")
+		q.Set("take", "500")
 		q.Set("skip", "0")
 		req.URL.RawQuery = q.Encode()
 	}
@@ -149,6 +156,9 @@ func (c *Client) List(ctx context.Context, domain string) ([]Record, error) {
 		return wrapped.Records, nil
 	}
 	if json.Unmarshal(raw, &wrapped) == nil && wrapped.Items != nil {
+		if wrapped.Total > len(wrapped.Items) {
+			return nil, errors.New("spaceship_records_page_incomplete")
+		}
 		return wrapped.Items, nil
 	}
 	var list []Record
@@ -252,4 +262,80 @@ func (c *Client) EnsureA(ctx context.Context, prefix string, ip netip.Addr, ttl 
 }
 func (c *Client) putRecords(ctx context.Context, domain string, records []Record) error {
 	return c.do(ctx, http.MethodPut, domain, recordsWriteRequest{Force: true, Items: records}, nil)
+}
+
+// DeleteExact removes one verified managed record. Spaceship list responses do
+// not always include record IDs, so deletion uses its exact name/type/address
+// API and verifies that no unrelated record changed.
+func (c *Client) DeleteExact(ctx context.Context, fqdn, recordType, address string) error {
+	managed := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(c.ManagedDomain)), ".")
+	fqdn = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(fqdn)), ".")
+	if managed == "" || fqdn == managed || !strings.HasSuffix(fqdn, "."+managed) {
+		return errors.New("managed_record_not_allowed")
+	}
+	addr, parseErr := netip.ParseAddr(address)
+	if recordType != "A" || parseErr != nil || !addr.Is4() {
+		return errors.New("managed_record_identity_invalid")
+	}
+	name := strings.TrimSuffix(fqdn, "."+managed)
+	before, err := c.List(ctx, managed)
+	if err != nil {
+		return err
+	}
+	matches := make([]Record, 0, 1)
+	unrelated := make([]Record, 0, len(before))
+	for _, record := range before {
+		recordName := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(record.Name)), ".")
+		if (recordName == name || recordName == fqdn) && record.Type == recordType {
+			matches = append(matches, record)
+		} else {
+			unrelated = append(unrelated, record)
+		}
+	}
+	if len(matches) != 1 {
+		return errors.New("managed_record_match_not_unique")
+	}
+	if matches[0].Address != address {
+		return errors.New("managed_record_address_changed")
+	}
+	payload := []recordDeleteRequest{{Name: name, Type: recordType, Address: address}}
+	if err := c.do(ctx, http.MethodDelete, managed, payload, nil); err != nil {
+		return err
+	}
+	after, err := c.List(ctx, managed)
+	if err != nil {
+		return err
+	}
+	for _, record := range after {
+		recordName := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(record.Name)), ".")
+		if (recordName == name || recordName == fqdn) && record.Type == recordType {
+			return errors.New("managed_record_delete_not_verified")
+		}
+	}
+	if !recordsEqual(unrelated, after) {
+		return errors.New("managed_record_unrelated_changed")
+	}
+	return nil
+}
+
+func recordsEqual(a, b []Record) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	encode := func(values []Record) []string {
+		result := make([]string, 0, len(values))
+		for _, value := range values {
+			raw, _ := json.Marshal(value)
+			result = append(result, string(raw))
+		}
+		sort.Strings(result)
+		return result
+	}
+	aa, bb := encode(a), encode(b)
+	for i := range aa {
+		if aa[i] != bb[i] {
+			return false
+		}
+	}
+	return true
 }

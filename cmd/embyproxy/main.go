@@ -204,9 +204,12 @@ func main() {
 	if cfg.FailoverDNSProviderMode == string(failover.DNSProviderModeReal) || cfg.FailoverDNSProviderMode == string(failover.DNSProviderModeExternal) {
 		adminHandler.SetLifecycleDNSProvider(failover.SpaceshipRecordDeleter{AdapterPath: cfg.SpaceshipDNSAdapterPath})
 	}
-	store.SetProxyNodeDNSDeleter(func(ctx context.Context, provider, account, zone, nodeID, recordID, recordType string) error {
+	store.SetProxyNodeDNSDeleter(func(ctx context.Context, provider, account, zone, nodeID, recordID, recordType, fqdn, expectedIP string) error {
 		if provider != "spaceship" || account == "" || zone == "" || nodeID == "" {
 			return errors.New("dns_ownership_unverified")
+		}
+		if fqdn != "" && expectedIP != "" {
+			return adminHandler.DeleteManagedProxyNodeDNS(ctx, account, zone, fqdn, recordType, expectedIP)
 		}
 		if cfg.FailoverDNSProviderMode == string(failover.DNSProviderModeReal) || cfg.FailoverDNSProviderMode == string(failover.DNSProviderModeExternal) {
 			return failover.SpaceshipRecordDeleter{AdapterPath: cfg.SpaceshipDNSAdapterPath}.DeleteOwnedRecord(ctx, provider, account, zone, nodeID, recordID, recordType)

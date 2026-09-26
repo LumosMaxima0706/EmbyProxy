@@ -982,10 +982,10 @@ func (s *Store) SetProxyNodeRemoteCleanupPending(ctx context.Context, id string,
 }
 
 func (s *Store) DeleteOwnedProxyNodeDNS(ctx context.Context, nodeID string) error {
-	var provider, account, zone, recordID, recordType string
+	var provider, account, zone, recordID, recordType, fqdn, expectedIP string
 	var owned int
-	err := s.db.QueryRowContext(ctx, `SELECT dns_provider,dns_account,dns_zone,dns_record_id,dns_record_type,dns_owned FROM proxy_node_ownership WHERE node_id=?`, nodeID).Scan(&provider, &account, &zone, &recordID, &recordType, &owned)
-	if errors.Is(err, sql.ErrNoRows) || owned == 0 || strings.TrimSpace(recordID) == "" {
+	err := s.db.QueryRowContext(ctx, `SELECT dns_provider,dns_account,dns_zone,dns_record_id,dns_record_type,dns_owned,dns_fqdn,dns_expected_ip FROM proxy_node_ownership WHERE node_id=?`, nodeID).Scan(&provider, &account, &zone, &recordID, &recordType, &owned, &fqdn, &expectedIP)
+	if errors.Is(err, sql.ErrNoRows) || owned == 0 {
 		return nil
 	}
 	if err != nil {
@@ -1000,7 +1000,10 @@ func (s *Store) DeleteOwnedProxyNodeDNS(ctx context.Context, nodeID string) erro
 	if s.proxyNodeDNSDeleter == nil {
 		return errors.New("dns_provider_unavailable")
 	}
-	return s.proxyNodeDNSDeleter(ctx, provider, account, zone, nodeID, recordID, recordType)
+	if strings.TrimSpace(recordID) == "" && (strings.TrimSpace(fqdn) == "" || strings.TrimSpace(expectedIP) == "") {
+		return errors.New("dns_record_identity_missing")
+	}
+	return s.proxyNodeDNSDeleter(ctx, provider, account, zone, nodeID, recordID, recordType, fqdn, expectedIP)
 }
 
 func (s *Store) RevokeProxyNode(ctx context.Context, id string, force bool) error {
