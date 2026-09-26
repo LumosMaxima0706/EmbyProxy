@@ -310,6 +310,15 @@ func (h *Handler) handleProxyNodesAPI(w http.ResponseWriter, r *http.Request, pa
 			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "job": job})
 			return
 		}
+		if r.Method == http.MethodPost && len(parts) == 2 && parts[1] == "reset-usage" {
+			if err := h.store.ResetProxyNodeUsage(ctx, id, time.Now()); err != nil {
+				writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "error": "USAGE_RESET_FAILED"})
+				return
+			}
+			node, _ := h.store.GetProxyNode(ctx, id)
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "node": node})
+			return
+		}
 		if r.Method == http.MethodPost && len(parts) == 2 && parts[1] == "bootstrap" {
 			controllerURL, err := config.NormalizeEnrollmentControllerURL(h.cfg.EnrollmentControllerURL, false)
 			if err != nil {
@@ -334,6 +343,9 @@ func (h *Handler) handleProxyNodesAPI(w http.ResponseWriter, r *http.Request, pa
 			if !decodeAuthJSON(w, r, &body) {
 				return
 			}
+			oldResetDay, oldResetTimezone := n.ResetDay, n.ResetTimezone
+			explicitNextResetValue, explicitNextReset := body["next_reset_at"].(float64)
+			explicitNextReset = explicitNextReset && explicitNextResetValue >= 0
 			if v, ok := body["enabled"].(bool); ok {
 				if err := h.store.SetProxyNodeScheduling(ctx, id, v); err != nil {
 					writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "error": "REVOKED_NODE_REQUIRES_REENROLLMENT"})
@@ -371,6 +383,14 @@ func (h *Handler) handleProxyNodesAPI(w http.ResponseWriter, r *http.Request, pa
 			}
 			if v, ok := body["next_reset_at"].(float64); ok && v >= 0 {
 				n.NextResetAt = int64(v)
+			}
+			if !explicitNextReset && (n.ResetDay != oldResetDay || n.ResetTimezone != oldResetTimezone) {
+				next, nextErr := storage.NextMonthlyReset(time.Now(), n.ResetDay, n.ResetTimezone)
+				if nextErr != nil {
+					writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "INVALID_RESET_SCHEDULE"})
+					return
+				}
+				n.NextResetAt = next.Unix()
 			}
 			if err := h.store.UpdateProxyNode(ctx, *n); err != nil {
 				writeJSON(w, 400, map[string]any{"ok": false, "error": "INVALID_NODE"})

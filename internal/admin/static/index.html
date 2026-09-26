@@ -732,6 +732,20 @@ tr:last-child td{border-bottom:0}
   </div>
 </div>
 
+<div class="sheet-layer" id="proxyQuotaModal" style="display:none" onclick="if(event.target===this)closeProxyQuotaModal()">
+  <div class="sheet">
+    <div class="sheet-head"><div><h2>流量与重置</h2><p id="proxyQuotaNodeName"></p></div><button class="sheet-close" onclick="closeProxyQuotaModal()">×</button></div>
+    <form id="proxyQuotaForm" class="form-grid" onsubmit="saveProxyQuota(event)">
+      <div class="form-group"><label for="proxyQuotaGB">月配额 (GB)</label><input id="proxyQuotaGB" type="number" min="0" step="0.001" required><small class="form-hint">0 表示不限</small></div>
+      <div class="form-group"><label for="proxyUsedGB">已用流量校准 (GB)</label><input id="proxyUsedGB" type="number" min="0" step="0.001" required></div>
+      <div class="form-group"><label for="proxyResetDay">每月重置日</label><input id="proxyResetDay" type="number" min="1" max="31" required></div>
+      <div class="form-group"><label for="proxyResetTimezone">重置时区</label><input id="proxyResetTimezone" list="proxyTimezoneOptions" required><datalist id="proxyTimezoneOptions"><option value="Asia/Shanghai"><option value="UTC"><option value="America/Los_Angeles"></datalist></div>
+      <div class="form-group form-full"><small class="form-hint" id="proxyNextReset"></small></div>
+      <div class="form-actions form-full"><button type="button" class="btn btn-danger" onclick="resetProxyUsage()">立即重置流量</button><button type="button" class="btn" onclick="closeProxyQuotaModal()">取消</button><button type="submit" class="primary-action">保存</button></div>
+    </form>
+  </div>
+</div>
+
 <div class="sheet-layer" id="decommissionModal" style="display:none" onclick="if(event.target===this)closeDecommissionModal()">
   <div class="sheet decommission-sheet">
     <div class="sheet-head"><div><h2>彻底移除节点</h2><p id="decommissionIntro">这会撤销身份并清理控制面资源。远端离线时会保留短期 cleanup command。</p></div><button class="sheet-close" onclick="closeDecommissionModal()">×</button></div>
@@ -1775,7 +1789,7 @@ function renderProxyNodeTable() {
     const primary = n.state==='healthy' && n.enabled && Number(n.priority||0)===1 ? '<span class="node-tag">当前活跃</span>' : (n.state==='healthy' && n.enabled ? `<button class="btn btn-sm btn-primary" onclick="switchProxyNode('${attr(n.id)}')">切换到此节点</button>` : (n.state==='disabled' ? `<button class="btn btn-sm btn-primary" onclick="toggleProxyNode('${attr(n.id)}',true)">启用</button>` : (n.state==='revoked' ? '<span class="chip err">需重新接入</span>' : '')));
     const remoteCleanupReady = n.decommission_capable || !n.last_heartbeat_at || (Date.now()/1000 - Number(n.last_heartbeat_at)) > 300;
     const removeLabel = remoteCleanupReady ? '彻底移除' : '从控制面移除（远端不支持）';
-    const menu = `<div class="proxy-action-menu"><button class="btn btn-sm proxy-more" aria-label="更多操作" onclick="toggleProxyMenu('${attr(n.id)}',event)">⋯</button><div class="proxy-menu" id="proxy-menu-${attr(n.id)}" hidden>${n.state!=='removed'?`<button onclick="viewProxyNodeDetails('${attr(n.id)}')">详情</button>`:''}${n.state!=='revoked'&&n.state!=='removed'?`<button onclick="drainProxyNode('${attr(n.id)}')">排空现有连接</button>`:''}${n.state!=='revoked'&&n.state!=='removed'?`<button onclick="toggleProxyNode('${attr(n.id)}',${!n.enabled})">${n.enabled?'禁用调度':'启用调度'}</button>`:''}<button onclick="regenerateProxyBootstrap('${attr(n.id)}')">重新接入/重装</button>${n.state!=='revoked'&&n.state!=='removed'?`<button onclick="revokeProxyIdentity('${attr(n.id)}')">撤销身份</button>`:''}<button onclick="openDecommissionModal('${attr(n.id)}')">${removeLabel}</button></div></div>`;
+    const menu = `<div class="proxy-action-menu"><button class="btn btn-sm proxy-more" aria-label="更多操作" onclick="toggleProxyMenu('${attr(n.id)}',event)">⋯</button><div class="proxy-menu" id="proxy-menu-${attr(n.id)}" hidden>${n.state!=='removed'?`<button onclick="viewProxyNodeDetails('${attr(n.id)}')">详情</button>`:''}${n.state!=='revoked'&&n.state!=='removed'?`<button onclick="openProxyQuotaModal('${attr(n.id)}')">流量与重置</button><button onclick="drainProxyNode('${attr(n.id)}')">排空现有连接</button>`:''}${n.state!=='revoked'&&n.state!=='removed'?`<button onclick="toggleProxyNode('${attr(n.id)}',${!n.enabled})">${n.enabled?'禁用调度':'启用调度'}</button>`:''}<button onclick="regenerateProxyBootstrap('${attr(n.id)}')">重新接入/重装</button>${n.state!=='revoked'&&n.state!=='removed'?`<button onclick="revokeProxyIdentity('${attr(n.id)}')">撤销身份</button>`:''}<button onclick="openDecommissionModal('${attr(n.id)}')">${removeLabel}</button></div></div>`;
     return `<tr><td><strong>${esc(n.name)}</strong><small class="muted">${esc(n.public_address || '未配置 HTTPS origin')}</small><small class="muted">最近心跳：${n.last_heartbeat_at ? new Date(Number(n.last_heartbeat_at)*1000).toLocaleString() : '暂无'}</small></td><td><span class="chip ${health === 'healthy' ? 'ok' : (n.state==='revoked'?'err':'warn')}">${esc(n.state || 'unknown')}</span></td><td>${chip(n.playback_healthy, n.playback_healthy)}</td><td>${chip(n.ingress_healthy, n.ingress_healthy)}</td><td>${chip(n.enabled && health === 'healthy', n.enabled && health === 'healthy')}</td><td>${remaining === null ? '未设置' : `${formatBytes(n.used_bytes)} / ${formatBytes(n.quota_bytes)}`}</td><td>${Number(n.priority || i + 1)}</td><td><div class="action-pack" style="justify-content:flex-start">${primary}${menu}</div></td></tr>`;
   }).join('') : '<tr><td colspan="8" class="table-empty">当前筛选暂无节点</td></tr>';
 }
@@ -1807,6 +1821,34 @@ async function submitProxyNode(event) {
   if (!r.ok) { const error = document.getElementById('proxyNodeAddressError'); error.textContent = r.error || '创建 enrollment 失败'; error.style.display='block'; toast(r.error || '创建 enrollment 失败','err'); return; }
   closeProxyNodeModal();
   const output = document.getElementById('proxyEnrollmentOutput'); output.hidden = false; output.textContent = `一次性安装命令（15 分钟内有效）\n${r.install_command}`; document.getElementById('proxyEnrollmentCopy').hidden = false; await loadProxyNodes(); toast('节点已创建，请执行安装命令', 'ok');
+}
+let proxyQuotaNodeId = '';
+function openProxyQuotaModal(id) {
+  const node=(window.proxyNodes||[]).find(n=>n.id===id); if(!node) return;
+  proxyQuotaNodeId=id;
+  document.getElementById('proxyQuotaNodeName').textContent=node.name;
+  document.getElementById('proxyQuotaGB').value=(Number(node.quota_bytes||0)/1e9).toFixed(3);
+  document.getElementById('proxyUsedGB').value=(Number(node.used_bytes||0)/1e9).toFixed(3);
+  document.getElementById('proxyResetDay').value=Number(node.reset_day||1);
+  document.getElementById('proxyResetTimezone').value=node.reset_timezone||'Asia/Shanghai';
+  document.getElementById('proxyNextReset').textContent=node.next_reset_at ? `下次重置：${new Date(Number(node.next_reset_at)*1000).toLocaleString()}` : '下次重置时间将在保存后计算';
+  showModal('proxyQuotaModal');
+}
+function closeProxyQuotaModal(){ hideModal('proxyQuotaModal'); proxyQuotaNodeId=''; }
+async function saveProxyQuota(event) {
+  event.preventDefault(); const form=event.currentTarget; if(!form.reportValidity()||!proxyQuotaNodeId) return;
+  const body={quota_bytes:Math.round(Number(document.getElementById('proxyQuotaGB').value||0)*1e9),used_bytes:Math.round(Number(document.getElementById('proxyUsedGB').value||0)*1e9),reset_day:Number(document.getElementById('proxyResetDay').value),reset_timezone:document.getElementById('proxyResetTimezone').value.trim()};
+  const r=await authFetch('/api/admin/proxy-nodes/'+encodeURIComponent(proxyQuotaNodeId),{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  if(!r.ok){toast('保存流量配置失败: '+authErrorMessage(r.error),'err');return;}
+  closeProxyQuotaModal(); await loadProxyNodes(); toast('流量配置已保存','ok');
+}
+async function resetProxyUsage() {
+  if(!proxyQuotaNodeId||!window.confirm('确认将该节点本周期已用流量重置为 0？')) return;
+  const r=await authFetch('/api/admin/proxy-nodes/'+encodeURIComponent(proxyQuotaNodeId)+'/reset-usage',{method:'POST'});
+  if(!r.ok){toast('重置流量失败: '+authErrorMessage(r.error),'err');return;}
+  document.getElementById('proxyUsedGB').value='0.000';
+  document.getElementById('proxyNextReset').textContent=r.node?.next_reset_at ? `下次重置：${new Date(Number(r.node.next_reset_at)*1000).toLocaleString()}` : '';
+  await loadProxyNodes(); toast('本周期流量已重置','ok');
 }
 async function toggleProxyNode(id, enabled) { const r = await authFetch('/api/admin/proxy-nodes/'+encodeURIComponent(id), {method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled})}); if (!r.ok) toast(enabled?'启用节点失败':'禁用调度失败','err'); else toast(enabled?'节点已重新进入接纳流程':'节点已停止接纳新流量','ok'); await loadProxyNodes(); }
 async function drainProxyNode(id) { if (!window.confirm('确认排空该节点？现有 session 会自然结束，节点身份不会被撤销。')) return; const r=await authFetch('/api/admin/proxy-nodes/'+encodeURIComponent(id)+'/drain',{method:'POST'}); if(!r.ok) toast('排空节点失败','err'); else toast('节点已排空','ok'); await loadProxyNodes(); }

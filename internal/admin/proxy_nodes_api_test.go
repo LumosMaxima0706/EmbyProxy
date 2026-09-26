@@ -500,6 +500,50 @@ func TestBootstrapAllowsCleanHostToChooseHTTPSIngressAtInstallTime(t *testing.T)
 	}
 }
 
+func TestProxyNodeQuotaSchedulePatchAndManualReset(t *testing.T) {
+	h := newAuthTestHandler(t, config.Config{AdminToken: "strong-admin-token", EnrollmentControllerURL: "https://owner-admin.149077530.xyz"})
+	login := serveAdminJSON(t, h, http.MethodPost, "/admin/auth/login", map[string]any{"token": "strong-admin-token"}, nil)
+	cookie := login.Result().Cookies()[0]
+	created := serveAdminJSON(t, h, http.MethodPost, "/api/admin/proxy-nodes", map[string]any{"name": "edge-quota", "public_address": "https://edge-quota.example.net", "quota_bytes": 1000, "reset_day": 1, "reset_timezone": "UTC"}, cookie)
+	var body map[string]any
+	if err := json.Unmarshal(created.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	id := body["enrollment"].(map[string]any)["node_id"].(string)
+	before, err := h.store.GetProxyNode(context.Background(), id)
+	if err != nil || before == nil {
+		t.Fatal(err)
+	}
+	invalid := serveAdminJSON(t, h, http.MethodPatch, "/api/admin/proxy-nodes/"+id, map[string]any{"reset_timezone": "Not/AZone", "next_reset_at": "invalid"}, cookie)
+	if invalid.Code != http.StatusBadRequest || !strings.Contains(invalid.Body.String(), "INVALID_RESET_SCHEDULE") {
+		t.Fatalf("invalid schedule=%d %s", invalid.Code, invalid.Body.String())
+	}
+	patched := serveAdminJSON(t, h, http.MethodPatch, "/api/admin/proxy-nodes/"+id, map[string]any{"quota_bytes": 2000, "used_bytes": 900, "reset_day": 31, "reset_timezone": "Asia/Shanghai"}, cookie)
+	if patched.Code != http.StatusOK {
+		t.Fatalf("patch=%d %s", patched.Code, patched.Body.String())
+	}
+	node, err := h.store.GetProxyNode(context.Background(), id)
+	if err != nil || node.QuotaBytes != 2000 || node.UsedBytes != 900 || node.ResetDay != 31 || node.ResetTimezone != "Asia/Shanghai" || node.NextResetAt == before.NextResetAt || node.NextResetAt <= time.Now().Unix() {
+		t.Fatalf("patched node=%+v before=%+v err=%v", node, before, err)
+	}
+	reset := serveAdminJSON(t, h, http.MethodPost, "/api/admin/proxy-nodes/"+id+"/reset-usage", nil, cookie)
+	if reset.Code != http.StatusOK {
+		t.Fatalf("reset=%d %s", reset.Code, reset.Body.String())
+	}
+	node, err = h.store.GetProxyNode(context.Background(), id)
+	if err != nil || node.UsedBytes != 0 || node.NextResetAt <= time.Now().Unix() {
+		t.Fatalf("reset node=%+v err=%v", node, err)
+	}
+}
+
+func TestProxyNodeQuotaControlsRemainInAdminUI(t *testing.T) {
+	for _, required := range []string{"proxyQuotaModal", "openProxyQuotaModal", "saveProxyQuota", "resetProxyUsage", "/reset-usage", "已用流量校准", "重置时区"} {
+		if !strings.Contains(indexHTML, required) {
+			t.Fatalf("admin UI missing quota control %q", required)
+		}
+	}
+}
+
 func TestEdgeArtifactAndSnapshotRequireNodeCredential(t *testing.T) {
 	artifact := filepath.Join(t.TempDir(), "edge-agent")
 	payload := []byte("edge-agent-test-artifact")
