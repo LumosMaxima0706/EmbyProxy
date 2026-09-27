@@ -94,6 +94,7 @@ type Handler struct {
 		DeleteRecord(context.Context, string) error
 	}
 	dnsAutomation *spaceship.Client
+	publicIngress *publicIngressSwitcher
 }
 
 // readExternalFailoverState reads the policy runner's state file without
@@ -174,6 +175,9 @@ func New(cfg config.Config, store *storage.Store, checker *auth.Checker, tg *tel
 			}
 		}
 	}
+	if store != nil && h.dnsAutomation != nil && cfg.PublicIngressEnabled {
+		h.publicIngress = newPublicIngressSwitcher(h)
+	}
 	if store != nil {
 		if key, err := store.ControllerDecommissionKey(context.Background()); err == nil {
 			h.decommissionKey = key
@@ -224,6 +228,31 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if path == "/api/admin/managed-routes" || strings.HasPrefix(path, "/api/admin/managed-routes/") {
 		h.handleManagedRoutesAPI(w, r, path)
+		return
+	}
+	if path == "/api/admin/public-ingress/status" {
+		if h.publicIngress == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "error": "PUBLIC_INGRESS_UNAVAILABLE"})
+			return
+		}
+		writePublicIngressState(w, http.StatusOK, h.publicIngress.status(r.Context()), nil)
+		return
+	}
+	if path == "/api/admin/public-ingress/switch" && r.Method == http.MethodPost {
+		if h.publicIngress == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "error": "PUBLIC_INGRESS_UNAVAILABLE"})
+			return
+		}
+		nodeID, mode, ok := decodePublicIngressRequest(w, r)
+		if !ok {
+			return
+		}
+		state, err := h.publicIngress.switchTo(r.Context(), nodeID, "admin_manual", mode)
+		if err != nil {
+			writePublicIngressState(w, http.StatusBadGateway, state, err)
+			return
+		}
+		writePublicIngressState(w, http.StatusOK, state, nil)
 		return
 	}
 	if path == "/api/admin/proxy-nodes" || strings.HasPrefix(path, "/api/admin/proxy-nodes/") {

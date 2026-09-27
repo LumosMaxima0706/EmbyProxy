@@ -42,7 +42,7 @@ func TestProxyNodesUIUsesSingleFormAndHealthGatedSwitch(t *testing.T) {
 		"n.playback_healthy",
 		"n.ingress_healthy",
 		"n.last_heartbeat_at",
-		"/api/admin/proxy-nodes/reorder",
+		"/api/admin/public-ingress/switch",
 		"function copyProxyEnrollmentCommand()",
 		"复制安装命令",
 		"id=\"proxyNodeFilter\"",

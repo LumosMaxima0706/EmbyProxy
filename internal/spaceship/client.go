@@ -264,6 +264,64 @@ func (c *Client) putRecords(ctx context.Context, domain string, records []Record
 	return c.do(ctx, http.MethodPut, domain, recordsWriteRequest{Force: true, Items: records}, nil)
 }
 
+// ExactRecord returns exactly one managed DNS record. Both relative and FQDN
+// names are accepted from the provider, but ambiguous duplicates fail closed.
+func (c *Client) ExactRecord(ctx context.Context, fqdn, recordType string) (Record, error) {
+	managed := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(c.ManagedDomain)), ".")
+	fqdn = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(fqdn)), ".")
+	if managed == "" || fqdn == managed || !strings.HasSuffix(fqdn, "."+managed) {
+		return Record{}, errors.New("managed_record_not_allowed")
+	}
+	name := strings.TrimSuffix(fqdn, "."+managed)
+	records, err := c.List(ctx, managed)
+	if err != nil {
+		return Record{}, err
+	}
+	var matches []Record
+	for _, record := range records {
+		recordName := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(record.Name)), ".")
+		if (recordName == name || recordName == fqdn) && strings.EqualFold(record.Type, recordType) {
+			matches = append(matches, record)
+		}
+	}
+	if len(matches) != 1 {
+		return Record{}, errors.New("managed_record_match_not_unique")
+	}
+	return matches[0], nil
+}
+
+// ReplaceExactA updates one existing A record and verifies the provider
+// readback. It never creates a new name and never mutates unrelated records.
+func (c *Client) ReplaceExactA(ctx context.Context, fqdn, expectedPrevious, address string, ttl int) (Record, error) {
+	addr, err := netip.ParseAddr(strings.TrimSpace(address))
+	if err != nil || !addr.Is4() {
+		return Record{}, errors.New("invalid_ipv4")
+	}
+	if ttl < 30 || ttl > 86400 {
+		return Record{}, errors.New("invalid_dns_ttl")
+	}
+	before, err := c.ExactRecord(ctx, fqdn, "A")
+	if err != nil {
+		return Record{}, err
+	}
+	if expectedPrevious != "" && before.Address != expectedPrevious {
+		return Record{}, errors.New("managed_record_compare_and_swap_failed")
+	}
+	managed := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(c.ManagedDomain)), ".")
+	name := strings.TrimSuffix(strings.TrimSuffix(strings.ToLower(strings.TrimSpace(fqdn)), "."), "."+managed)
+	if err := c.putRecords(ctx, managed, []Record{{Name: name, Type: "A", Address: addr.String(), TTL: ttl}}); err != nil {
+		return Record{}, err
+	}
+	after, err := c.ExactRecord(ctx, fqdn, "A")
+	if err != nil {
+		return Record{}, err
+	}
+	if after.Address != addr.String() || after.TTL != ttl {
+		return Record{}, errors.New("managed_record_update_not_verified")
+	}
+	return after, nil
+}
+
 // DeleteExact removes one verified managed record. Spaceship list responses do
 // not always include record IDs, so deletion uses its exact name/type/address
 // API and verifies that no unrelated record changed.

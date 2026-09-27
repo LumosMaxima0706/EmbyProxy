@@ -64,6 +64,8 @@ type Config struct {
 	SpaceshipManagedDomain    string
 	SpaceshipDefaultTTL       int
 	FailoverStateFile         string
+	PublicIngressEnabled      bool
+	PublicIngressHost         string
 	Defaults                  Defaults
 }
 
@@ -236,6 +238,8 @@ func Load() (Config, error) {
 		SpaceshipManagedDomain:          strings.TrimSuffix(strings.ToLower(strings.TrimSpace(os.Getenv("SPACESHIP_MANAGED_DOMAIN"))), "."),
 		SpaceshipDefaultTTL:             300,
 		FailoverStateFile:               envString("FAILOVER_STATE_FILE", "/var/lib/embyproxy-gsy-sidecar/failover-state.json"),
+		PublicIngressEnabled:            envBool("PUBLIC_INGRESS_SWITCH_ENABLED", false),
+		PublicIngressHost:               strings.TrimSuffix(strings.ToLower(strings.TrimSpace(envString("PUBLIC_INGRESS_HOST", "stream.149077530.xyz"))), "."),
 		Defaults: Defaults{
 			CacheTTL:           10000,
 			ListCacheTTL:       180000,
@@ -245,6 +249,9 @@ func Load() (Config, error) {
 			StaticCacheTTL:     604800,
 			ProgressThrottleMS: 1200,
 		},
+	}
+	if cfg.PublicIngressEnabled && (cfg.PublicIngressHost == "" || cfg.SpaceshipManagedDomain == "" || (cfg.PublicIngressHost != cfg.SpaceshipManagedDomain && !strings.HasSuffix(cfg.PublicIngressHost, "."+cfg.SpaceshipManagedDomain))) {
+		return Config{}, fmt.Errorf("PUBLIC_INGRESS_HOST must belong to SPACESHIP_MANAGED_DOMAIN")
 	}
 	if cfg.OwnerAdminAuthMode != "" && cfg.OwnerAdminAuthMode != "basic_only" {
 		return Config{}, fmt.Errorf("OWNER_ADMIN_AUTH_MODE must be empty or basic_only")

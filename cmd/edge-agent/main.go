@@ -236,7 +236,10 @@ func main() {
 	}
 	router := proxyadapter.NewEdgeRouter(proxyadapter.NewStorageResolver(store, "admin"), mediaproxy.NewExecutor(mediaproxy.Config{AllowPrivateTargets: cfg.AllowPrivate}), mediaproxy.Config{AllowPrivateTargets: cfg.AllowPrivate}, http.NotFoundHandler())
 	mux := http.NewServeMux()
-	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) })
+	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("X-EmbyProxy-Node-ID", cfg.NodeID)
+		_, _ = w.Write([]byte("ok"))
+	})
 	if cfg.IsolatedTestMedia {
 		mux.HandleFunc("/__isolated-media/", isolatedTestMedia)
 	}

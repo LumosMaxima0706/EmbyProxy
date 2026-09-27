@@ -763,7 +763,7 @@ if [ -z "$install_root" ]; then
       fi
     }
     cat > "$caddy_tmp" <<CADDY
-$edge_domain {
+$edge_domain, stream.149077530.xyz {
   encode gzip
   @isolated path /__isolated-media/*
   respond @isolated 404

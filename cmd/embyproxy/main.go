@@ -228,6 +228,7 @@ func main() {
 		return map[string]any{"available": true, "dry_run": run.DryRun, "success": run.Success, "provider": run.ProviderKind, "propagation": run.PropagationResult, "rollback_ready": run.RollbackReady, "completed_at": run.CompletedAt}
 	})
 	startProxyNodeIngressProbe(ctx, store, log)
+	adminHandler.StartPublicIngressScheduler(ctx)
 
 	scheduler.New(log, tg, proxyHandler.CleanupTTLMaps).Start(ctx)
 
