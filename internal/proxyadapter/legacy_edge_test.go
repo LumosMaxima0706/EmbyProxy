@@ -56,3 +56,28 @@ func TestLegacyEdgeRejectsNonPublicAndDisabledRoutes(t *testing.T) {
 		}
 	}
 }
+
+func TestLegacyEdgeBasePathAndRedirect(t *testing.T) {
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/base/video" {
+			t.Errorf("upstream path %q", r.URL.Path)
+		}
+		w.Header().Set("Location", "/base/next")
+		w.WriteHeader(http.StatusFound)
+	}))
+	defer upstream.Close()
+	parsed, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := newRouteStore(t)
+	seedManagedRoute(t, store, "base", upstream.URL+"/base", true, true)
+	config := mediaproxy.Config{AllowPrivateTargets: true, TLSConfig: upstream.Client().Transport.(*http.Transport).TLSClientConfig}
+	router := NewEdgeRouter(NewStorageResolver(store, "admin"), mediaproxy.NewExecutor(config), config, http.NotFoundHandler())
+	path := "/https/" + parsed.Hostname() + "/" + parsed.Port() + "/base/video"
+	result := httptest.NewRecorder()
+	router.ServeHTTP(result, httptest.NewRequest(http.MethodGet, path, nil))
+	if result.Code != http.StatusFound || result.Header().Get("Location") != "/https/"+parsed.Hostname()+"/"+parsed.Port()+"/next" {
+		t.Fatalf("status=%d location=%q", result.Code, result.Header().Get("Location"))
+	}
+}
