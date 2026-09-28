@@ -1183,10 +1183,11 @@ func (h *Handler) handleEdgeEnrollment(w http.ResponseWriter, r *http.Request, p
 				Lines []storage.ManagedRouteLine `json:"lines"`
 			} `json:"routes"`
 			RedirectEndpoints map[string][]storage.ProxyRedirectEndpoint `json:"redirect_endpoints,omitempty"`
+			LegacyPublicPaths map[string]string                          `json:"legacy_public_paths"`
 		}{NodeID: id, Nodes: nodes, Routes: make([]struct {
 			Route storage.ManagedRoute       `json:"route"`
 			Lines []storage.ManagedRouteLine `json:"lines"`
-		}, 0, len(routes)), RedirectEndpoints: map[string][]storage.ProxyRedirectEndpoint{}}
+		}, 0, len(routes)), RedirectEndpoints: map[string][]storage.ProxyRedirectEndpoint{}, LegacyPublicPaths: h.cfg.PublicMediaNodePaths}
 		for _, route := range routes {
 			if !route.Enabled || !route.Public {
 				continue

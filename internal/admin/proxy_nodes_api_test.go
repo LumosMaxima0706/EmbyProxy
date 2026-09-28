@@ -617,10 +617,11 @@ func TestEdgeArtifactAndSnapshotRequireNodeCredential(t *testing.T) {
 		t.Fatalf("artifact response status=%d hash=%q body=%q", artifactRec.Code, artifactRec.Header().Get("X-EmbyProxy-Artifact-SHA256"), artifactRec.Body.String())
 	}
 	snapshotReq := httptest.NewRequest(http.MethodGet, "/api/edge/config/"+node.ID, nil)
+	h.cfg.PublicMediaNodePaths = map[string]string{"uhd": "/https/v1.uhdnow.com/443"}
 	snapshotReq.Header.Set("X-EmbyProxy-Node-Credential", credential)
 	snapshotRec := httptest.NewRecorder()
 	h.ServeHTTP(snapshotRec, snapshotReq)
-	if snapshotRec.Code != http.StatusOK || !strings.Contains(snapshotRec.Body.String(), `"slug":"demo"`) || strings.Contains(snapshotRec.Body.String(), "strong-admin-token") || strings.Contains(snapshotRec.Body.String(), credential) {
+	if snapshotRec.Code != http.StatusOK || !strings.Contains(snapshotRec.Body.String(), `"slug":"demo"`) || !strings.Contains(snapshotRec.Body.String(), `"legacy_public_paths":{"uhd":"/https/v1.uhdnow.com/443"}`) || strings.Contains(snapshotRec.Body.String(), "strong-admin-token") || strings.Contains(snapshotRec.Body.String(), credential) {
 		t.Fatalf("snapshot response status=%d body=%s", snapshotRec.Code, snapshotRec.Body.String())
 	}
 }

@@ -51,6 +51,7 @@ type snapshot struct {
 		Lines []storage.ManagedRouteLine `json:"lines"`
 	} `json:"routes"`
 	RedirectEndpoints map[string][]storage.ProxyRedirectEndpoint `json:"redirect_endpoints,omitempty"`
+	LegacyPublicPaths map[string]string                          `json:"legacy_public_paths"`
 }
 
 func normalizePlaybackConfig(cfg *config) error {
@@ -157,6 +158,9 @@ func main() {
 			}
 		}
 		if err = store.ReplaceProxyRedirectEndpoints(ctx, body.RedirectEndpoints); err != nil {
+			return err
+		}
+		if err = store.KV().Put(ctx, "edge:legacy-public-paths", body.LegacyPublicPaths); err != nil {
 			return err
 		}
 		return nil

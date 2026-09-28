@@ -2,10 +2,12 @@ package proxyadapter
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
 
+	"embyproxy/internal/mediaproxy"
 	"embyproxy/internal/storage"
 )
 
@@ -31,6 +33,22 @@ func (r *Router) serveLegacyEdge(w http.ResponseWriter, req *http.Request, parts
 	port, err := strconv.Atoi(parts[2])
 	if err != nil || port < 1 || port > 65535 || parts[1] == "" {
 		return false
+	}
+	if paths, ok := provider.store.(interface{ KV() *storage.KV }); ok {
+		var configured map[string]string
+		found, readErr := paths.KV().GetJSON(req.Context(), "edge:legacy-public-paths", &configured)
+		if readErr != nil {
+			http.Error(w, "route unavailable", http.StatusServiceUnavailable)
+			return true
+		}
+		if found && configuredLegacyTarget(configured, parts[1], port) {
+			target, err := mediaproxy.ParseTarget("https", parts[1], port, "")
+			if err != nil {
+				return false
+			}
+			r.forward(w, req, legacyTail(req, parts), target, "/https/"+parts[1]+"/"+strconv.Itoa(port)+"/", nil)
+			return true
+		}
 	}
 	routes, err := store.ListManagedRoutes(req.Context())
 	if err != nil {
@@ -68,4 +86,38 @@ func (r *Router) serveLegacyEdge(w http.ResponseWriter, req *http.Request, parts
 		return true
 	}
 	return false
+}
+
+func configuredLegacyTarget(paths map[string]string, host string, port int) bool {
+	if net.ParseIP(host) != nil || len(host) > 253 || !strings.Contains(host, ".") || strings.ContainsAny(host, ":@\\ ") {
+		return false
+	}
+	for _, segment := range strings.Split(host, ".") {
+		if segment == "" || len(segment) > 63 || segment[0] == '-' || segment[len(segment)-1] == '-' {
+			return false
+		}
+		for _, c := range segment {
+			if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-') {
+				return false
+			}
+		}
+	}
+	for _, path := range paths {
+		parts := strings.Split(strings.Trim(path, "/"), "/")
+		if len(parts) == 3 && parts[0] == "https" && strings.EqualFold(parts[1], host) && parts[2] == strconv.Itoa(port) {
+			return true
+		}
+	}
+	return false
+}
+
+func legacyTail(req *http.Request, parts []string) string {
+	if len(parts) == 3 {
+		return "/"
+	}
+	tail := "/" + strings.Join(parts[3:], "/")
+	if strings.HasSuffix(req.URL.Path, "/") && !strings.HasSuffix(tail, "/") {
+		tail += "/"
+	}
+	return tail
 }
