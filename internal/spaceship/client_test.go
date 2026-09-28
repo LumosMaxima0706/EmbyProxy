@@ -7,8 +7,30 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"strings"
 	"testing"
 )
+
+func TestStreamACMERejectsUnmanagedHostAndUnsafeValue(t *testing.T) {
+	writes := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writes++
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	c := &Client{BaseURL: srv.URL, APIKey: "k", APISecret: "s", ManagedDomain: "example.com"}
+	for _, host := range []string{"other.example.com", "stream.other.com"} {
+		if err := c.PresentStreamACME(context.Background(), host, strings.Repeat("a", 43)); err == nil {
+			t.Fatalf("unmanaged host accepted: %s", host)
+		}
+	}
+	if err := c.CleanupStreamACME(context.Background(), "stream.example.com", "unsafe/value"); err == nil {
+		t.Fatal("unsafe validation accepted")
+	}
+	if writes != 0 {
+		t.Fatalf("provider contacted: %d", writes)
+	}
+}
 
 func TestEnsureAIdempotentAndConflictSafe(t *testing.T) {
 	putCalls := 0

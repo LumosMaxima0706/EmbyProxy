@@ -25,7 +25,8 @@ type Record struct {
 	ID      string `json:"id"`
 	Name    string `json:"name"`
 	Type    string `json:"type"`
-	Address string `json:"address"`
+	Address string `json:"address,omitempty"`
+	Value   string `json:"value,omitempty"`
 	TTL     int    `json:"ttl"`
 }
 type recordsResponse struct {
@@ -38,9 +39,10 @@ type recordsWriteRequest struct {
 	Items []Record `json:"items"`
 }
 type recordDeleteRequest struct {
+	Value   string `json:"value,omitempty"`
 	Type    string `json:"type"`
 	Name    string `json:"name"`
-	Address string `json:"address"`
+	Address string `json:"address,omitempty"`
 }
 type HTTPError struct {
 	Status int
@@ -320,6 +322,108 @@ func (c *Client) ReplaceExactA(ctx context.Context, fqdn, expectedPrevious, addr
 		return Record{}, errors.New("managed_record_update_not_verified")
 	}
 	return after, nil
+}
+
+func (c *Client) streamACMEName(host, value string) (string, error) {
+	if c == nil {
+		return "", errors.New("spaceship_not_configured")
+	}
+	managed := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(c.ManagedDomain)), ".")
+	if managed == "" || strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".") != "stream."+managed {
+		return "", errors.New("acme_domain_not_allowed")
+	}
+	if len(value) < 32 || len(value) > 128 {
+		return "", errors.New("invalid_acme_challenge")
+	}
+	for _, ch := range value {
+		if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '-' || ch == '_') {
+			return "", errors.New("invalid_acme_challenge")
+		}
+	}
+	return "_acme-challenge.stream", nil
+}
+
+func streamACMEMatch(r Record, name, managed string) bool {
+	value := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(r.Name)), ".")
+	return value == name || value == name+"."+strings.TrimSuffix(strings.ToLower(managed), ".")
+}
+
+// PresentStreamACME writes only the managed stream DNS-01 TXT value.
+func (c *Client) PresentStreamACME(ctx context.Context, host, value string) error {
+	name, err := c.streamACMEName(host, value)
+	if err != nil {
+		return err
+	}
+	before, err := c.List(ctx, c.ManagedDomain)
+	if err != nil {
+		return err
+	}
+	count := 0
+	for _, r := range before {
+		if streamACMEMatch(r, name, c.ManagedDomain) && r.Type == "TXT" && r.Value == value {
+			count++
+		}
+	}
+	if count > 1 {
+		return errors.New("acme_challenge_not_unique")
+	}
+	if count == 0 {
+		if err := c.putRecords(ctx, c.ManagedDomain, []Record{{Name: name, Type: "TXT", Value: value, TTL: 60}}); err != nil {
+			return err
+		}
+	}
+	after, err := c.List(ctx, c.ManagedDomain)
+	if err != nil {
+		return err
+	}
+	count = 0
+	for _, r := range after {
+		if streamACMEMatch(r, name, c.ManagedDomain) && r.Type == "TXT" && r.Value == value {
+			count++
+		}
+	}
+	if count != 1 {
+		return errors.New("acme_challenge_not_verified")
+	}
+	return nil
+}
+
+// CleanupStreamACME removes one matching TXT value without touching other records.
+func (c *Client) CleanupStreamACME(ctx context.Context, host, value string) error {
+	name, err := c.streamACMEName(host, value)
+	if err != nil {
+		return err
+	}
+	before, err := c.List(ctx, c.ManagedDomain)
+	if err != nil {
+		return err
+	}
+	var matching []Record
+	unrelated := make([]Record, 0, len(before))
+	for _, r := range before {
+		if streamACMEMatch(r, name, c.ManagedDomain) && r.Type == "TXT" && r.Value == value {
+			matching = append(matching, r)
+		} else {
+			unrelated = append(unrelated, r)
+		}
+	}
+	if len(matching) == 0 {
+		return nil
+	}
+	if len(matching) != 1 {
+		return errors.New("acme_challenge_not_unique")
+	}
+	if err := c.do(ctx, http.MethodDelete, c.ManagedDomain, []recordDeleteRequest{{Name: name, Type: "TXT", Value: value}}, nil); err != nil {
+		return err
+	}
+	after, err := c.List(ctx, c.ManagedDomain)
+	if err != nil {
+		return err
+	}
+	if !recordsEqual(unrelated, after) {
+		return errors.New("acme_challenge_cleanup_not_verified")
+	}
+	return nil
 }
 
 // DeleteExact removes one verified managed record. Spaceship list responses do
