@@ -423,7 +423,7 @@ func (s *publicIngressSwitcher) reconcile(ctx context.Context) error {
 	// Automatic switching is delayed after a verified operation; manual requests are not.
 	nodes, err := s.h.store.ListProxyNodes(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("candidate_list_failed: %w", err)
 	}
 	var active *storage.ProxyNode
 	for i := range nodes {
@@ -461,6 +461,29 @@ func (s *publicIngressSwitcher) reconcile(ctx context.Context) error {
 	return errors.New("no_eligible_public_ingress_candidate")
 }
 
+func (s *publicIngressSwitcher) reconcileWithWarning(ctx context.Context) error {
+	err := s.reconcile(ctx)
+	if err == nil || err.Error() == "no_eligible_public_ingress_candidate" {
+		return err
+	}
+	code := "switch_failed"
+	switch {
+	case err.Error() == "public_ingress_recovery_required":
+		code = "recovery_required"
+	case err.Error() == "public_ingress_not_initialized_or_verified":
+		code = "state_unavailable"
+	case strings.HasPrefix(err.Error(), "candidate_list_failed:"):
+		code = "candidate_list_failed"
+	}
+	if s.schedulerStatus(ctx).Error == code {
+		return err
+	}
+	if saveErr := s.saveSchedulerStatus(ctx, code, "automatic"); saveErr != nil {
+		return errors.Join(err, saveErr)
+	}
+	return err
+}
+
 func (h *Handler) StartPublicIngressScheduler(ctx context.Context) {
 	if h == nil || h.publicIngress == nil {
 		return
@@ -473,7 +496,10 @@ func (h *Handler) StartPublicIngressScheduler(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				_ = h.publicIngress.reconcile(ctx)
+				previousCode := h.publicIngress.schedulerStatus(ctx).Error
+				if err := h.publicIngress.reconcileWithWarning(ctx); err != nil && h.log != nil && h.publicIngress.schedulerStatus(ctx).Error != previousCode {
+					h.log.Warn("public-ingress", "automatic ingress evaluation failed", map[string]any{"event": "publicIngressReconcileFailed", "code": h.publicIngress.schedulerStatus(ctx).Error})
+				}
 			}
 		}
 	}()
