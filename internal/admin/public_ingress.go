@@ -27,6 +27,7 @@ const automaticIngressCooldown = time.Hour
 
 type publicIngressState struct {
 	OperationID       string `json:"operation_id"`
+	PriorVerifiedID   string `json:"prior_verified_id,omitempty"`
 	Phase             string `json:"phase"`
 	Trigger           string `json:"trigger"`
 	Mode              string `json:"mode"`
@@ -93,6 +94,10 @@ func (s *publicIngressSwitcher) save(ctx context.Context, state publicIngressSta
 func (s *publicIngressSwitcher) switchTo(ctx context.Context, nodeID, trigger, mode string) (publicIngressState, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.switchToLocked(ctx, nodeID, trigger, mode)
+}
+
+func (s *publicIngressSwitcher) switchToLocked(ctx context.Context, nodeID, trigger, mode string) (publicIngressState, error) {
 	// Browser disconnects must not cancel a transaction after DNS changes.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 4*time.Minute)
 	defer cancel()
@@ -102,6 +107,9 @@ func (s *publicIngressSwitcher) switchTo(ctx context.Context, nodeID, trigger, m
 	}
 	now := s.now()
 	state := publicIngressState{OperationID: fmt.Sprintf("sw-%d", now.UnixNano()), Phase: "preparing", Trigger: trigger, Mode: previous.Mode, ActiveNodeID: previous.ActiveNodeID, RequestedNodeID: nodeID, RecordName: s.record, StartedAt: now.Unix()}
+	if previous.Phase == "verified" && previous.RequestVerified && previous.ActiveNodeID != "" && previous.DesiredAddress != "" {
+		state.PriorVerifiedID = previous.OperationID
+	}
 	if err := s.save(ctx, state); err != nil {
 		return state, err
 	}
@@ -410,9 +418,21 @@ var _ = json.Marshal
 // reconcile applies automatic health/traffic policy through the exact same
 // switch transaction used by an administrator. Fixed mode is never overridden.
 func (s *publicIngressSwitcher) reconcile(ctx context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	state := s.status(ctx)
 	if publicIngressInFlight(state.Phase) {
 		return errors.New("public_ingress_recovery_required")
+	}
+	if state.Phase == "failed" && state.PriorVerifiedID != "" && safePreDNSFailure(state.Error) {
+		verified, err := s.verifiedBeforeFailure(ctx, state)
+		if err != nil {
+			return err
+		}
+		state = verified
+		if err := s.h.store.KV().Put(ctx, publicIngressStateKey, verified); err != nil {
+			return err
+		}
 	}
 	if state.Mode == "fixed" {
 		if s.schedulerStatus(ctx).Error != "" {
@@ -455,7 +475,7 @@ func (s *publicIngressSwitcher) reconcile(ctx context.Context) error {
 		if candidate.ID == state.ActiveNodeID || !eligiblePublicIngressNode(candidate) || (candidate.QuotaBytes > 0 && candidate.ThresholdPercent > 0 && float64(candidate.UsedBytes)*100 >= float64(candidate.QuotaBytes)*candidate.ThresholdPercent) {
 			continue
 		}
-		_, err = s.switchTo(ctx, candidate.ID, trigger, "preferred")
+		_, err = s.switchToLocked(ctx, candidate.ID, trigger, "preferred")
 		return err
 	}
 	if err := s.saveSchedulerStatus(ctx, "no_eligible_public_ingress_candidate", trigger); err != nil {
