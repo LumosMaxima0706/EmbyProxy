@@ -410,10 +410,10 @@ func (s *publicIngressSwitcher) reconcile(ctx context.Context) error {
 	}
 	needsSwitch := active == nil || !eligiblePublicIngressNode(*active)
 	trigger := "automatic_health"
-	if active != nil && eligiblePublicIngressNode(*active) && state.Phase == "verified" && s.now().Sub(time.Unix(state.CompletedAt, 0)) < automaticIngressCooldown {
+	if !needsSwitch && state.Phase == "verified" && s.now().Sub(time.Unix(state.CompletedAt, 0)) < automaticIngressCooldown {
 		return nil
 	}
-	if active != nil && active.QuotaBytes > 0 && active.ThresholdPercent > 0 && float64(active.UsedBytes)*100 >= float64(active.QuotaBytes)*active.ThresholdPercent {
+	if !needsSwitch && active != nil && active.QuotaBytes > 0 && active.ThresholdPercent > 0 && float64(active.UsedBytes)*100 >= float64(active.QuotaBytes)*active.ThresholdPercent {
 		needsSwitch = true
 		trigger = "automatic_threshold"
 	}

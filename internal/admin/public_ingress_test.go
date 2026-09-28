@@ -46,6 +46,57 @@ func TestPublicIngressRecoveryAndFixedMode(t *testing.T) {
 		t.Fatalf("history=%+v ok=%v err=%v", historical, ok, err)
 	}
 }
+func TestPublicIngressCooldownDoesNotHideHealthFailure(t *testing.T) {
+	h := newAuthTestHandler(t, config.Config{PublicIngressHost: "stream.example.com"})
+	ctx := context.Background()
+	enrollment, _, err := h.store.CreateProxyNode(ctx, storage.ProxyNode{Name: "active", PublicAddress: "https://edge.example.com", ResetDay: 1}, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := newPublicIngressSwitcher(h)
+	state := publicIngressState{OperationID: "sw-recent", Phase: "verified", Mode: "preferred", ActiveNodeID: enrollment.NodeID, CompletedAt: time.Now().Unix()}
+	if err := s.save(ctx, state); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.reconcile(ctx); err == nil || !strings.Contains(err.Error(), "no_eligible_public_ingress_candidate") {
+		t.Fatalf("unhealthy node held by cooldown: %v", err)
+	}
+}
+func TestPublicIngressThresholdCooldown(t *testing.T) {
+	h := newAuthTestHandler(t, config.Config{PublicIngressHost: "stream.example.com"})
+	ctx := context.Background()
+	enrollment, _, err := h.store.CreateProxyNode(ctx, storage.ProxyNode{Name: "active-threshold", PublicAddress: "https://edge.example.com", ResetDay: 1}, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := newPublicIngressSwitcher(h)
+	state := publicIngressState{OperationID: "sw-threshold", Phase: "verified", Mode: "preferred", ActiveNodeID: enrollment.NodeID, CompletedAt: time.Now().Unix()}
+	if err := s.save(ctx, state); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().Unix()
+	if _, err := h.store.DB().ExecContext(ctx, `UPDATE proxy_nodes SET state='healthy',last_heartbeat_at=?,playback_healthy=1,ingress_healthy=1,config_synced=1,quota_bytes=100,used_bytes=100 WHERE id=?`, now, enrollment.NodeID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.reconcile(ctx); err != nil {
+		t.Fatalf("healthy threshold should respect cooldown: %v", err)
+	}
+	state.CompletedAt = time.Now().Add(-2 * time.Hour).Unix()
+	if err := s.save(ctx, state); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.reconcile(ctx); err == nil || !strings.Contains(err.Error(), "no_eligible_public_ingress_candidate") {
+		t.Fatalf("expired threshold cooldown should report no candidate: %v", err)
+	}
+	state.Mode = "fixed"
+	state.CompletedAt = now
+	if err := s.save(ctx, state); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.reconcile(ctx); err != nil {
+		t.Fatalf("fixed mode must not auto-switch: %v", err)
+	}
+}
 
 func TestPublicIngressRejectsIPv6Record(t *testing.T) {
 	h := newAuthTestHandler(t, config.Config{PublicIngressHost: "stream.example.com"})
