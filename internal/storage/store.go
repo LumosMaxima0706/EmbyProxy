@@ -202,6 +202,9 @@ func (s *Store) InitSchema(ctx context.Context) error {
 	if err := s.InitManagedRoutesSchema(ctx); err != nil {
 		return err
 	}
+	if err := s.InitEdgeACMELease(ctx); err != nil {
+		return err
+	}
 	if err := s.InitProxyNodeSchema(ctx); err != nil {
 		return err
 	}
