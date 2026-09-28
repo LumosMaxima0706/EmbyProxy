@@ -46,6 +46,10 @@ func TestProxyNodesUIUsesSingleFormAndHealthGatedSwitch(t *testing.T) {
 		"id=\"publicIngressSchedulerStatus\"",
 		"/api/admin/public-ingress/status",
 		"no_eligible_public_ingress_candidate",
+		"window.publicIngressOperation = ingress.ok ? ingress.operation : null",
+		"verifiedNodeId = window.publicIngressOperation?.phase === 'verified'",
+		"n.id===verifiedNodeId",
+		"\u6700\u9ad8\u4f18\u5148\u7ea7",
 		"function copyProxyEnrollmentCommand()",
 		"复制安装命令",
 		"id=\"proxyNodeFilter\"",
@@ -60,6 +64,9 @@ func TestProxyNodesUIUsesSingleFormAndHealthGatedSwitch(t *testing.T) {
 		if !strings.Contains(indexHTML, marker) {
 			t.Fatalf("proxy node UI marker %q is missing", marker)
 		}
+	}
+	if strings.Contains(indexHTML, "active: all.filter(n=>n.state==='healthy'&&n.enabled&&Number(n.priority||0)===1)") {
+		t.Fatal("priority one must not be presented as the verified public ingress")
 	}
 	if strings.Contains(indexHTML, "window.prompt('节点名称") || strings.Contains(indexHTML, "window.prompt('Edge HTTPS ingress") {
 		t.Fatal("proxy node creation must not use a prompt wizard")

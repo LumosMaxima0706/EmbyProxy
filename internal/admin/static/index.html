@@ -1767,6 +1767,7 @@ async function loadProxyNodes() {
   const r = await authFetch('/api/admin/proxy-nodes');
   if (!r.ok) { toast('加载反代节点失败: ' + authErrorMessage(r.error), 'err'); return; }
   const ingress = await authFetch('/api/admin/public-ingress/status');
+	window.publicIngressOperation = ingress.ok ? ingress.operation : null;
   const notice = document.getElementById('publicIngressSchedulerStatus');
   if (notice) {
     const warning = ingress.scheduler;
@@ -1793,15 +1794,16 @@ function proxyNodeVisible(n) {
 function renderProxyNodeTable() {
   const all = window.proxyNodes || [];
   const body = document.getElementById('proxyNodesBody');
+  const verifiedNodeId = window.publicIngressOperation?.phase === 'verified' && window.publicIngressOperation?.request_verified ? window.publicIngressOperation.active_node_id : '';
   const items = all.filter(proxyNodeVisible);
-  const summary = {all: all.filter(n=>n.state!=='removed').length, available: all.filter(n=>n.state==='healthy'&&n.enabled).length, active: all.filter(n=>n.state==='healthy'&&n.enabled&&Number(n.priority||0)===1).length, issue: all.filter(n=>n.state!=='removed'&&['degraded','online'].includes(n.state)&&!proxyNodeHealth(n)).length, disabled: all.filter(n=>['disabled','revoked','draining','removed'].includes(n.state)).length};
+  const summary = {all: all.filter(n=>n.state!=='removed').length, available: all.filter(n=>n.state==='healthy'&&n.enabled).length, active: all.filter(n=>n.id===verifiedNodeId).length, issue: all.filter(n=>n.state!=='removed'&&['degraded','online'].includes(n.state)&&!proxyNodeHealth(n)).length, disabled: all.filter(n=>['disabled','revoked','draining','removed'].includes(n.state)).length};
   const summaryEl = document.getElementById('proxyNodeSummary');
-  if (summaryEl) summaryEl.innerHTML = [['all','反代节点'],['available','可用'],['active','当前活跃'],['issue','异常（degraded）'],['disabled','已停用/撤销/已移除']].map(([key,label])=>`<div class="signal"><b>${summary[key]}</b><div><span>${label}</span><em>控制面实时状态</em></div></div>`).join('');
+  if (summaryEl) summaryEl.innerHTML = [['all','反代节点'],['available','可用'],['active','上次已验证切换'],['issue','异常（degraded）'],['disabled','已停用/撤销/已移除']].map(([key,label])=>`<div class="signal"><b>${summary[key]}</b><div><span>${label}</span><em>控制面实时状态</em></div></div>`).join('');
   body.innerHTML = items.length ? items.map((n, i) => {
     const remaining = n.quota_bytes > 0 ? Math.max(0, n.quota_bytes - n.used_bytes) : null;
     const health = proxyNodeHealth(n) ? 'healthy' : (n.state || 'unknown');
     const chip = (value, ok) => `<span class="chip ${ok ? 'ok' : 'warn'}">${value ? '正常' : '未通过'}</span>`;
-    const primary = n.state==='healthy' && n.enabled && Number(n.priority||0)===1 ? '<span class="node-tag">当前活跃</span>' : (n.state==='healthy' && n.enabled ? `<button class="btn btn-sm btn-primary" onclick="switchProxyNode('${attr(n.id)}')">切换到此节点</button>` : (n.state==='disabled' ? `<button class="btn btn-sm btn-primary" onclick="toggleProxyNode('${attr(n.id)}',true)">启用</button>` : (n.state==='revoked' ? '<span class="chip err">需重新接入</span>' : '')));
+    const primary = `${n.id===verifiedNodeId ? '<span class="node-tag">上次已验证切换</span>' : ''}${Number(n.priority||0)===1 ? '<span class="node-tag">最高优先级</span>' : ''}${n.state==='healthy' && n.enabled ? `<button class="btn btn-sm btn-primary" onclick="switchProxyNode('${attr(n.id)}')">切换到此节点</button>` : (n.state==='disabled' ? `<button class="btn btn-sm btn-primary" onclick="toggleProxyNode('${attr(n.id)}',true)">启用</button>` : (n.state==='revoked' ? '<span class="chip err">需重新接入</span>' : ''))}`;
     const remoteCleanupReady = n.decommission_capable || !n.last_heartbeat_at || (Date.now()/1000 - Number(n.last_heartbeat_at)) > 300;
     const removeLabel = remoteCleanupReady ? '彻底移除' : '从控制面移除（远端不支持）';
     const menu = `<div class="proxy-action-menu"><button class="btn btn-sm proxy-more" aria-label="更多操作" onclick="toggleProxyMenu('${attr(n.id)}',event)">⋯</button><div class="proxy-menu" id="proxy-menu-${attr(n.id)}" hidden>${n.state!=='removed'?`<button onclick="viewProxyNodeDetails('${attr(n.id)}')">详情</button>`:''}${n.state!=='revoked'&&n.state!=='removed'?`<button onclick="openProxyQuotaModal('${attr(n.id)}')">流量与重置</button><button onclick="drainProxyNode('${attr(n.id)}')">排空现有连接</button>`:''}${n.state!=='revoked'&&n.state!=='removed'?`<button onclick="toggleProxyNode('${attr(n.id)}',${!n.enabled})">${n.enabled?'禁用调度':'启用调度'}</button>`:''}<button onclick="regenerateProxyBootstrap('${attr(n.id)}')">重新接入/重装</button>${n.state!=='revoked'&&n.state!=='removed'?`<button onclick="revokeProxyIdentity('${attr(n.id)}')">撤销身份</button>`:''}<button onclick="openDecommissionModal('${attr(n.id)}')">${removeLabel}</button></div></div>`;
