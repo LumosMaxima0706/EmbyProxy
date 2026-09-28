@@ -476,7 +476,21 @@ func (s *publicIngressSwitcher) reconcile(ctx context.Context) error {
 			continue
 		}
 		_, err = s.switchToLocked(ctx, candidate.ID, trigger, "preferred")
-		return err
+		if err == nil {
+			return nil
+		}
+		failed := s.status(ctx)
+		if failed.Phase != "failed" || !safePreDNSFailure(failed.Error) || failed.PriorVerifiedID == "" {
+			return err
+		}
+		verified, checkErr := s.verifiedBeforeFailure(ctx, failed)
+		if checkErr != nil {
+			return errors.Join(err, checkErr)
+		}
+		if putErr := s.h.store.KV().Put(ctx, publicIngressStateKey, verified); putErr != nil {
+			return errors.Join(err, putErr)
+		}
+		state = verified
 	}
 	if err := s.saveSchedulerStatus(ctx, "no_eligible_public_ingress_candidate", trigger); err != nil {
 		return err

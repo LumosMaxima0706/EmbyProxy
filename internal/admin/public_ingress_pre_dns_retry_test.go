@@ -104,8 +104,8 @@ func TestPreDNSFailureRechecksOriginalIngress(t *testing.T) {
 	if err := s.reconcile(ctx); err == nil {
 		t.Fatal("unreachable backup accepted")
 	}
-	if got := s.status(ctx); got.OperationID == failed.OperationID || got.Error != "target_preflight_failed" || got.RequestedNodeID != "backup" || got.ActiveNodeID != "old-node" {
-		t.Fatalf("backup not attempted: %+v", got)
+	if got := s.status(ctx); got.OperationID != "old-op" || got.Phase != "verified" || got.ActiveNodeID != "old-node" {
+		t.Fatalf("original ingress not retained: %+v", got)
 	}
 	if puts != 0 {
 		t.Fatalf("backup preflight wrote provider: %d", puts)
