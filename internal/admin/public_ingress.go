@@ -57,14 +57,14 @@ type publicIngressSwitcher struct {
 	h          *Handler
 	record     string
 	ttl        int
-	resolver   *net.Resolver
+	lookupHost func(context.Context, string) ([]string, error)
 	httpClient *http.Client
 	now        func() time.Time
 }
 
 func newPublicIngressSwitcher(h *Handler) *publicIngressSwitcher {
 	record := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(h.cfg.PublicIngressHost)), ".")
-	return &publicIngressSwitcher{h: h, record: record, ttl: 60, resolver: net.DefaultResolver, httpClient: &http.Client{Timeout: 20 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}, now: time.Now}
+	return &publicIngressSwitcher{h: h, record: record, ttl: 60, lookupHost: net.DefaultResolver.LookupHost, httpClient: &http.Client{Timeout: 20 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}, now: time.Now}
 }
 
 func (s *publicIngressSwitcher) status(ctx context.Context) publicIngressState {
@@ -287,7 +287,7 @@ func (s *publicIngressSwitcher) waitRecursive(ctx context.Context, want string, 
 	deadline := s.now().Add(timeout)
 	var last string
 	for s.now().Before(deadline) {
-		ips, err := s.resolver.LookupHost(ctx, s.record)
+		ips, err := s.lookupHost(ctx, s.record)
 		if err == nil {
 			for _, v := range ips {
 				if ip, e := netip.ParseAddr(v); e == nil && ip.Is4() {
@@ -344,6 +344,12 @@ func (s *publicIngressSwitcher) rollback(ctx context.Context, state publicIngres
 			if readErr == nil && current.Address != state.PreviousAddress {
 				readErr = errors.New("rollback_provider_readback_mismatch")
 			}
+		}
+		if readErr == nil && state.ActiveNodeID == "" {
+			readErr = errors.New("rollback_original_node_unknown")
+		}
+		if readErr == nil {
+			state.ObservedNodeID, readErr = s.verifyPublicRequest(ctx, state.ActiveNodeID)
 		}
 	}
 	state.RollbackVerified = readErr == nil
