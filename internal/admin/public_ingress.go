@@ -10,7 +10,6 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
-	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -58,6 +57,7 @@ type publicIngressSwitcher struct {
 	h          *Handler
 	record     string
 	ttl        int
+	lookupIP   func(context.Context, string, string) ([]netip.Addr, error)
 	lookupHost func(context.Context, string) ([]string, error)
 	httpClient *http.Client
 	now        func() time.Time
@@ -65,7 +65,7 @@ type publicIngressSwitcher struct {
 
 func newPublicIngressSwitcher(h *Handler) *publicIngressSwitcher {
 	record := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(h.cfg.PublicIngressHost)), ".")
-	return &publicIngressSwitcher{h: h, record: record, ttl: 60, lookupHost: net.DefaultResolver.LookupHost, httpClient: &http.Client{Timeout: 20 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}, now: time.Now}
+	return &publicIngressSwitcher{h: h, record: record, ttl: 60, lookupHost: net.DefaultResolver.LookupHost, lookupIP: net.DefaultResolver.LookupNetIP, httpClient: &http.Client{Timeout: 20 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}, now: time.Now}
 }
 
 func (s *publicIngressSwitcher) status(ctx context.Context) publicIngressState {
@@ -120,7 +120,7 @@ func (s *publicIngressSwitcher) switchToLocked(ctx context.Context, nodeID, trig
 	if !eligiblePublicIngressNode(*node) {
 		return s.fail(ctx, state, "target_not_eligible", nil)
 	}
-	ip, err := proxyNodeIPv4(*node)
+	ip, err := s.proxyNodeIPv4(ctx, *node)
 	if err != nil {
 		return s.fail(ctx, state, "target_address_invalid", err)
 	}
@@ -215,31 +215,6 @@ func (s *publicIngressSwitcher) rejectIPv6(ctx context.Context) error {
 
 func eligiblePublicIngressNode(n storage.ProxyNode) bool {
 	return n.Enabled && n.State == "healthy" && n.PlaybackHealthy && n.IngressHealthy && n.ConfigSynced && n.LastHeartbeatAt > time.Now().Add(-5*time.Minute).Unix()
-}
-
-func proxyNodeIPv4(n storage.ProxyNode) (netip.Addr, error) {
-	if n.DNSExpectedIP != "" {
-		if ip, e := netip.ParseAddr(n.DNSExpectedIP); e == nil && ip.Is4() {
-			return ip, nil
-		}
-	}
-	u, e := url.Parse(n.PublicAddress)
-	if e != nil {
-		return netip.Addr{}, e
-	}
-	if ip, e := netip.ParseAddr(u.Hostname()); e == nil && ip.Is4() {
-		return ip, nil
-	}
-	ips, e := net.DefaultResolver.LookupNetIP(context.Background(), "ip4", u.Hostname())
-	if e != nil {
-		return netip.Addr{}, e
-	}
-	for _, ip := range ips {
-		if ip.Is4() {
-			return ip, nil
-		}
-	}
-	return netip.Addr{}, errors.New("no_ipv4")
 }
 
 func (s *publicIngressSwitcher) preflight(ctx context.Context, n storage.ProxyNode, ip netip.Addr) error {
