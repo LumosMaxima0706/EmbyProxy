@@ -84,10 +84,7 @@ func (s *publicIngressSwitcher) saveSchedulerStatus(ctx context.Context, code, t
 }
 
 func (s *publicIngressSwitcher) save(ctx context.Context, state publicIngressState) error {
-	if err := s.h.store.KV().Put(ctx, publicIngressHistoryPrefix+state.OperationID, state); err != nil {
-		return err
-	}
-	return s.h.store.KV().Put(ctx, publicIngressStateKey, state)
+	return s.h.store.KV().PutJSONPair(ctx, publicIngressHistoryPrefix+state.OperationID, publicIngressStateKey, state)
 }
 
 func (s *publicIngressSwitcher) switchTo(ctx context.Context, nodeID, trigger, mode string) (publicIngressState, error) {
