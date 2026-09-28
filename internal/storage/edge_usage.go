@@ -50,3 +50,8 @@ func (s *Store) AcknowledgeEdgeUsage(ctx context.Context, id string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM edge_usage_outbox WHERE event_id=?`, id)
 	return err
 }
+func (s *Store) EdgeUsagePending(ctx context.Context) (int64, error) {
+	var count int64
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM edge_usage_outbox`).Scan(&count)
+	return count, err
+}

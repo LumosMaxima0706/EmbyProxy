@@ -593,6 +593,9 @@ func TestEdgeUsageOutboxSurvivesRestart(t *testing.T) {
 	if err := store.QueueEdgeUsage(ctx, 3, time.Now()); err != nil {
 		t.Fatal(err)
 	}
+	if pending, err := store.EdgeUsagePending(ctx); err != nil || pending != 1 {
+		t.Fatalf("pending=%d err=%v", pending, err)
+	}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -610,6 +613,9 @@ func TestEdgeUsageOutboxSurvivesRestart(t *testing.T) {
 	}
 	if err := store.AcknowledgeEdgeUsage(ctx, event.ID); err != nil {
 		t.Fatal(err)
+	}
+	if pending, err := store.EdgeUsagePending(ctx); err != nil || pending != 0 {
+		t.Fatalf("pending after ack=%d err=%v", pending, err)
 	}
 	event, err = store.NextEdgeUsage(ctx)
 	if err != nil || event != nil {

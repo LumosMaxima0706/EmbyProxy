@@ -258,6 +258,8 @@ func main() {
 							_ = res.Body.Close()
 							if res.StatusCode == http.StatusOK {
 								_ = store.AcknowledgeEdgeUsage(ctx, event.ID)
+							} else {
+								fmt.Fprintln(os.Stderr, "edge usage upload status:", res.StatusCode)
 							}
 						}
 					}
@@ -275,6 +277,9 @@ func main() {
 	})
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+		if pending, err := store.EdgeUsagePending(context.Background()); err == nil {
+			w.Header().Set("X-EmbyProxy-Usage-Pending", strconv.FormatInt(pending, 10))
+		}
 		w.Header().Set("X-EmbyProxy-Node-ID", cfg.NodeID)
 		_, _ = w.Write([]byte("ok"))
 	})
