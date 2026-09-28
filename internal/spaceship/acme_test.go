@@ -11,7 +11,7 @@ import (
 
 func TestStreamACMERecordIsolation(t *testing.T) {
 	value := strings.Repeat("b", 43)
-	items := []Record{{Name: "stream", Type: "A", Address: "1.2.3.4", TTL: 60}, {Name: "_acme-challenge.stream", Type: "TXT", Value: "other", TTL: 60}}
+	items := []Record{{Name: "stream", Type: "A", Address: "1.2.3.4", TTL: 60}}
 	puts, deletes := 0, 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
@@ -31,7 +31,7 @@ func TestStreamACMERecordIsolation(t *testing.T) {
 				t.Fatalf("unsafe DELETE: %+v err=%v", body, err)
 			}
 			deletes++
-			items = items[:2]
+			items = items[:1]
 			w.WriteHeader(http.StatusNoContent)
 		}
 	}))
@@ -44,7 +44,7 @@ func TestStreamACMERecordIsolation(t *testing.T) {
 	if err := c.PresentStreamACME(ctx, "stream.example.com", value); err != nil {
 		t.Fatal(err)
 	}
-	if puts != 1 || len(items) != 3 {
+	if puts != 1 || len(items) != 2 {
 		t.Fatalf("non-idempotent TXT: puts=%d records=%d", puts, len(items))
 	}
 	if err := c.CleanupStreamACME(ctx, "stream.example.com", value); err != nil {
@@ -53,10 +53,10 @@ func TestStreamACMERecordIsolation(t *testing.T) {
 	if err := c.CleanupStreamACME(ctx, "stream.example.com", value); err != nil {
 		t.Fatal(err)
 	}
-	if puts != 1 || deletes != 1 || len(items) != 2 {
+	if puts != 1 || deletes != 1 || len(items) != 1 {
 		t.Fatalf("unsafe cleanup: puts=%d deletes=%d items=%+v", puts, deletes, items)
 	}
-	if items[0].Type != "A" || items[0].Address != "1.2.3.4" || items[1].Value != "other" {
+	if items[0].Type != "A" || items[0].Address != "1.2.3.4" {
 		t.Fatalf("other records changed: %+v", items)
 	}
 }

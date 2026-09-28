@@ -359,18 +359,28 @@ func (c *Client) PresentStreamACME(ctx context.Context, host, value string) erro
 		return err
 	}
 	count := 0
+	otherChallenges := 0
+	unrelated := make([]Record, 0, len(before))
 	for _, r := range before {
 		if streamACMEMatch(r, name, c.ManagedDomain) && r.Type != "TXT" {
 			return errors.New("acme_challenge_record_conflict")
 		}
 		if streamACMEMatch(r, name, c.ManagedDomain) && r.Type == "TXT" && r.Value == value {
 			count++
+		} else {
+			unrelated = append(unrelated, r)
+			if streamACMEMatch(r, name, c.ManagedDomain) && r.Type == "TXT" {
+				otherChallenges++
+			}
 		}
 	}
 	if count > 1 {
 		return errors.New("acme_challenge_not_unique")
 	}
 	if count == 0 {
+		if otherChallenges > 0 {
+			return errors.New("acme_challenge_concurrent_value")
+		}
 		if err := c.putRecords(ctx, c.ManagedDomain, []Record{{Name: name, Type: "TXT", Value: value, TTL: 60}}); err != nil {
 			return err
 		}
@@ -380,13 +390,19 @@ func (c *Client) PresentStreamACME(ctx context.Context, host, value string) erro
 		return err
 	}
 	count = 0
+	remaining := make([]Record, 0, len(after))
 	for _, r := range after {
 		if streamACMEMatch(r, name, c.ManagedDomain) && r.Type == "TXT" && r.Value == value {
 			count++
+		} else {
+			remaining = append(remaining, r)
 		}
 	}
 	if count != 1 {
 		return errors.New("acme_challenge_not_verified")
+	}
+	if !recordsEqual(unrelated, remaining) {
+		return errors.New("acme_challenge_unrelated_changed")
 	}
 	return nil
 }
