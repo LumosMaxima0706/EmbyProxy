@@ -238,6 +238,31 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "operation": h.publicIngress.status(r.Context()), "scheduler": h.publicIngress.schedulerStatus(r.Context())})
 		return
 	}
+	if path == "/api/admin/public-ingress/confirm-previous" && r.Method == http.MethodPost {
+		if h.publicIngress == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "error": "PUBLIC_INGRESS_UNAVAILABLE"})
+			return
+		}
+		var body struct {
+			OperationID string `json:"operation_id"`
+			Confirm     bool   `json:"confirm"`
+		}
+		if !decodeAuthJSON(w, r, &body) {
+			return
+		}
+		if !body.Confirm || body.OperationID == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "CONFIRMATION_REQUIRED"})
+			return
+		}
+		state, err := h.publicIngress.confirmPreviousIngress(r.Context(), body.OperationID)
+		if err != nil {
+			writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "error": "RECOVERY_VERIFICATION_FAILED", "operation": state})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "operation": state})
+		return
+	}
+
 	if path == "/api/admin/public-ingress/switch" && r.Method == http.MethodPost {
 		if h.publicIngress == nil {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "error": "PUBLIC_INGRESS_UNAVAILABLE"})

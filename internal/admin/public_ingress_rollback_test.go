@@ -17,13 +17,14 @@ import (
 func TestPublicIngressRollbackRequiresPublicNodeIdentity(t *testing.T) {
 	h := newAuthTestHandler(t, config.Config{PublicIngressHost: "stream.example.com"})
 	puts := 0
+	providerAddress := "1.1.1.1"
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPut {
 			puts++
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"items": []spaceship.Record{{Name: "stream", Type: "A", Address: "1.1.1.1", TTL: 60}}, "total": 1})
+		_ = json.NewEncoder(w).Encode(map[string]any{"items": []spaceship.Record{{Name: "stream", Type: "A", Address: providerAddress, TTL: 60}}, "total": 1})
 	}))
 	defer provider.Close()
 	h.dnsAutomation = &spaceship.Client{BaseURL: provider.URL, APIKey: "k", APISecret: "s", ManagedDomain: "example.com"}
@@ -59,5 +60,36 @@ func TestPublicIngressRollbackRequiresPublicNodeIdentity(t *testing.T) {
 	got, err = s.rollback(context.Background(), state, "public_request_failed", nil)
 	if err == nil || got.Phase != "rolled_back" || !got.RollbackVerified || got.ObservedNodeID != "old-node" || puts != 0 {
 		t.Fatalf("correct node rollback=%+v err=%v puts=%d", got, err, puts)
+	}
+	state.OperationID = "recover-locked"
+	state.Phase = "rollback_failed"
+	if err := s.save(context.Background(), state); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.confirmPreviousIngress(context.Background(), "wrong-id"); err == nil {
+		t.Fatal("wrong operation unlocked recovery")
+	}
+	if stored := s.status(context.Background()); stored.Phase != "rollback_failed" {
+		t.Fatalf("wrong-id changed state: %+v", stored)
+	}
+	providerAddress = "9.9.9.9"
+	if _, err := s.confirmPreviousIngress(context.Background(), state.OperationID); err == nil || !strings.Contains(err.Error(), "provider_not_original") {
+		t.Fatalf("third-party provider accepted: %v", err)
+	}
+	if stored := s.status(context.Background()); stored.Phase != "rollback_failed" {
+		t.Fatalf("provider mismatch changed state: %+v", stored)
+	}
+	providerAddress = "1.1.1.1"
+	observedNode = "wrong-node"
+	if _, err := s.confirmPreviousIngress(context.Background(), state.OperationID); err == nil {
+		t.Fatal("wrong public node unlocked recovery")
+	}
+	if stored := s.status(context.Background()); stored.Phase != "rollback_failed" {
+		t.Fatalf("mismatch changed state: %+v", stored)
+	}
+	observedNode = "old-node"
+	got, err = s.confirmPreviousIngress(context.Background(), state.OperationID)
+	if err != nil || got.Phase != "rolled_back" || !got.RollbackVerified || got.ObservedNodeID != "old-node" || puts != 0 {
+		t.Fatalf("recovery=%+v err=%v puts=%d", got, err, puts)
 	}
 }
