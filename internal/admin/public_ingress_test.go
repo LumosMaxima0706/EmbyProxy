@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +15,50 @@ import (
 	"embyproxy/internal/storage"
 )
 
+func TestPublicIngressOperationSurvivesDatabaseRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "controller.db")
+	store, err := storage.New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &Handler{cfg: config.Config{PublicIngressHost: "stream.example.com"}, store: store}
+	s := newPublicIngressSwitcher(h)
+	ctx := context.Background()
+	verified := publicIngressState{OperationID: "verified-old", Phase: "verified", Mode: "fixed", ActiveNodeID: "node-a", RequestVerified: true}
+	if err := s.save(ctx, verified); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err = storage.New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s = newPublicIngressSwitcher(&Handler{cfg: h.cfg, store: store})
+	if got := s.status(ctx); got.OperationID != verified.OperationID || got.ActiveNodeID != verified.ActiveNodeID || !got.RequestVerified {
+		t.Fatalf("verified operation lost: %+v", got)
+	}
+	stuck := publicIngressState{OperationID: "pending-dns", Phase: "submitting_dns", Mode: "fixed", ActiveNodeID: "node-a"}
+	if err := s.save(ctx, stuck); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err = storage.New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	s = newPublicIngressSwitcher(&Handler{cfg: h.cfg, store: store})
+	if got := s.status(ctx); got.Phase != "submitting_dns" || got.OperationID != stuck.OperationID {
+		t.Fatalf("in-flight operation lost on restart: %+v", got)
+	}
+	if got, err := s.switchTo(ctx, "node-b", "admin_manual", "preferred"); err == nil || got.OperationID != stuck.OperationID {
+		t.Fatalf("in-flight state was overwritten: %+v err=%v", got, err)
+	}
+}
 func TestPublicIngressRecoveryAndFixedMode(t *testing.T) {
 	h := newAuthTestHandler(t, config.Config{PublicIngressHost: "stream.example.com"})
 	s := newPublicIngressSwitcher(h)
