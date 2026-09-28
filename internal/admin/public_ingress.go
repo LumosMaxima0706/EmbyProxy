@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -235,17 +236,28 @@ func (s *publicIngressSwitcher) preflight(ctx context.Context, n storage.ProxyNo
 	if strings.TrimSpace(resp.Header.Get("X-EmbyProxy-Node-ID")) != n.ID {
 		return errors.New("preflight_node_identity_mismatch")
 	}
-	route, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+s.record+"/https/v1.uhdnow.com/443/System/Info/Public", nil)
-	if err != nil {
-		return err
+	paths := make([]string, 0, len(s.h.cfg.PublicMediaNodePaths))
+	for _, path := range s.h.cfg.PublicMediaNodePaths {
+		paths = append(paths, strings.TrimRight(path, "/")+"/System/Info/Public")
 	}
-	routeResp, err := client.Do(route)
-	if err != nil {
-		return err
+	if len(paths) == 0 {
+		return errors.New("preflight_public_routes_unconfigured")
 	}
-	defer routeResp.Body.Close()
-	if routeResp.StatusCode != http.StatusOK {
-		return fmt.Errorf("preflight_route_status_%d", routeResp.StatusCode)
+	sort.Strings(paths)
+	for _, path := range paths {
+		route, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+s.record+path, nil)
+		if err != nil {
+			return err
+		}
+		routeResp, err := client.Do(route)
+		if err != nil {
+			return err
+		}
+		_, _ = io.Copy(io.Discard, io.LimitReader(routeResp.Body, 4096))
+		_ = routeResp.Body.Close()
+		if routeResp.StatusCode != http.StatusOK {
+			return fmt.Errorf("preflight_route_status_%d", routeResp.StatusCode)
+		}
 	}
 	return nil
 }
