@@ -20,3 +20,17 @@ func TestWebSocketHeadersSetUpgrade(t *testing.T) {
 		t.Fatalf("headers=%v", headers)
 	}
 }
+
+func TestInternalSelectionMarkerNeverReachesUpstream(t *testing.T) {
+	target := Target{Host: "media.example", Port: 443}
+	for _, value := range []string{"1", "2", "client"} {
+		input := http.Header{}
+		input.Set("X-EmbyProxy-Selected-Node", value)
+		if got := outboundHeaders(input, target, false).Get("X-EmbyProxy-Selected-Node"); got != "" {
+			t.Fatalf("HTTP marker leaked: %q", got)
+		}
+		if got := websocketHeaders(input, target, false).Get("X-EmbyProxy-Selected-Node"); got != "" {
+			t.Fatalf("WebSocket marker leaked: %q", got)
+		}
+	}
+}
