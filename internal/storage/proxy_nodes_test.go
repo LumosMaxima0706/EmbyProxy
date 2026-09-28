@@ -648,3 +648,26 @@ func TestEdgeUsageOutboxSurvivesRestart(t *testing.T) {
 		t.Fatalf("ack event=%+v err=%v", event, err)
 	}
 }
+func TestEdgeUsageOutboxMigratesLegacySchema(t *testing.T) {
+	store, err := New(filepath.Join(t.TempDir(), "legacy-edge.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	if _, err := store.DB().ExecContext(ctx, `CREATE TABLE edge_usage_outbox (event_id TEXT PRIMARY KEY, response_bytes INTEGER NOT NULL, sampled_at INTEGER NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO edge_usage_outbox VALUES('legacy-event-123456',7,?)`, time.Now().Unix()); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if err := store.InitEdgeUsageOutbox(ctx); err != nil {
+			t.Fatalf("migration pass %d: %v", i, err)
+		}
+	}
+	event, err := store.NextEdgeUsage(ctx)
+	if err != nil || event == nil || event.Bytes != 7 {
+		t.Fatalf("migrated event=%+v err=%v", event, err)
+	}
+}
