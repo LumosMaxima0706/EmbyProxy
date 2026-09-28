@@ -11,6 +11,25 @@ import (
 	"testing"
 )
 
+func TestStreamACMERejectsConflictingRecordWithoutWrite(t *testing.T) {
+	writes := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			_ = json.NewEncoder(w).Encode(map[string]any{"items": []Record{{Name: "_acme-challenge.stream", Type: "CNAME", Address: "other.example.com"}}, "total": 1})
+			return
+		}
+		writes++
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	c := &Client{BaseURL: srv.URL, APIKey: "k", APISecret: "s", ManagedDomain: "example.com"}
+	if err := c.PresentStreamACME(context.Background(), "stream.example.com", strings.Repeat("a", 43)); err == nil || !strings.Contains(err.Error(), "record_conflict") {
+		t.Fatalf("conflicting record not rejected: %v", err)
+	}
+	if writes != 0 {
+		t.Fatalf("conflict caused provider write: %d", writes)
+	}
+}
 func TestStreamACMERejectsUnmanagedHostAndUnsafeValue(t *testing.T) {
 	writes := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

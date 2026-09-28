@@ -360,6 +360,9 @@ func (c *Client) PresentStreamACME(ctx context.Context, host, value string) erro
 	}
 	count := 0
 	for _, r := range before {
+		if streamACMEMatch(r, name, c.ManagedDomain) && r.Type != "TXT" {
+			return errors.New("acme_challenge_record_conflict")
+		}
 		if streamACMEMatch(r, name, c.ManagedDomain) && r.Type == "TXT" && r.Value == value {
 			count++
 		}
