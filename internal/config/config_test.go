@@ -91,6 +91,27 @@ func TestLoadReadsPublicMediaURLConfiguration(t *testing.T) {
 	}
 }
 
+func TestExtraLegacyPathsAreExplicitAndSafe(t *testing.T) {
+	t.Setenv("PUBLIC_MEDIA_NODE_PATHS_JSON", `{"uhd":"/https/v1.uhdnow.com/443"}`)
+	t.Setenv("PUBLIC_MEDIA_EXTRA_PATHS_JSON", `{"uhd-vod2":"/https/v1-vod2.uhdnow.com/443"}`)
+	cfg, err := Load()
+	if err != nil || cfg.PublicMediaExtraPaths["uhd-vod2"] == "" {
+		t.Fatalf("extra paths=%v err=%v", cfg.PublicMediaExtraPaths, err)
+	}
+	for _, raw := range []string{
+		`{"uhd":"/https/other.example/443"}`,
+		`{"other":"/https/127.0.0.1/443"}`,
+		`{"other":"/https/evil.example/80"}`,
+		`{"other":"/https/evil.example/443/extra"}`,
+		`{"other":"/https/evil.example%2fprivate/443"}`,
+	} {
+		t.Setenv("PUBLIC_MEDIA_EXTRA_PATHS_JSON", raw)
+		if _, err := Load(); err == nil {
+			t.Fatalf("accepted unsafe legacy config %s", raw)
+		}
+	}
+}
+
 func TestPublicMediaURLConfigurationFailsClosed(t *testing.T) {
 	for _, tt := range []struct {
 		name  string

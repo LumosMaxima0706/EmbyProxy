@@ -1187,7 +1187,13 @@ func (h *Handler) handleEdgeEnrollment(w http.ResponseWriter, r *http.Request, p
 		}{NodeID: id, Nodes: nodes, Routes: make([]struct {
 			Route storage.ManagedRoute       `json:"route"`
 			Lines []storage.ManagedRouteLine `json:"lines"`
-		}, 0, len(routes)), RedirectEndpoints: map[string][]storage.ProxyRedirectEndpoint{}, LegacyPublicPaths: h.cfg.PublicMediaNodePaths}
+		}, 0, len(routes)), RedirectEndpoints: map[string][]storage.ProxyRedirectEndpoint{}, LegacyPublicPaths: map[string]string{}}
+		for name, path := range h.cfg.PublicMediaNodePaths {
+			response.LegacyPublicPaths[name] = path
+		}
+		for name, path := range h.cfg.PublicMediaExtraPaths {
+			response.LegacyPublicPaths[name] = path
+		}
 		for _, route := range routes {
 			if !route.Enabled || !route.Public {
 				continue

@@ -236,8 +236,11 @@ func (s *publicIngressSwitcher) preflight(ctx context.Context, n storage.ProxyNo
 	if strings.TrimSpace(resp.Header.Get("X-EmbyProxy-Node-ID")) != n.ID {
 		return errors.New("preflight_node_identity_mismatch")
 	}
-	paths := make([]string, 0, len(s.h.cfg.PublicMediaNodePaths))
+	paths := make([]string, 0, len(s.h.cfg.PublicMediaNodePaths)+len(s.h.cfg.PublicMediaExtraPaths))
 	for _, path := range s.h.cfg.PublicMediaNodePaths {
+		paths = append(paths, strings.TrimRight(path, "/")+"/System/Info/Public")
+	}
+	for _, path := range s.h.cfg.PublicMediaExtraPaths {
 		paths = append(paths, strings.TrimRight(path, "/")+"/System/Info/Public")
 	}
 	if len(paths) == 0 {

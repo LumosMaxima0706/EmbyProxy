@@ -48,6 +48,7 @@ type Config struct {
 	OwnerAdminHost                  string
 	PublicMediaBaseURL              string
 	PublicMediaNodePaths            map[string]string
+	PublicMediaExtraPaths           map[string]string
 	PublicationAgentSocket          string
 	// PlaybackCredentialDir stores per-publication Emby tokens outside SQLite.
 	// It is intentionally a local runtime directory, never a Git path.
@@ -189,6 +190,18 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	publicMediaExtraPaths, err := parsePublicMediaNodePaths(os.Getenv("PUBLIC_MEDIA_EXTRA_PATHS_JSON"))
+	if err != nil {
+		return Config{}, fmt.Errorf("PUBLIC_MEDIA_EXTRA_PATHS_JSON: %w", err)
+	}
+	for name, path := range publicMediaExtraPaths {
+		if !validLegacyPublicPath(path) {
+			return Config{}, fmt.Errorf("PUBLIC_MEDIA_EXTRA_PATHS_JSON contains an invalid legacy path")
+		}
+		if _, exists := publicMediaNodePaths[name]; exists {
+			return Config{}, fmt.Errorf("PUBLIC_MEDIA_EXTRA_PATHS_JSON duplicates a public media node")
+		}
+	}
 	ownerAdminHost := strings.ToLower(strings.TrimSpace(os.Getenv("OWNER_ADMIN_HOST")))
 	enrollmentControllerURL := strings.TrimSpace(os.Getenv("ENROLLMENT_CONTROLLER_URL"))
 	if enrollmentControllerURL == "" && ownerAdminHost != "" {
@@ -224,6 +237,7 @@ func Load() (Config, error) {
 		OwnerAdminHost:                  ownerAdminHost,
 		PublicMediaBaseURL:              publicMediaBaseURL,
 		PublicMediaNodePaths:            publicMediaNodePaths,
+		PublicMediaExtraPaths:           publicMediaExtraPaths,
 		PublicationAgentSocket:          strings.TrimSpace(os.Getenv("PUBLICATION_AGENT_SOCKET")),
 		PlaybackCredentialDir:           envString("PLAYBACK_CREDENTIAL_DIR", "/var/lib/embyproxy-gsy-sidecar/playback-credentials"),
 		MediaProxyRoutes:                envBool("MEDIAPROXY_ROUTES_ENABLED", false),
@@ -328,6 +342,25 @@ func parsePublicMediaNodePaths(raw string) (map[string]string, error) {
 		normalized[name] = publicPath
 	}
 	return normalized, nil
+}
+
+func validLegacyPublicPath(path string) bool {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) != 3 || parts[0] != "https" || parts[1] == "" || !strings.Contains(parts[1], ".") || net.ParseIP(parts[1]) != nil || strings.ContainsAny(parts[1], ":@\\% ") {
+		return false
+	}
+	for _, label := range strings.Split(parts[1], ".") {
+		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, ch := range label {
+			if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '-') {
+				return false
+			}
+		}
+	}
+	port, err := strconv.Atoi(parts[2])
+	return err == nil && port == 443 && len(parts[1]) <= 253 && path == "/"+strings.Join(parts, "/")
 }
 
 func (c Config) Addr() string {

@@ -618,11 +618,15 @@ func TestEdgeArtifactAndSnapshotRequireNodeCredential(t *testing.T) {
 	}
 	snapshotReq := httptest.NewRequest(http.MethodGet, "/api/edge/config/"+node.ID, nil)
 	h.cfg.PublicMediaNodePaths = map[string]string{"uhd": "/https/v1.uhdnow.com/443"}
+	h.cfg.PublicMediaExtraPaths = map[string]string{"uhd-vod2": "/https/v1-vod2.uhdnow.com/443"}
 	snapshotReq.Header.Set("X-EmbyProxy-Node-Credential", credential)
 	snapshotRec := httptest.NewRecorder()
 	h.ServeHTTP(snapshotRec, snapshotReq)
-	if snapshotRec.Code != http.StatusOK || !strings.Contains(snapshotRec.Body.String(), `"slug":"demo"`) || !strings.Contains(snapshotRec.Body.String(), `"legacy_public_paths":{"uhd":"/https/v1.uhdnow.com/443"}`) || strings.Contains(snapshotRec.Body.String(), "strong-admin-token") || strings.Contains(snapshotRec.Body.String(), credential) {
+	if snapshotRec.Code != http.StatusOK || !strings.Contains(snapshotRec.Body.String(), `"slug":"demo"`) || !strings.Contains(snapshotRec.Body.String(), `"uhd":"/https/v1.uhdnow.com/443"`) || strings.Contains(snapshotRec.Body.String(), "strong-admin-token") || strings.Contains(snapshotRec.Body.String(), credential) {
 		t.Fatalf("snapshot response status=%d body=%s", snapshotRec.Code, snapshotRec.Body.String())
+	}
+	if !strings.Contains(snapshotRec.Body.String(), `"uhd-vod2":"/https/v1-vod2.uhdnow.com/443"`) {
+		t.Fatalf("extra legacy alias missing from edge snapshot: %s", snapshotRec.Body.String())
 	}
 }
 
