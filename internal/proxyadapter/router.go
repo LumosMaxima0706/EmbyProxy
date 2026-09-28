@@ -75,6 +75,10 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	if parts[0] == "admin" || parts[0] == "api" || parts[0] == "health" || parts[0] == "http" || parts[0] == "https" {
+		if r.edgeLocal && parts[0] == "https" && r.serveLegacyEdge(w, req, parts) {
+			return
+		}
+
 		r.serveFallback(w, req)
 		return
 	}
