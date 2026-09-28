@@ -69,7 +69,10 @@ func newPublicIngressSwitcher(h *Handler) *publicIngressSwitcher {
 
 func (s *publicIngressSwitcher) status(ctx context.Context) publicIngressState {
 	var state publicIngressState
-	_, _ = s.h.store.KV().GetJSON(ctx, publicIngressStateKey, &state)
+	raw, found, err := s.h.store.KV().Get(ctx, publicIngressStateKey)
+	if err != nil || (found && (json.Unmarshal([]byte(raw), &state) != nil || state.OperationID == "" || state.Phase == "")) {
+		return publicIngressState{Phase: "recovery_required", Error: "public_ingress_state_unreadable"}
+	}
 	return state
 }
 
