@@ -47,7 +47,7 @@ func TestPublicIngressRecoveryAndFixedMode(t *testing.T) {
 	}
 }
 func TestPublicIngressCooldownDoesNotHideHealthFailure(t *testing.T) {
-	h := newAuthTestHandler(t, config.Config{PublicIngressHost: "stream.example.com"})
+	h := newAuthTestHandler(t, config.Config{PublicIngressHost: "stream.example.com", AdminToken: "strong-admin-token"})
 	ctx := context.Background()
 	enrollment, _, err := h.store.CreateProxyNode(ctx, storage.ProxyNode{Name: "active", PublicAddress: "https://edge.example.com", ResetDay: 1}, time.Minute)
 	if err != nil {
@@ -60,6 +60,19 @@ func TestPublicIngressCooldownDoesNotHideHealthFailure(t *testing.T) {
 	}
 	if err := s.reconcile(ctx); err == nil || !strings.Contains(err.Error(), "no_eligible_public_ingress_candidate") {
 		t.Fatalf("unhealthy node held by cooldown: %v", err)
+	}
+	status := newPublicIngressSwitcher(h).schedulerStatus(ctx)
+	if status.Error != "no_eligible_public_ingress_candidate" || status.Trigger != "automatic_health" || status.UpdatedAt == 0 {
+		t.Fatalf("scheduler status was not persisted: %+v", status)
+	}
+	if got := s.status(ctx); got.OperationID != state.OperationID || got.Phase != "verified" {
+		t.Fatalf("scheduler warning overwrote verified transaction: %+v", got)
+	}
+	h.SetDNSAutomationClient(&spaceship.Client{ManagedDomain: "example.com"})
+	login := serveAdminJSON(t, h, http.MethodPost, "/admin/auth/login", map[string]any{"token": "strong-admin-token"}, nil)
+	response := serveAdminJSON(t, h, http.MethodGet, "/api/admin/public-ingress/status", nil, login.Result().Cookies()[0])
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"error":"no_eligible_public_ingress_candidate"`) || !strings.Contains(response.Body.String(), state.OperationID) {
+		t.Fatalf("status API did not expose warning and operation: %d %s", response.Code, response.Body.String())
 	}
 }
 func TestPublicIngressThresholdCooldown(t *testing.T) {
@@ -95,6 +108,9 @@ func TestPublicIngressThresholdCooldown(t *testing.T) {
 	}
 	if err := s.reconcile(ctx); err != nil {
 		t.Fatalf("fixed mode must not auto-switch: %v", err)
+	}
+	if warning := s.schedulerStatus(ctx); warning.Error != "" {
+		t.Fatalf("fixed mode retained automatic warning: %+v", warning)
 	}
 }
 

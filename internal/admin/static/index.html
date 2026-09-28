@@ -574,6 +574,7 @@ tr:last-child td{border-bottom:0}
         <section id="tabProxyNodes" class="stats-deck" style="display:none">
           <div class="context-card" id="dnsAutomationCard"><div class="stats-top"><div><strong>DNS 自动化</strong><p class="form-hint">Spaceship 凭据仅提交到 Controller，保存后不会再次显示。</p></div><button class="btn btn-sm" onclick="testDNSAutomation()">测试连接</button></div><div class="form-grid"><label>托管域名<input id="dnsManagedDomain" placeholder="149077530.xyz"></label><label>Spaceship API Key<input id="dnsAPIKey" type="password" autocomplete="off" placeholder="输入 API Key"></label><label>Spaceship API Secret<input id="dnsAPISecret" type="password" autocomplete="off" placeholder="输入 API Secret"></label><label>默认 TTL<input id="dnsTTL" type="number" value="300" min="30" max="86400"></label><button class="primary-action" onclick="saveDNSAutomation()">保存 DNS 配置</button></div><div id="dnsAutomationStatus" class="form-hint"></div></div>
           <div class="stats-top"><div><strong>反代节点</strong><p class="form-hint">调度、连接和远端生命周期统一管理。已移除节点默认隐藏。</p></div><button class="primary-action" onclick="openProxyNodeModal()">添加反代 VPS</button></div>
+          <p id="publicIngressSchedulerStatus" class="form-hint" role="status" aria-live="polite"></p>
           <div class="signal-grid proxy-summary" id="proxyNodeSummary"></div>
           <div class="stats-top proxy-filterbar"><select id="proxyNodeFilter" class="select-input" onchange="renderProxyNodeTable()"><option value="active">可用</option><option value="all">全部</option><option value="issue">异常（degraded）</option><option value="disabled">已停用/撤销</option><option value="removed">已移除</option></select><button class="btn" onclick="loadProxyNodes()">刷新</button></div>
           <div class="table-wrap"><table><thead><tr><th>节点 / Endpoint</th><th>状态</th><th>播放</th><th>入口</th><th>接纳</th><th>流量</th><th>优先级</th><th>操作</th></tr></thead><tbody id="proxyNodesBody"><tr><td colspan="8" class="table-empty">暂无反代节点</td></tr></tbody></table></div>
@@ -1765,6 +1766,18 @@ function switchTab(name, btn) {
 async function loadProxyNodes() {
   const r = await authFetch('/api/admin/proxy-nodes');
   if (!r.ok) { toast('加载反代节点失败: ' + authErrorMessage(r.error), 'err'); return; }
+  const ingress = await authFetch('/api/admin/public-ingress/status');
+  const notice = document.getElementById('publicIngressSchedulerStatus');
+  if (notice) {
+    const warning = ingress.scheduler;
+    if (ingress.ok && warning?.error) {
+      const reason = warning.error === 'no_eligible_public_ingress_candidate' ? '\u81ea\u52a8\u5207\u6362\u65e0\u53ef\u7528 VPS' : '\u81ea\u52a8\u5207\u6362\u9700\u8981\u5904\u7406';
+      const date = Number(warning.updated_at) ? new Date(Number(warning.updated_at) * 1000).toLocaleString() : '';
+      notice.textContent = `${reason}\u00b7${date}`;
+    } else {
+      notice.textContent = ingress.ok ? '' : '\u516c\u5f00\u5165\u53e3\u72b6\u6001\u6682\u4e0d\u53ef\u7528';
+    }
+  }
   window.proxyNodes = Array.isArray(r.nodes) ? r.nodes : [];
   renderProxyNodeTable();
 }

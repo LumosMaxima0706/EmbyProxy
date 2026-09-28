@@ -21,6 +21,7 @@ import (
 )
 
 const publicIngressStateKey = "failover:public-ingress"
+const publicIngressSchedulerKey = "failover:public-ingress:scheduler"
 const publicIngressHistoryPrefix = "failover:public-ingress:operation:"
 const automaticIngressCooldown = time.Hour
 
@@ -45,6 +46,12 @@ type publicIngressState struct {
 	CompletedAt       int64  `json:"completed_at,omitempty"`
 }
 
+type publicIngressSchedulerStatus struct {
+	Error     string `json:"error,omitempty"`
+	Trigger   string `json:"trigger,omitempty"`
+	UpdatedAt int64  `json:"updated_at,omitempty"`
+}
+
 type publicIngressSwitcher struct {
 	mu         sync.Mutex
 	h          *Handler
@@ -64,6 +71,16 @@ func (s *publicIngressSwitcher) status(ctx context.Context) publicIngressState {
 	var state publicIngressState
 	_, _ = s.h.store.KV().GetJSON(ctx, publicIngressStateKey, &state)
 	return state
+}
+
+func (s *publicIngressSwitcher) schedulerStatus(ctx context.Context) publicIngressSchedulerStatus {
+	var status publicIngressSchedulerStatus
+	_, _ = s.h.store.KV().GetJSON(ctx, publicIngressSchedulerKey, &status)
+	return status
+}
+
+func (s *publicIngressSwitcher) saveSchedulerStatus(ctx context.Context, code, trigger string) error {
+	return s.h.store.KV().Put(ctx, publicIngressSchedulerKey, publicIngressSchedulerStatus{Error: code, Trigger: trigger, UpdatedAt: s.now().Unix()})
 }
 
 func (s *publicIngressSwitcher) save(ctx context.Context, state publicIngressState) error {
@@ -161,6 +178,7 @@ func (s *publicIngressSwitcher) switchTo(ctx context.Context, nodeID, trigger, m
 	if err = s.save(ctx, state); err != nil {
 		return state, err
 	}
+	_ = s.saveSchedulerStatus(ctx, "", "")
 	return state, nil
 }
 
@@ -391,6 +409,9 @@ func (s *publicIngressSwitcher) reconcile(ctx context.Context) error {
 		return errors.New("public_ingress_recovery_required")
 	}
 	if state.Mode == "fixed" {
+		if s.schedulerStatus(ctx).Error != "" {
+			_ = s.saveSchedulerStatus(ctx, "", "")
+		}
 		return nil
 	}
 	if state.Phase != "verified" && state.Phase != "rolled_back" {
@@ -410,6 +431,9 @@ func (s *publicIngressSwitcher) reconcile(ctx context.Context) error {
 	}
 	needsSwitch := active == nil || !eligiblePublicIngressNode(*active)
 	trigger := "automatic_health"
+	if !needsSwitch && (active.QuotaBytes <= 0 || active.ThresholdPercent <= 0 || float64(active.UsedBytes)*100 < float64(active.QuotaBytes)*active.ThresholdPercent) && s.schedulerStatus(ctx).Error != "" {
+		_ = s.saveSchedulerStatus(ctx, "", "")
+	}
 	if !needsSwitch && state.Phase == "verified" && s.now().Sub(time.Unix(state.CompletedAt, 0)) < automaticIngressCooldown {
 		return nil
 	}
@@ -426,6 +450,9 @@ func (s *publicIngressSwitcher) reconcile(ctx context.Context) error {
 			continue
 		}
 		_, err = s.switchTo(ctx, candidate.ID, trigger, "preferred")
+		return err
+	}
+	if err := s.saveSchedulerStatus(ctx, "no_eligible_public_ingress_candidate", trigger); err != nil {
 		return err
 	}
 	return errors.New("no_eligible_public_ingress_candidate")

@@ -235,7 +235,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "error": "PUBLIC_INGRESS_UNAVAILABLE"})
 			return
 		}
-		writePublicIngressState(w, http.StatusOK, h.publicIngress.status(r.Context()), nil)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "operation": h.publicIngress.status(r.Context()), "scheduler": h.publicIngress.schedulerStatus(r.Context())})
 		return
 	}
 	if path == "/api/admin/public-ingress/switch" && r.Method == http.MethodPost {
