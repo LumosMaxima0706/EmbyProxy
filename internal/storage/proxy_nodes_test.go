@@ -593,6 +593,23 @@ func TestEdgeUsageOutboxSurvivesRestart(t *testing.T) {
 	if err := store.QueueEdgeUsage(ctx, 3, time.Now()); err != nil {
 		t.Fatal(err)
 	}
+	first, err := store.NextEdgeUsage(ctx)
+	if err != nil || first == nil {
+		t.Fatalf("first=%+v err=%v", first, err)
+	}
+	if err := store.DelayEdgeUsage(ctx, first.ID, 10*time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.QueueEdgeUsage(ctx, 5, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.NextEdgeUsage(ctx)
+	if err != nil || second == nil || second.Bytes != 5 {
+		t.Fatalf("second=%+v err=%v", second, err)
+	}
+	if err := store.AcknowledgeEdgeUsage(ctx, second.ID); err != nil {
+		t.Fatal(err)
+	}
 	if pending, err := store.EdgeUsagePending(ctx); err != nil || pending != 1 {
 		t.Fatalf("pending=%d err=%v", pending, err)
 	}
@@ -605,6 +622,15 @@ func TestEdgeUsageOutboxSurvivesRestart(t *testing.T) {
 	}
 	defer store.Close()
 	if err := store.InitEdgeUsageOutbox(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if pending, err := store.EdgeUsagePending(ctx); err != nil || pending != 1 {
+		t.Fatalf("pending after restart=%d err=%v", pending, err)
+	}
+	if event, err := store.NextEdgeUsage(ctx); err != nil || event != nil {
+		t.Fatalf("deferred event uploaded early: %+v %v", event, err)
+	}
+	if _, err := store.DB().ExecContext(ctx, `UPDATE edge_usage_outbox SET next_attempt_at=0`); err != nil {
 		t.Fatal(err)
 	}
 	event, err := store.NextEdgeUsage(ctx)

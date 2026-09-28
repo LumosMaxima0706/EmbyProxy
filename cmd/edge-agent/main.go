@@ -260,6 +260,7 @@ func main() {
 								_ = store.AcknowledgeEdgeUsage(ctx, event.ID)
 							} else {
 								fmt.Fprintln(os.Stderr, "edge usage upload status:", res.StatusCode)
+								_ = store.DelayEdgeUsage(ctx, event.ID, 10*time.Minute)
 							}
 						}
 					}
