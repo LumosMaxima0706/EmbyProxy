@@ -534,3 +534,85 @@ func TestProxyNodeSchemaBackfillsResetSchedule(t *testing.T) {
 		t.Fatalf("node=%+v err=%v", node, err)
 	}
 }
+func TestProxyNodeUsageEventDedupAndCycle(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "usage.db")
+	store, err := New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	enrollment, _, err := store.CreateProxyNode(ctx, ProxyNode{Name: "metered-edge", ResetDay: 1}, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		err := store.RecordProxyNodeUsageEvent(ctx, enrollment.NodeID, "event-123456789abcdef", 1024, time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err = New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordProxyNodeUsageEvent(ctx, enrollment.NodeID, "event-123456789abcdef", 1024, time.Now()); err != nil {
+		t.Fatalf("retry after controller restart: %v", err)
+	}
+	node, _ := store.GetProxyNode(ctx, enrollment.NodeID)
+	if node.UsedBytes != 1024 {
+		t.Fatalf("duplicate counted: %d", node.UsedBytes)
+	}
+	if err := store.RecordProxyNodeUsageEvent(ctx, enrollment.NodeID, "event-123456789abcdef", 2048, time.Now()); err == nil {
+		t.Fatal("conflicting duplicate accepted")
+	}
+	if err := store.RecordProxyNodeUsageEvent(ctx, enrollment.NodeID, "event-222222222222222", 500, time.Now().AddDate(0, -1, 0)); err == nil {
+		t.Fatal("old cycle event accepted")
+	}
+	if err := store.RecordProxyNodeUsageEvent(ctx, enrollment.NodeID, "event-333333333333333", -1, time.Now()); err == nil {
+		t.Fatal("negative bytes accepted")
+	}
+	node, _ = store.GetProxyNode(ctx, enrollment.NodeID)
+	if node.UsedBytes != 1024 {
+		t.Fatalf("bad event changed usage: %d", node.UsedBytes)
+	}
+}
+func TestEdgeUsageOutboxSurvivesRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "edge.db")
+	store, err := New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := store.InitEdgeUsageOutbox(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.QueueEdgeUsage(ctx, 3, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err = New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.InitEdgeUsageOutbox(ctx); err != nil {
+		t.Fatal(err)
+	}
+	event, err := store.NextEdgeUsage(ctx)
+	if err != nil || event == nil || event.Bytes != 3 {
+		t.Fatalf("event=%+v err=%v", event, err)
+	}
+	if err := store.AcknowledgeEdgeUsage(ctx, event.ID); err != nil {
+		t.Fatal(err)
+	}
+	event, err = store.NextEdgeUsage(ctx)
+	if err != nil || event != nil {
+		t.Fatalf("ack event=%+v err=%v", event, err)
+	}
+}

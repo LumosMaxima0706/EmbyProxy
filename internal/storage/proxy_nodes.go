@@ -152,6 +152,11 @@ CREATE TABLE IF NOT EXISTS proxy_nodes (
 	 agent_version TEXT NOT NULL DEFAULT '', agent_commit TEXT NOT NULL DEFAULT '', decommission_capable INTEGER NOT NULL DEFAULT 0, credential_hash TEXT NOT NULL DEFAULT '',
  last_error TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS proxy_node_usage_events (
+ node_id TEXT NOT NULL, event_id TEXT NOT NULL, response_bytes INTEGER NOT NULL,
+ sampled_at INTEGER NOT NULL, PRIMARY KEY(node_id,event_id),
+ FOREIGN KEY(node_id) REFERENCES proxy_nodes(id) ON DELETE CASCADE
+);
 CREATE TABLE IF NOT EXISTS proxy_node_enrollments (
  id TEXT PRIMARY KEY, node_id TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, expires_at INTEGER NOT NULL,
  consumed_at INTEGER NOT NULL DEFAULT 0, revoked INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL,
@@ -823,6 +828,70 @@ func (s *Store) RecordProxyNodeUsage(ctx context.Context, id string, usedBytes i
 		return sql.ErrNoRows
 	}
 	return nil
+}
+
+// RecordProxyNodeUsageEvent deduplicates an edge response in the active cycle.
+func (s *Store) RecordProxyNodeUsageEvent(ctx context.Context, id, eventID string, bytes int64, sampledAt time.Time) error {
+	if id == "" || len(eventID) < 16 || len(eventID) > 96 || bytes <= 0 || bytes > 1<<40 || sampledAt.IsZero() {
+		return errors.New("invalid_usage_event")
+	}
+	for _, c := range eventID {
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_') {
+			return errors.New("invalid_usage_event")
+		}
+	}
+	now := time.Now()
+	if sampledAt.After(now.Add(2*time.Minute)) || sampledAt.Before(now.Add(-45*24*time.Hour)) {
+		return errors.New("usage_event_out_of_range")
+	}
+	if err := s.advanceProxyNodeCycle(ctx, id, now); err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var nextReset int64
+	var state string
+	if err := tx.QueryRowContext(ctx, `SELECT next_reset_at,state FROM proxy_nodes WHERE id=?`, id).Scan(&nextReset, &state); err != nil {
+		return err
+	}
+	if state == "revoked" || state == "removed" || nextReset <= now.Unix() {
+		return errors.New("usage_node_unavailable")
+	}
+	var priorBytes int64
+	if err := tx.QueryRowContext(ctx, `SELECT response_bytes FROM proxy_node_usage_events WHERE node_id=? AND event_id=?`, id, eventID).Scan(&priorBytes); err == nil {
+		if priorBytes != bytes {
+			return errors.New("usage_event_conflict")
+		}
+		return nil
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	var resetDay int
+	var zone string
+	if err := tx.QueryRowContext(ctx, `SELECT reset_day,reset_timezone FROM proxy_nodes WHERE id=?`, id).Scan(&resetDay, &zone); err != nil {
+		return err
+	}
+	window, err := NextMonthlyReset(sampledAt, resetDay, zone)
+	if err != nil {
+		return err
+	}
+	if window.Unix() != nextReset {
+		return errors.New("usage_event_outside_current_cycle")
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO proxy_node_usage_events(node_id,event_id,response_bytes,sampled_at) VALUES(?,?,?,?)`, id, eventID, bytes, sampledAt.Unix()); err != nil {
+		return err
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE proxy_nodes SET used_bytes=used_bytes+?,updated_at=? WHERE id=? AND state NOT IN ('revoked','removed')`, bytes, now.Unix(), id)
+	if err != nil {
+		return err
+	}
+	if changed, _ := result.RowsAffected(); changed != 1 {
+		return sql.ErrNoRows
+	}
+	return tx.Commit()
 }
 
 // AddProxyNodeUsage atomically adds bytes observed by the local proxy. This

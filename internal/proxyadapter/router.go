@@ -15,6 +15,7 @@ type Router struct {
 	executor       *mediaproxy.Executor
 	executorConfig mediaproxy.Config
 	fallback       http.Handler
+	edgeUsageSink  func(int64)
 	// edgeLocal marks a router running on an edge agent. Such a router must
 	// resolve persisted redirect endpoints locally on client follow-up
 	// requests, while the controller router keeps those aliases blocked.
@@ -34,6 +35,14 @@ func NewRouter(prefix string, registry *Registry, executor *mediaproxy.Executor,
 
 func NewProductionRouter(resolver *StorageResolver, executor *mediaproxy.Executor, config mediaproxy.Config, fallback http.Handler) *Router {
 	return &Router{resolver: resolver, executor: executor, executorConfig: config, fallback: fallback}
+}
+
+// SetEdgeLegacyUsageSink observes response bytes from allowlisted legacy
+// paths served directly by this edge, not controller-selected /s/ requests.
+func (r *Router) SetEdgeLegacyUsageSink(sink func(int64)) {
+	if r != nil && r.edgeLocal {
+		r.edgeUsageSink = sink
+	}
 }
 
 // NewEdgeRouter creates the production router used by an edge agent. Requests

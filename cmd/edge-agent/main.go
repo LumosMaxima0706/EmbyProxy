@@ -110,6 +110,9 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+	if err := store.InitEdgeUsageOutbox(context.Background()); err != nil {
+		panic(err)
+	}
 	defer store.Close()
 	client := &http.Client{Timeout: 15 * time.Second}
 	decommissionKey, _ := edgecontrol.DecodePublicKey(cfg.DecommissionPublicKey)
@@ -238,7 +241,38 @@ func main() {
 			}
 		}()
 	}
+	go func() {
+		for {
+			ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+			event, err := store.NextEdgeUsage(ctx)
+			if err == nil && event != nil {
+				payload, marshalErr := json.Marshal(event)
+				if marshalErr == nil {
+					req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(cfg.Controller, "/")+"/api/edge/usage/"+cfg.NodeID, strings.NewReader(string(payload)))
+					if reqErr == nil {
+						req.Header.Set("Content-Type", "application/json")
+						req.Header.Set("X-EmbyProxy-Node-Credential", cfg.Credential)
+						res, postErr := client.Do(req)
+						if postErr == nil && res != nil {
+							_, _ = io.Copy(io.Discard, io.LimitReader(res.Body, 1024))
+							_ = res.Body.Close()
+							if res.StatusCode == http.StatusOK {
+								_ = store.AcknowledgeEdgeUsage(ctx, event.ID)
+							}
+						}
+					}
+				}
+			}
+			cancel()
+			time.Sleep(2 * time.Second)
+		}
+	}()
 	router := proxyadapter.NewEdgeRouter(proxyadapter.NewStorageResolver(store, "admin"), mediaproxy.NewExecutor(mediaproxy.Config{AllowPrivateTargets: cfg.AllowPrivate}), mediaproxy.Config{AllowPrivateTargets: cfg.AllowPrivate}, http.NotFoundHandler())
+	router.SetEdgeLegacyUsageSink(func(bytes int64) {
+		if err := store.QueueEdgeUsage(context.Background(), bytes, time.Now()); err != nil {
+			fmt.Fprintln(os.Stderr, "edge usage enqueue failed:", err)
+		}
+	})
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("X-EmbyProxy-Node-ID", cfg.NodeID)

@@ -46,7 +46,7 @@ func (r *Router) serveLegacyEdge(w http.ResponseWriter, req *http.Request, parts
 			if err != nil {
 				return false
 			}
-			r.forward(w, req, legacyTail(req, parts), target, "/https/"+parts[1]+"/"+strconv.Itoa(port)+"/", nil)
+			r.forwardLegacy(w, req, legacyTail(req, parts), target, "/https/"+parts[1]+"/"+strconv.Itoa(port)+"/")
 			return true
 		}
 	}
@@ -82,10 +82,22 @@ func (r *Router) serveLegacyEdge(w http.ResponseWriter, req *http.Request, parts
 		if target.BasePath != "" && strings.HasPrefix(path, target.BasePath+"/") {
 			path = strings.TrimPrefix(path, target.BasePath)
 		}
-		r.forward(w, req, path, target, "/https/"+target.Host+"/"+strconv.Itoa(port)+"/", nil)
+		r.forwardLegacy(w, req, path, target, "/https/"+target.Host+"/"+strconv.Itoa(port)+"/")
 		return true
 	}
 	return false
+}
+
+func (r *Router) forwardLegacy(w http.ResponseWriter, req *http.Request, path string, target mediaproxy.Target, publicPath string) {
+	if r.edgeUsageSink == nil || req.Header.Get("Upgrade") != "" {
+		r.forward(w, req, path, target, publicPath, nil)
+		return
+	}
+	counted := &countingResponseWriter{ResponseWriter: w}
+	r.forward(counted, req, path, target, publicPath, nil)
+	if counted.bytes > 0 {
+		r.edgeUsageSink(counted.bytes)
+	}
 }
 
 func configuredLegacyTarget(paths map[string]string, host string, port int) bool {

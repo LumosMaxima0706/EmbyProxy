@@ -24,6 +24,8 @@ func TestLegacyEdgeRestrictsHostsAndPreservesRange(t *testing.T) {
 	seedManagedRoute(t, store, "demo", upstream.URL, true, true)
 	config := mediaproxy.Config{AllowPrivateTargets: true, TLSConfig: upstream.Client().Transport.(*http.Transport).TLSClientConfig}
 	router := NewEdgeRouter(NewStorageResolver(store, "admin"), mediaproxy.NewExecutor(config), config, http.NotFoundHandler())
+	var observed int64
+	router.SetEdgeLegacyUsageSink(func(bytes int64) { observed += bytes })
 	parsed, err := url.Parse(upstream.URL)
 	if err != nil {
 		t.Fatal(err)
@@ -34,6 +36,9 @@ func TestLegacyEdgeRestrictsHostsAndPreservesRange(t *testing.T) {
 	router.ServeHTTP(result, request)
 	if result.Code != http.StatusPartialContent || result.Body.String() != "abc" {
 		t.Fatalf("response=%d %s", result.Code, result.Body.String())
+	}
+	if observed != 3 {
+		t.Fatalf("Range response bytes counted=%d want=3", observed)
 	}
 	for _, path := range []string{"/https/unknown.example/443/media", "/http/unknown.example/80/media", "/https/127.0.0.1/80/media", "/https/unknown.example/443/%2e%2e/media", "/https/unknown.example%2ftrusted.example/443/media"} {
 		result = httptest.NewRecorder()

@@ -19,6 +19,44 @@ import (
 	"embyproxy/internal/storage"
 )
 
+func TestEdgeUsageRequiresCredentialAndDeduplicates(t *testing.T) {
+	h := newAuthTestHandler(t, config.Config{AdminToken: "strong-admin-token"})
+	ctx := context.Background()
+	enrollment, token, err := h.store.CreateProxyNode(ctx, storage.ProxyNode{Name: "edge-usage", ResetDay: 1}, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	node, credential, err := h.store.CompleteEnrollment(ctx, enrollment.ID, token, "v1", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := "/api/edge/usage/" + node.ID
+	post := func(secret string, bytes int64) int {
+		payload, _ := json.Marshal(map[string]any{"event_id": "event-123456789abcdef", "response_bytes": bytes, "sampled_at": time.Now().Unix()})
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(string(payload)))
+		req.Header.Set("X-EmbyProxy-Node-Credential", secret)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	if code := post("wrong", 1024); code != http.StatusNotFound {
+		t.Fatalf("invalid credential accepted: %d", code)
+	}
+	if code := post(credential, 1024); code != http.StatusOK {
+		t.Fatalf("usage refused: %d", code)
+	}
+	if code := post(credential, 1024); code != http.StatusOK {
+		t.Fatalf("retry refused: %d", code)
+	}
+	if code := post(credential, 2048); code != http.StatusConflict {
+		t.Fatalf("conflict accepted: %d", code)
+	}
+	got, err := h.store.GetProxyNode(ctx, node.ID)
+	if err != nil || got.UsedBytes != 1024 {
+		t.Fatalf("usage=%+v err=%v", got, err)
+	}
+}
+
 func TestProxyNodeAPIAutomaticDNSCreatesPendingWithoutHealth(t *testing.T) {
 	h := newAuthTestHandler(t, config.Config{AdminToken: "strong-admin-token", EnrollmentControllerURL: "https://controller.149077530.xyz"})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

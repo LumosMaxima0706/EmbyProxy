@@ -1013,6 +1013,28 @@ func (h *Handler) handleEdgeEnrollment(w http.ResponseWriter, r *http.Request, p
 		writeJSON(w, 200, map[string]any{"ok": true, "node_id": node.ID, "credential": credential})
 		return
 	}
+	if r.Method == http.MethodPost && strings.HasPrefix(path, "/api/edge/usage/") {
+		id := strings.TrimPrefix(path, "/api/edge/usage/")
+		credential := r.Header.Get("X-EmbyProxy-Node-Credential")
+		if id == "" || !h.store.ValidateProxyNodeCredential(r.Context(), id, credential) {
+			http.NotFound(w, r)
+			return
+		}
+		var body struct {
+			EventID   string `json:"event_id"`
+			Bytes     int64  `json:"response_bytes"`
+			SampledAt int64  `json:"sampled_at"`
+		}
+		if !decodeAuthJSON(w, r, &body) {
+			return
+		}
+		if err := h.store.RecordProxyNodeUsageEvent(r.Context(), id, body.EventID, body.Bytes, time.Unix(body.SampledAt, 0)); err != nil {
+			writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "error": "USAGE_EVENT_REJECTED"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+		return
+	}
 	if r.Method == http.MethodPost && strings.HasPrefix(path, "/api/edge/heartbeat/") {
 		id := strings.TrimPrefix(path, "/api/edge/heartbeat/")
 		var body struct {
