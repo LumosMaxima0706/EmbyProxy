@@ -271,7 +271,7 @@ func main() {
 		}
 	}()
 	router := proxyadapter.NewEdgeRouter(proxyadapter.NewStorageResolver(store, "admin"), mediaproxy.NewExecutor(mediaproxy.Config{AllowPrivateTargets: cfg.AllowPrivate}), mediaproxy.Config{AllowPrivateTargets: cfg.AllowPrivate}, http.NotFoundHandler())
-	router.SetEdgeLegacyUsageSink(func(bytes int64) {
+	router.SetEdgeUsageSink(func(bytes int64) {
 		if err := store.QueueEdgeUsage(context.Background(), bytes, time.Now()); err != nil {
 			fmt.Fprintln(os.Stderr, "edge usage enqueue failed:", err)
 		}

@@ -82,12 +82,8 @@ func (r *Router) serveSlug(w http.ResponseWriter, req *http.Request, rawPath str
 	} else {
 		r.forward(counted, req, forward, target, publicPath, redirectRoutes)
 	}
-	if meta.selected {
-		if usage, ok := r.resolver.(interface {
-			RecordProxyNodeBytes(context.Context, string, int64)
-		}); ok {
-			usage.RecordProxyNodeBytes(context.Background(), meta.nodeID, counted.bytes)
-		}
+	if r.edgeLocal && r.edgeUsageSink != nil && counted.bytes > 0 {
+		r.edgeUsageSink(counted.bytes)
 	}
 	return true
 }

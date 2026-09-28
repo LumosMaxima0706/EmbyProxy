@@ -37,9 +37,8 @@ func NewProductionRouter(resolver *StorageResolver, executor *mediaproxy.Executo
 	return &Router{resolver: resolver, executor: executor, executorConfig: config, fallback: fallback}
 }
 
-// SetEdgeLegacyUsageSink observes response bytes from allowlisted legacy
-// paths served directly by this edge, not controller-selected /s/ requests.
-func (r *Router) SetEdgeLegacyUsageSink(sink func(int64)) {
+// SetEdgeUsageSink observes response bytes actually written by this edge.
+func (r *Router) SetEdgeUsageSink(sink func(int64)) {
 	if r != nil && r.edgeLocal {
 		r.edgeUsageSink = sink
 	}
@@ -57,10 +56,6 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	if r == nil || r.resolver == nil || r.executor == nil || req == nil {
 		http.Error(w, "Not Found", http.StatusNotFound)
 		return
-	}
-	if req.Header.Get(selectedNodeHeader) == "1" {
-		req = req.WithContext(MarkSelectedNodeRequest(req.Context()))
-		req.Header.Set(selectedNodeHeader, "2")
 	}
 	if r.edgeLocal {
 		req = req.WithContext(MarkSelectedNodeRequest(req.Context()))

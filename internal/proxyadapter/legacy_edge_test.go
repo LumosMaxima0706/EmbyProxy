@@ -25,7 +25,7 @@ func TestLegacyEdgeRestrictsHostsAndPreservesRange(t *testing.T) {
 	config := mediaproxy.Config{AllowPrivateTargets: true, TLSConfig: upstream.Client().Transport.(*http.Transport).TLSClientConfig}
 	router := NewEdgeRouter(NewStorageResolver(store, "admin"), mediaproxy.NewExecutor(config), config, http.NotFoundHandler())
 	var observed int64
-	router.SetEdgeLegacyUsageSink(func(bytes int64) { observed += bytes })
+	router.SetEdgeUsageSink(func(bytes int64) { observed += bytes })
 	parsed, err := url.Parse(upstream.URL)
 	if err != nil {
 		t.Fatal(err)

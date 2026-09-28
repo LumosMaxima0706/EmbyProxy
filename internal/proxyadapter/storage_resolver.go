@@ -35,21 +35,6 @@ type ProxyRedirectEndpointStore interface {
 	ListProxyRedirectEndpoints(context.Context, string) ([]storage.ProxyRedirectEndpoint, error)
 }
 
-type proxyNodeUsageStore interface {
-	AddProxyNodeUsage(context.Context, string, int64, time.Time) error
-}
-
-func (r *StorageResolver) RecordProxyNodeBytes(ctx context.Context, id string, bytes int64) {
-	if bytes <= 0 {
-		return
-	}
-	store, ok := r.store.(proxyNodeUsageStore)
-	if !ok {
-		return
-	}
-	_ = store.AddProxyNodeUsage(ctx, id, bytes, time.Now())
-}
-
 func (r *StorageResolver) BeginProxyNodeConnection(ctx context.Context, id string) error {
 	store, ok := r.store.(ProxyNodeConnectionStore)
 	if !ok {

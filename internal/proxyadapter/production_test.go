@@ -62,6 +62,55 @@ func seedManagedRoute(t *testing.T, store *storage.Store, slug, target string, e
 	}
 }
 
+func TestEdgeSlugUsageOutboxIsSingleSourceForRange(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.Header.Get("Range") != "bytes=0-2" {
+			t.Errorf("range=%q", req.Header.Get("Range"))
+		}
+		w.Header().Set("Content-Range", "bytes 0-2/10")
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = w.Write([]byte("abc"))
+	}))
+	defer upstream.Close()
+	edgeStore := newRouteStore(t)
+	seedManagedRoute(t, edgeStore, "demo", upstream.URL, true, true)
+	if err := edgeStore.InitEdgeUsageOutbox(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	config := mediaproxy.Config{AllowPrivateTargets: true}
+	edge := NewEdgeRouter(NewStorageResolver(edgeStore, "admin"), mediaproxy.NewExecutor(config), config, http.NotFoundHandler())
+	edge.SetEdgeUsageSink(func(n int64) {
+		if err := edgeStore.QueueEdgeUsage(context.Background(), n, time.Now()); err != nil {
+			t.Error(err)
+		}
+	})
+	req := httptest.NewRequest(http.MethodGet, "/s/demo/video", nil)
+	req.Header.Set("Range", "bytes=0-2")
+	req.Header.Set(selectedNodeHeader, "1")
+	resp := httptest.NewRecorder()
+	edge.ServeHTTP(resp, req)
+	if resp.Code != http.StatusPartialContent || resp.Body.String() != "abc" {
+		t.Fatalf("edge response=%d body=%q", resp.Code, resp.Body.String())
+	}
+	event, err := edgeStore.NextEdgeUsage(context.Background())
+	if err != nil || event == nil || event.Bytes != 3 {
+		t.Fatalf("outbox event=%+v err=%v", event, err)
+	}
+	controllerStore := newRouteStore(t)
+	enrollment, _, err := controllerStore.CreateProxyNode(context.Background(), storage.ProxyNode{Name: "edge-range", ResetDay: 1}, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if err := controllerStore.RecordProxyNodeUsageEvent(context.Background(), enrollment.NodeID, event.ID, event.Bytes, time.Unix(event.SampledAt, 0)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	node, err := controllerStore.GetProxyNode(context.Background(), enrollment.NodeID)
+	if err != nil || node.UsedBytes != 3 {
+		t.Fatalf("deduplicated usage node=%+v err=%v", node, err)
+	}
+}
 func TestProductionSlugRouteUsesManagedTarget(t *testing.T) {
 	var hits atomic.Int32
 	var forbiddenHits atomic.Int32
@@ -126,10 +175,10 @@ func TestProductionSelectedEdgeUsesOnlyPersistedRedirectEndpoint(t *testing.T) {
 	if err := store.ReplaceProxyRedirectEndpointsForRoute(context.Background(), "demo", []storage.ProxyRedirectEndpoint{{RouteSlug: "demo", Scheme: "http", Host: parsed.Hostname(), Port: port, PathPrefix: "media"}}); err != nil {
 		t.Fatal(err)
 	}
-	router := newProductionTestRouter(t, store, http.NotFoundHandler())
+	config := mediaproxy.Config{AllowPrivateTargets: true}
+	router := NewEdgeRouter(NewStorageResolver(store, "admin"), mediaproxy.NewExecutor(config), config, http.NotFoundHandler())
 	selected := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/s/demo/http/"+parsed.Hostname()+"/"+parsed.Port()+"/media/video.mkv", nil)
-	req.Header.Set(selectedNodeHeader, "1")
 	router.ServeHTTP(selected, req)
 	if selected.Code != http.StatusPartialContent || selected.Body.String() != "abc" || redirectHits.Load() != 1 {
 		t.Fatalf("selected status=%d body=%q hits=%d", selected.Code, selected.Body.String(), redirectHits.Load())
@@ -137,7 +186,9 @@ func TestProductionSelectedEdgeUsesOnlyPersistedRedirectEndpoint(t *testing.T) {
 	// The same encoded target on the controller hop must remain a normal
 	// managed-route request. It must not escape directly to the redirect host.
 	unselected := httptest.NewRecorder()
-	router.ServeHTTP(unselected, httptest.NewRequest(http.MethodGet, "/s/demo/http/"+parsed.Hostname()+"/"+parsed.Port()+"/media/video.mkv", nil))
+	clientRequest := httptest.NewRequest(http.MethodGet, "/s/demo/http/"+parsed.Hostname()+"/"+parsed.Port()+"/media/video.mkv", nil)
+	clientRequest.Header.Set(selectedNodeHeader, "1")
+	newProductionTestRouter(t, store, http.NotFoundHandler()).ServeHTTP(unselected, clientRequest)
 	if redirectHits.Load() != 1 {
 		t.Fatalf("unselected request reached redirect endpoint")
 	}
@@ -293,6 +344,12 @@ func TestProductionSlugSelectsEligibleProxyNodeAndFailsOver(t *testing.T) {
 	router.ServeHTTP(first, httptest.NewRequest(http.MethodGet, "/s/demo/video", nil))
 	if first.Code != http.StatusPartialContent || first.Body.String() != "a" || edgeAHits.Load() != 1 || edgeBHits.Load() != 0 || originHits.Load() != 0 {
 		t.Fatalf("first status=%d body=%q edgeA=%d edgeB=%d origin=%d", first.Code, first.Body.String(), edgeAHits.Load(), edgeBHits.Load(), originHits.Load())
+	}
+	for _, id := range []string{"node-a", "node-b"} {
+		node, err := store.GetProxyNode(context.Background(), id)
+		if err != nil || node.UsedBytes != 0 {
+			t.Fatalf("controller must not count edge response: id=%s node=%+v err=%v", id, node, err)
+		}
 	}
 	if _, err := store.DB().Exec(`UPDATE proxy_nodes SET playback_healthy=0 WHERE id='node-a'`); err != nil {
 		t.Fatal(err)
