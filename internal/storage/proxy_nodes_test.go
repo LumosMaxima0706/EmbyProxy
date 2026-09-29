@@ -371,6 +371,50 @@ func TestDecommissionCreatesPartialJobForUnreachableNodeAndRetryCompletes(t *tes
 	}
 }
 
+func TestRuntimeOwnershipBackfillsLegacyNodeWithoutChangingDNSOwnership(t *testing.T) {
+	ctx := context.Background()
+	store, err := New(filepath.Join(t.TempDir(), "proxy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	enrollment, _, err := store.CreateProxyNode(ctx, ProxyNode{Name: "legacy-edge", ResetDay: 1}, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB().ExecContext(ctx, `DELETE FROM proxy_node_ownership WHERE node_id=?`, enrollment.NodeID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetProxyNodeRuntimeOwnership(ctx, enrollment.NodeID, false, false, false, true); err != nil {
+		t.Fatal(err)
+	}
+	var dnsProvider, dnsRecordID string
+	var dnsOwned, edgeUnitOwned int
+	if err := store.DB().QueryRowContext(ctx, `SELECT dns_provider,dns_record_id,dns_owned,edge_unit_owned FROM proxy_node_ownership WHERE node_id=?`, enrollment.NodeID).Scan(&dnsProvider, &dnsRecordID, &dnsOwned, &edgeUnitOwned); err != nil {
+		t.Fatal(err)
+	}
+	if dnsProvider != "" || dnsRecordID != "" || dnsOwned != 0 || edgeUnitOwned != 1 {
+		t.Fatalf("ownership provider=%q record=%q dns=%d edge=%d", dnsProvider, dnsRecordID, dnsOwned, edgeUnitOwned)
+	}
+	if err := store.SetProxyNodeOwnershipBound(ctx, enrollment.NodeID, "spaceship", "acct", "example.com", "record-1", "A", true, false, false, false, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetProxyNodeRuntimeOwnership(ctx, enrollment.NodeID, true, true, true, false); err != nil {
+		t.Fatal(err)
+	}
+	var account string
+	var caddyInstalled, caddyConfig, tlsOwned int
+	if err := store.DB().QueryRowContext(ctx, `SELECT dns_account,dns_record_id,dns_owned,caddy_installed_by_project,caddy_config_owned,tls_state_owned,edge_unit_owned FROM proxy_node_ownership WHERE node_id=?`, enrollment.NodeID).Scan(&account, &dnsRecordID, &dnsOwned, &caddyInstalled, &caddyConfig, &tlsOwned, &edgeUnitOwned); err != nil {
+		t.Fatal(err)
+	}
+	if account != "acct" || dnsRecordID != "record-1" || dnsOwned != 1 || caddyInstalled != 1 || caddyConfig != 1 || tlsOwned != 1 || edgeUnitOwned != 1 {
+		t.Fatalf("ownership account=%q record=%q dns=%d caddy=%d config=%d tls=%d edge=%d", account, dnsRecordID, dnsOwned, caddyInstalled, caddyConfig, tlsOwned, edgeUnitOwned)
+	}
+	if err := store.SetProxyNodeRuntimeOwnership(ctx, "missing-node", false, false, false, true); err == nil {
+		t.Fatal("unknown node ownership update succeeded")
+	}
+}
+
 func TestSignedDecommissionCompletionIsSingleUse(t *testing.T) {
 	ctx := context.Background()
 	store, err := New(filepath.Join(t.TempDir(), "proxy.db"))
