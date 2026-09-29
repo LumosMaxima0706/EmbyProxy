@@ -109,3 +109,19 @@ func TestLookupPublicARequiresResolverConsensus(t *testing.T) {
 		t.Fatalf("resolver disagreement accepted: %v", err)
 	}
 }
+
+func TestFreshPublicRequestClientBypassesProxyForObservedIP(t *testing.T) {
+	switcher := &publicIngressSwitcher{
+		record: "stream.example.com",
+		lookupHost: func(context.Context, string) ([]string, error) {
+			return []string{"1.1.1.1"}, nil
+		},
+		httpClient: &http.Client{Timeout: time.Second},
+	}
+	client, closeIdle, err := switcher.freshPublicRequestClient(context.Background())
+	defer closeIdle()
+	transport, ok := client.Transport.(*http.Transport)
+	if err != nil || !ok || transport.Proxy != nil || !transport.DisableKeepAlives || transport.DialContext == nil {
+		t.Fatalf("client=%+v transport=%+v err=%v", client, transport, err)
+	}
+}

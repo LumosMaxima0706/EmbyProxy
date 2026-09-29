@@ -383,6 +383,7 @@ func (s *publicIngressSwitcher) freshPublicRequestClient(ctx context.Context) (*
 		if err != nil || !ip.Is4() || !recursiveAnswersMatch(answers, ip.String()) {
 			return nil, func() {}, errors.New("public_recursive_answer_ambiguous")
 		}
+		transport.Proxy = nil
 		dialer := &net.Dialer{Timeout: 10 * time.Second}
 		transport.DialContext = func(c context.Context, network, _ string) (net.Conn, error) {
 			return dialer.DialContext(c, network, net.JoinHostPort(ip.String(), "443"))
