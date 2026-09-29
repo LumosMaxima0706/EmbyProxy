@@ -57,6 +57,86 @@ func TestEdgeUsageRequiresCredentialAndDeduplicates(t *testing.T) {
 	}
 }
 
+func TestEdgeACMEUsesCredentialAndSingleGlobalLease(t *testing.T) {
+	h := newAuthTestHandler(t, config.Config{AdminToken: "strong-admin-token", PublicIngressHost: "stream.example.com"})
+	ctx := context.Background()
+	credentials := map[string]string{}
+	for _, name := range []string{"edge-acme-a", "edge-acme-b"} {
+		enrollment, token, err := h.store.CreateProxyNode(ctx, storage.ProxyNode{Name: name, ResetDay: 1}, time.Minute)
+		if err != nil {
+			t.Fatal(err)
+		}
+		node, credential, err := h.store.CompleteEnrollment(ctx, enrollment.ID, token, "v1", "test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		credentials[node.ID] = credential
+	}
+	providerRecords := []spaceship.Record{}
+	putCalls, deleteCalls := 0, 0
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			_ = json.NewEncoder(w).Encode(map[string]any{"items": providerRecords, "total": len(providerRecords)})
+		case http.MethodPut:
+			var body struct {
+				Items []spaceship.Record `json:"items"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body.Items) != 1 {
+				t.Fatalf("put body=%+v err=%v", body, err)
+			}
+			putCalls++
+			providerRecords = append(providerRecords, body.Items[0])
+			w.WriteHeader(http.StatusNoContent)
+		case http.MethodDelete:
+			var body []map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body) != 1 {
+				t.Fatalf("delete body=%+v err=%v", body, err)
+			}
+			deleteCalls++
+			providerRecords = []spaceship.Record{}
+			w.WriteHeader(http.StatusNoContent)
+		}
+	}))
+	defer provider.Close()
+	h.dnsAutomation = &spaceship.Client{BaseURL: provider.URL, APIKey: "k", APISecret: "s", ManagedDomain: "example.com"}
+	ids := make([]string, 0, len(credentials))
+	for id := range credentials {
+		ids = append(ids, id)
+	}
+	post := func(nodeID, credential, action, domain, validation string) *httptest.ResponseRecorder {
+		payload, _ := json.Marshal(map[string]string{"domain": domain, "validation": validation})
+		req := httptest.NewRequest(http.MethodPost, "/api/edge/acme/"+nodeID+"/"+action, strings.NewReader(string(payload)))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-EmbyProxy-Node-Credential", credential)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+	valueA, valueB := strings.Repeat("a", 43), strings.Repeat("b", 43)
+	if rec := post(ids[0], "wrong", "present", "stream.example.com", valueA); rec.Code != http.StatusNotFound {
+		t.Fatalf("invalid credential status=%d", rec.Code)
+	}
+	if rec := post(ids[0], credentials[ids[0]], "present", "other.example.com", valueA); rec.Code != http.StatusBadRequest || putCalls != 0 {
+		t.Fatalf("invalid domain status=%d puts=%d body=%s", rec.Code, putCalls, rec.Body.String())
+	}
+	if rec := post(ids[0], credentials[ids[0]], "present", "stream.example.com", valueA); rec.Code != http.StatusOK || putCalls != 1 {
+		t.Fatalf("present status=%d puts=%d body=%s", rec.Code, putCalls, rec.Body.String())
+	}
+	if rec := post(ids[1], credentials[ids[1]], "present", "stream.example.com", valueB); rec.Code != http.StatusConflict || putCalls != 1 {
+		t.Fatalf("concurrent status=%d puts=%d body=%s", rec.Code, putCalls, rec.Body.String())
+	}
+	if rec := post(ids[1], credentials[ids[1]], "cleanup", "stream.example.com", valueA); rec.Code != http.StatusConflict || deleteCalls != 0 {
+		t.Fatalf("wrong cleanup status=%d deletes=%d body=%s", rec.Code, deleteCalls, rec.Body.String())
+	}
+	if rec := post(ids[0], credentials[ids[0]], "cleanup", "stream.example.com", valueA); rec.Code != http.StatusOK || deleteCalls != 1 || len(providerRecords) != 0 {
+		t.Fatalf("cleanup status=%d deletes=%d records=%v body=%s", rec.Code, deleteCalls, providerRecords, rec.Body.String())
+	}
+	if lease, err := h.store.GetEdgeACMELease(ctx); err != nil || lease != nil {
+		t.Fatalf("lease=%+v err=%v", lease, err)
+	}
+}
+
 func TestProxyNodeAPIAutomaticDNSCreatesPendingWithoutHealth(t *testing.T) {
 	h := newAuthTestHandler(t, config.Config{AdminToken: "strong-admin-token", EnrollmentControllerURL: "https://controller.149077530.xyz"})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

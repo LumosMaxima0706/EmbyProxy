@@ -1035,6 +1035,65 @@ func (h *Handler) handleEdgeEnrollment(w http.ResponseWriter, r *http.Request, p
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 		return
 	}
+	if r.Method == http.MethodPost && strings.HasPrefix(path, "/api/edge/acme/") {
+		parts := strings.Split(strings.TrimPrefix(path, "/api/edge/acme/"), "/")
+		if len(parts) != 2 || parts[0] == "" || (parts[1] != "present" && parts[1] != "cleanup") {
+			http.NotFound(w, r)
+			return
+		}
+		nodeID, action := parts[0], parts[1]
+		credential := strings.TrimSpace(r.Header.Get("X-EmbyProxy-Node-Credential"))
+		if credential == "" || !h.store.ValidateProxyNodeCredential(r.Context(), nodeID, credential) {
+			http.NotFound(w, r)
+			return
+		}
+		if h.dnsAutomation == nil || strings.TrimSpace(h.cfg.PublicIngressHost) == "" {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "error": "ACME_DNS_UNAVAILABLE"})
+			return
+		}
+		var body struct {
+			Domain     string `json:"domain"`
+			Validation string `json:"validation"`
+		}
+		if !decodeAuthJSON(w, r, &body) {
+			return
+		}
+		body.Domain = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(body.Domain)), ".")
+		body.Validation = strings.TrimSpace(body.Validation)
+		if body.Domain != h.cfg.PublicIngressHost || len(body.Validation) < 32 || len(body.Validation) > 128 || strings.ContainsAny(body.Validation, "\x00\r\n") {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "ACME_CHALLENGE_INVALID"})
+			return
+		}
+		if action == "present" {
+			if err := h.store.AcquireEdgeACMELease(r.Context(), nodeID, body.Validation, time.Now().Add(20*time.Minute)); err != nil {
+				writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "error": "ACME_LEASE_CONFLICT"})
+				return
+			}
+			if err := h.dnsAutomation.PresentStreamACME(r.Context(), body.Domain, body.Validation); err != nil {
+				// Keep the lease after an uncertain provider result. Cleanup or
+				// operator reconciliation must prove the TXT value is absent.
+				writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": "ACME_PRESENT_FAILED"})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+			return
+		}
+		lease, err := h.store.GetEdgeACMELease(r.Context())
+		if err != nil || lease == nil || lease.NodeID != nodeID || lease.Value != body.Validation {
+			writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "error": "ACME_LEASE_MISMATCH"})
+			return
+		}
+		if err := h.dnsAutomation.CleanupStreamACME(r.Context(), body.Domain, body.Validation); err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": "ACME_CLEANUP_FAILED"})
+			return
+		}
+		if err := h.store.ReleaseEdgeACMELease(r.Context(), nodeID, body.Validation); err != nil {
+			writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "error": "ACME_LEASE_RELEASE_FAILED"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+		return
+	}
 	if r.Method == http.MethodPost && strings.HasPrefix(path, "/api/edge/heartbeat/") {
 		id := strings.TrimPrefix(path, "/api/edge/heartbeat/")
 		var body struct {
