@@ -303,9 +303,32 @@ func recursiveAnswersMatch(ips []string, want string) bool {
 	return true
 }
 
+func (s *publicIngressSwitcher) freshPublicRequestClient() (*http.Client, func()) {
+	base := s.httpClient
+	if base == nil {
+		base = &http.Client{Timeout: 20 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
+	}
+	client := *base
+	var transport *http.Transport
+	if configured, ok := base.Transport.(*http.Transport); ok {
+		transport = configured.Clone()
+	} else if base.Transport == nil {
+		transport = http.DefaultTransport.(*http.Transport).Clone()
+	}
+	if transport == nil {
+		return &client, func() {}
+	}
+	transport.DisableKeepAlives = true
+	client.Transport = transport
+	return &client, transport.CloseIdleConnections
+}
+
 func (s *publicIngressSwitcher) verifyPublicRequest(ctx context.Context, expectedNodeID string) (string, error) {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+s.record+"/health", nil)
-	resp, err := s.httpClient.Do(req)
+	req.Close = true
+	client, closeIdle := s.freshPublicRequestClient()
+	defer closeIdle()
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
 	}

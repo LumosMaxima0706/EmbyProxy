@@ -3,6 +3,10 @@ package admin
 import (
 	"context"
 	"errors"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -43,5 +47,40 @@ func TestWaitRecursiveRejectsMixedAnswers(t *testing.T) {
 	s.lookupHost = func(context.Context, string) ([]string, error) { return []string{"1.1.1.1"}, nil }
 	if got, err := s.waitRecursive(context.Background(), "1.1.1.1", time.Second); err != nil || got != "1.1.1.1" {
 		t.Fatalf("matching results rejected: %s %v", got, err)
+	}
+}
+
+func TestVerifyPublicRequestAlwaysUsesFreshConnection(t *testing.T) {
+	var connections atomic.Int64
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !r.Close {
+			t.Error("public verification request did not disable connection reuse")
+		}
+		w.Header().Set("X-EmbyProxy-Node-ID", "node-a")
+		_, _ = w.Write([]byte("ok"))
+	}))
+	server.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			connections.Add(1)
+		}
+	}
+	server.StartTLS()
+	defer server.Close()
+	client := server.Client()
+	transport := client.Transport.(*http.Transport).Clone()
+	address := server.Listener.Addr().String()
+	transport.DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, address)
+	}
+	client.Transport = transport
+	switcher := &publicIngressSwitcher{record: "stream.example.com", httpClient: client}
+	for i := 0; i < 2; i++ {
+		observed, err := switcher.verifyPublicRequest(context.Background(), "node-a")
+		if err != nil || observed != "node-a" {
+			t.Fatalf("verification %d observed=%q err=%v", i, observed, err)
+		}
+	}
+	if got := connections.Load(); got < 2 {
+		t.Fatalf("connections=%d, want at least 2", got)
 	}
 }
