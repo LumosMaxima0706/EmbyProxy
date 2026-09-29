@@ -271,14 +271,14 @@ func (s *publicIngressSwitcher) waitRecursive(ctx context.Context, want string, 
 	var last string
 	for s.now().Before(deadline) {
 		ips, err := s.lookupHost(ctx, s.record)
-		if err == nil {
+		if err == nil && len(ips) != 0 {
 			for _, v := range ips {
 				if ip, e := netip.ParseAddr(v); e == nil && ip.Is4() {
 					last = ip.String()
-					if last == want {
-						return last, nil
-					}
 				}
+			}
+			if recursiveAnswersMatch(ips, want) {
+				return want, nil
 			}
 		}
 		select {
@@ -288,6 +288,19 @@ func (s *publicIngressSwitcher) waitRecursive(ctx context.Context, want string, 
 		}
 	}
 	return last, errors.New("recursive_timeout")
+}
+
+func recursiveAnswersMatch(ips []string, want string) bool {
+	if len(ips) == 0 {
+		return false
+	}
+	for _, text := range ips {
+		ip, err := netip.ParseAddr(text)
+		if err != nil || !ip.Is4() || ip.String() != want {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *publicIngressSwitcher) verifyPublicRequest(ctx context.Context, expectedNodeID string) (string, error) {
@@ -521,8 +534,10 @@ func (h *Handler) StartPublicIngressScheduler(ctx context.Context) {
 // integration tests; production initializes the same client from encrypted KV.
 func (h *Handler) SetDNSAutomationClient(client *spaceship.Client) {
 	h.dnsAutomation = client
+	h.ingressReadback = nil
 	if client != nil {
 		h.publicIngress = newPublicIngressSwitcher(h)
+		h.ingressReadback = &ingressReadback{provider: client, record: h.cfg.PublicIngressHost, lookup: net.DefaultResolver.LookupHost, client: &http.Client{Timeout: 12 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}}
 	} else {
 		h.publicIngress = nil
 	}

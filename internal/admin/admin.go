@@ -93,8 +93,9 @@ type Handler struct {
 	lifecycleDNS        interface {
 		DeleteRecord(context.Context, string) error
 	}
-	dnsAutomation *spaceship.Client
-	publicIngress *publicIngressSwitcher
+	dnsAutomation   *spaceship.Client
+	publicIngress   *publicIngressSwitcher
+	ingressReadback *ingressReadback
 }
 
 // readExternalFailoverState reads the policy runner's state file without
@@ -175,6 +176,9 @@ func New(cfg config.Config, store *storage.Store, checker *auth.Checker, tg *tel
 			}
 		}
 	}
+	if h.dnsAutomation != nil && cfg.PublicIngressHost != "" {
+		h.ingressReadback = &ingressReadback{provider: h.dnsAutomation, record: cfg.PublicIngressHost, lookup: net.DefaultResolver.LookupHost, client: &http.Client{Timeout: 12 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}}
+	}
 	if store != nil && h.dnsAutomation != nil && cfg.PublicIngressEnabled {
 		h.publicIngress = newPublicIngressSwitcher(h)
 	}
@@ -228,6 +232,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if path == "/api/admin/managed-routes" || strings.HasPrefix(path, "/api/admin/managed-routes/") {
 		h.handleManagedRoutesAPI(w, r, path)
+		return
+	}
+	if path == "/api/admin/public-ingress/observe" && r.Method == http.MethodGet {
+		if h.ingressReadback == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "error": "PUBLIC_INGRESS_OBSERVATION_UNAVAILABLE"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "observation": h.ingressReadback.read(r.Context())})
 		return
 	}
 	if path == "/api/admin/public-ingress/status" {
