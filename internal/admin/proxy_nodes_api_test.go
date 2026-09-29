@@ -59,6 +59,7 @@ func TestEdgeUsageRequiresCredentialAndDeduplicates(t *testing.T) {
 
 func TestEdgeACMEUsesCredentialAndSingleGlobalLease(t *testing.T) {
 	h := newAuthTestHandler(t, config.Config{AdminToken: "strong-admin-token", PublicIngressHost: "stream.example.com"})
+	h.acmeCleanupWait = func(context.Context, string, string) error { return nil }
 	ctx := context.Background()
 	credentials := map[string]string{}
 	for _, name := range []string{"edge-acme-a", "edge-acme-b"} {
@@ -134,6 +135,21 @@ func TestEdgeACMEUsesCredentialAndSingleGlobalLease(t *testing.T) {
 	}
 	if lease, err := h.store.GetEdgeACMELease(ctx); err != nil || lease != nil {
 		t.Fatalf("lease=%+v err=%v", lease, err)
+	}
+	providerRecords = []spaceship.Record{}
+	if rec := post(ids[0], credentials[ids[0]], "present", "stream.example.com", valueB); rec.Code != http.StatusOK {
+		t.Fatalf("second present status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	h.acmeCleanupWait = func(context.Context, string, string) error { return context.DeadlineExceeded }
+	if rec := post(ids[0], credentials[ids[0]], "cleanup", "stream.example.com", valueB); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "ACME_PROPAGATION_PENDING") {
+		t.Fatalf("pending cleanup status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	lease, err := h.store.GetEdgeACMELease(ctx)
+	if err != nil || lease == nil || lease.NodeID != ids[0] || lease.Value != valueB {
+		t.Fatalf("retained lease=%+v err=%v", lease, err)
+	}
+	if err := h.store.ReleaseEdgeACMELease(ctx, ids[0], valueB); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -93,6 +93,7 @@ type Handler struct {
 	lifecycleDNS        interface {
 		DeleteRecord(context.Context, string) error
 	}
+	acmeCleanupWait func(context.Context, string, string) error
 	dnsAutomation   *spaceship.Client
 	publicIngress   *publicIngressSwitcher
 	ingressReadback *ingressReadback
@@ -155,13 +156,14 @@ func New(cfg config.Config, store *storage.Store, checker *auth.Checker, tg *tel
 		imageCache = imageCaches[0]
 	}
 	h := &Handler{
-		cfg:        cfg,
-		store:      store,
-		checker:    checker,
-		telegram:   tg,
-		log:        log,
-		resetRoute: reset,
-		imageCache: imageCache,
+		cfg:             cfg,
+		store:           store,
+		checker:         checker,
+		telegram:        tg,
+		log:             log,
+		resetRoute:      reset,
+		imageCache:      imageCache,
+		acmeCleanupWait: waitStreamACMEValueAbsent,
 	}
 	if cfg.SpaceshipManagedDomain != "" {
 		h.dnsAutomation = &spaceship.Client{BaseURL: cfg.SpaceshipAPIBaseURL, APIKey: cfg.SpaceshipAPIKey, APISecret: cfg.SpaceshipAPISecret, ManagedDomain: cfg.SpaceshipManagedDomain}

@@ -22,6 +22,64 @@ import (
 	"embyproxy/internal/storage"
 )
 
+func waitStreamACMEValueAbsent(ctx context.Context, domain, value string) error {
+	ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	defer cancel()
+	timer := time.NewTimer(65 * time.Second)
+	select {
+	case <-ctx.Done():
+		timer.Stop()
+		return ctx.Err()
+	case <-timer.C:
+	}
+	name := "_acme-challenge." + strings.TrimSuffix(domain, ".")
+	endpoints := []string{
+		"https://dns.google/resolve?name=" + url.QueryEscape(name) + "&type=TXT",
+		"https://cloudflare-dns.com/dns-query?name=" + url.QueryEscape(name) + "&type=TXT",
+	}
+	client := &http.Client{Timeout: 10 * time.Second}
+	for {
+		absent := true
+		for _, endpoint := range endpoints {
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+			if err != nil {
+				return err
+			}
+			req.Header.Set("Accept", "application/dns-json")
+			resp, err := client.Do(req)
+			if err != nil {
+				absent = false
+				break
+			}
+			var document struct {
+				Answer []struct {
+					Type int    `json:"type"`
+					Data string `json:"data"`
+				} `json:"Answer"`
+			}
+			decodeErr := json.NewDecoder(io.LimitReader(resp.Body, 256<<10)).Decode(&document)
+			_ = resp.Body.Close()
+			if resp.StatusCode != http.StatusOK || decodeErr != nil {
+				absent = false
+				break
+			}
+			for _, answer := range document.Answer {
+				if answer.Type == 16 && strings.Trim(strings.TrimSpace(answer.Data), `"`) == value {
+					absent = false
+				}
+			}
+		}
+		if absent {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(5 * time.Second):
+		}
+	}
+}
+
 func (h *Handler) handleProxyNodesAPI(w http.ResponseWriter, r *http.Request, path string) {
 	ctx := r.Context()
 	if r.Method == http.MethodGet && path == "/api/admin/proxy-nodes" {
@@ -1085,6 +1143,10 @@ func (h *Handler) handleEdgeEnrollment(w http.ResponseWriter, r *http.Request, p
 		}
 		if err := h.dnsAutomation.CleanupStreamACME(r.Context(), body.Domain, body.Validation); err != nil {
 			writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": "ACME_CLEANUP_FAILED"})
+			return
+		}
+		if h.acmeCleanupWait == nil || h.acmeCleanupWait(r.Context(), body.Domain, body.Validation) != nil {
+			writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "error": "ACME_PROPAGATION_PENDING"})
 			return
 		}
 		if err := h.store.ReleaseEdgeACMELease(r.Context(), nodeID, body.Validation); err != nil {
