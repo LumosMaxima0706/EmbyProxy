@@ -44,6 +44,8 @@ func TestProxyNodesUIUsesSingleFormAndHealthGatedSwitch(t *testing.T) {
 		"n.last_heartbeat_at",
 		"/api/admin/public-ingress/switch",
 		"id=\"publicIngressSchedulerStatus\"",
+		"id=\"publicIngressObservedStatus\"",
+		"/api/admin/public-ingress/observe",
 		"/api/admin/public-ingress/status",
 		"no_eligible_public_ingress_candidate",
 		"window.publicIngressOperation = ingress.ok ? ingress.operation : null",

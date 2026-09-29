@@ -575,6 +575,7 @@ tr:last-child td{border-bottom:0}
           <div class="context-card" id="dnsAutomationCard"><div class="stats-top"><div><strong>DNS 自动化</strong><p class="form-hint">Spaceship 凭据仅提交到 Controller，保存后不会再次显示。</p></div><button class="btn btn-sm" onclick="testDNSAutomation()">测试连接</button></div><div class="form-grid"><label>托管域名<input id="dnsManagedDomain" placeholder="149077530.xyz"></label><label>Spaceship API Key<input id="dnsAPIKey" type="password" autocomplete="off" placeholder="输入 API Key"></label><label>Spaceship API Secret<input id="dnsAPISecret" type="password" autocomplete="off" placeholder="输入 API Secret"></label><label>默认 TTL<input id="dnsTTL" type="number" value="300" min="30" max="86400"></label><button class="primary-action" onclick="saveDNSAutomation()">保存 DNS 配置</button></div><div id="dnsAutomationStatus" class="form-hint"></div></div>
           <div class="stats-top"><div><strong>反代节点</strong><p class="form-hint">调度、连接和远端生命周期统一管理。已移除节点默认隐藏。</p></div><button class="primary-action" onclick="openProxyNodeModal()">添加反代 VPS</button></div>
           <p id="publicIngressSchedulerStatus" class="form-hint" role="status" aria-live="polite"></p>
+          <p id="publicIngressObservedStatus" class="form-hint" role="status" aria-live="polite"></p>
           <div class="signal-grid proxy-summary" id="proxyNodeSummary"></div>
           <div class="stats-top proxy-filterbar"><select id="proxyNodeFilter" class="select-input" onchange="renderProxyNodeTable()"><option value="active">可用</option><option value="all">全部</option><option value="issue">异常（degraded）</option><option value="disabled">已停用/撤销</option><option value="removed">已移除</option></select><button class="btn" onclick="loadProxyNodes()">刷新</button></div>
           <div class="table-wrap"><table><thead><tr><th>节点 / Endpoint</th><th>状态</th><th>播放</th><th>入口</th><th>接纳</th><th>流量</th><th>优先级</th><th>操作</th></tr></thead><tbody id="proxyNodesBody"><tr><td colspan="8" class="table-empty">暂无反代节点</td></tr></tbody></table></div>
@@ -1778,6 +1779,18 @@ async function loadProxyNodes() {
     } else {
       notice.textContent = ingress.ok ? '' : '\u516c\u5f00\u5165\u53e3\u72b6\u6001\u6682\u4e0d\u53ef\u7528';
     }
+  }
+  const observation = await authFetch('/api/admin/public-ingress/observe');
+  const observedStatus = document.getElementById('publicIngressObservedStatus');
+  if (observedStatus) {
+    const seen = observation.observation || {};
+    const provider = seen.provider || {};
+    const label = Number(seen.observed_at) ? new Date(Number(seen.observed_at) * 1000).toLocaleString() : '';
+    const a = provider.address ? `${provider.address} (TTL ${Number(provider.ttl) || '?'})` : '\u672a\u786e\u8ba4';
+    const v6 = (provider.ipv6 || []).join(', ') || '\u65e0';
+    const recursive = (seen.recursive || []).join(', ') || '\u672a\u786e\u8ba4';
+    const destination = seen.public_node_id ? `${seen.public_node_id} (HTTP ${seen.public_status})` : '\u672a\u786e\u8ba4';
+    observedStatus.textContent = observation.ok ? `\u5b9e\u65f6\u89c2\u5bdf ${label} \u00b7 Provider A ${a} / AAAA ${v6} \u00b7 \u9012\u5f52\u89e3\u6790 ${recursive} \u00b7 \u516c\u5f00\u8bf7\u6c42\u8282\u70b9 ${destination}${seen.errors?.length ? ' \u00b7 \u5f02\u5e38 ' + seen.errors.join(', ') : ''}` : '\u5b9e\u65f6\u5165\u53e3\u89c2\u5bdf\u6682\u4e0d\u53ef\u7528';
   }
   window.proxyNodes = Array.isArray(r.nodes) ? r.nodes : [];
   renderProxyNodeTable();
