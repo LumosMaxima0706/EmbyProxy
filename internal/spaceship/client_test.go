@@ -253,4 +253,56 @@ func TestReplaceExactACompareAndSwapAndReadback(t *testing.T) {
 	if _, err = c.ReplaceExactA(context.Background(), "stream.example.com", "1.1.1.1", "3.3.3.3", 60); err == nil {
 		t.Fatal("stale expected value accepted")
 	}
+	got, err = c.ReplaceExactA(context.Background(), "stream.example.com", "2.2.2.2", "2.2.2.2", 60)
+	if err != nil || got.Address != "2.2.2.2" || putCalls != 1 {
+		t.Fatalf("idempotent got=%+v err=%v puts=%d", got, err, putCalls)
+	}
+}
+
+func TestReplaceExactADeletesStaleAddressWhenProviderAppends(t *testing.T) {
+	records := []Record{
+		{ID: "old", Name: "stream", Type: "A", Address: "1.1.1.1", TTL: 60},
+		{ID: "other", Name: "keep", Type: "TXT", Value: "unchanged", TTL: 300},
+	}
+	putCalls, deleteCalls := 0, 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			_ = json.NewEncoder(w).Encode(map[string]any{"items": records, "total": len(records)})
+		case http.MethodPut:
+			var body recordsWriteRequest
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body.Items) != 1 {
+				t.Fatalf("put body=%+v err=%v", body, err)
+			}
+			putCalls++
+			added := body.Items[0]
+			added.ID = "new"
+			records = append(records, added)
+			w.WriteHeader(http.StatusNoContent)
+		case http.MethodDelete:
+			var body []recordDeleteRequest
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body) != 1 || body[0].Name != "stream" || body[0].Type != "A" || body[0].Address != "1.1.1.1" {
+				t.Fatalf("delete body=%+v err=%v", body, err)
+			}
+			deleteCalls++
+			next := records[:0]
+			for _, record := range records {
+				if record.Name == body[0].Name && record.Type == body[0].Type && record.Address == body[0].Address {
+					continue
+				}
+				next = append(next, record)
+			}
+			records = next
+			w.WriteHeader(http.StatusNoContent)
+		}
+	}))
+	defer srv.Close()
+	c := &Client{BaseURL: srv.URL, APIKey: "k", APISecret: "s", ManagedDomain: "example.com"}
+	got, err := c.ReplaceExactA(context.Background(), "stream.example.com", "1.1.1.1", "2.2.2.2", 60)
+	if err != nil || got.Address != "2.2.2.2" || putCalls != 1 || deleteCalls != 1 {
+		t.Fatalf("got=%+v err=%v puts=%d deletes=%d", got, err, putCalls, deleteCalls)
+	}
+	if len(records) != 2 || records[0].Name != "keep" || records[0].Value != "unchanged" || records[1].Address != "2.2.2.2" {
+		t.Fatalf("records=%+v", records)
+	}
 }

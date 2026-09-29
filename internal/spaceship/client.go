@@ -292,6 +292,18 @@ func (c *Client) ExactRecord(ctx context.Context, fqdn, recordType string) (Reco
 	return matches[0], nil
 }
 
+func recordsForName(records []Record, name, fqdn, recordType string) (matches, unrelated []Record) {
+	for _, record := range records {
+		recordName := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(record.Name)), ".")
+		if (recordName == name || recordName == fqdn) && strings.EqualFold(record.Type, recordType) {
+			matches = append(matches, record)
+		} else {
+			unrelated = append(unrelated, record)
+		}
+	}
+	return matches, unrelated
+}
+
 // ReplaceExactA updates one existing A record and verifies the provider
 // readback. It never creates a new name and never mutates unrelated records.
 func (c *Client) ReplaceExactA(ctx context.Context, fqdn, expectedPrevious, address string, ttl int) (Record, error) {
@@ -302,26 +314,68 @@ func (c *Client) ReplaceExactA(ctx context.Context, fqdn, expectedPrevious, addr
 	if ttl < 30 || ttl > 86400 {
 		return Record{}, errors.New("invalid_dns_ttl")
 	}
-	before, err := c.ExactRecord(ctx, fqdn, "A")
+	managed := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(c.ManagedDomain)), ".")
+	fqdn = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(fqdn)), ".")
+	if managed == "" || fqdn == managed || !strings.HasSuffix(fqdn, "."+managed) {
+		return Record{}, errors.New("managed_record_not_allowed")
+	}
+	name := strings.TrimSuffix(fqdn, "."+managed)
+	beforeRecords, err := c.List(ctx, managed)
 	if err != nil {
 		return Record{}, err
 	}
+	beforeMatches, unrelated := recordsForName(beforeRecords, name, fqdn, "A")
+	if len(beforeMatches) != 1 {
+		return Record{}, errors.New("managed_record_match_not_unique")
+	}
+	before := beforeMatches[0]
 	if expectedPrevious != "" && before.Address != expectedPrevious {
 		return Record{}, errors.New("managed_record_compare_and_swap_failed")
 	}
-	managed := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(c.ManagedDomain)), ".")
-	name := strings.TrimSuffix(strings.TrimSuffix(strings.ToLower(strings.TrimSpace(fqdn)), "."), "."+managed)
+	if before.Address == addr.String() && before.TTL == ttl {
+		return before, nil
+	}
 	if err := c.putRecords(ctx, managed, []Record{{Name: name, Type: "A", Address: addr.String(), TTL: ttl}}); err != nil {
 		return Record{}, err
 	}
-	after, err := c.ExactRecord(ctx, fqdn, "A")
+	afterPut, err := c.List(ctx, managed)
 	if err != nil {
 		return Record{}, err
 	}
-	if after.Address != addr.String() || after.TTL != ttl {
+	afterPutMatches, afterPutUnrelated := recordsForName(afterPut, name, fqdn, "A")
+	if !recordsEqual(unrelated, afterPutUnrelated) {
+		return Record{}, errors.New("managed_record_unrelated_changed")
+	}
+	targets, stale := 0, make([]recordDeleteRequest, 0, 1)
+	for _, record := range afterPutMatches {
+		if record.Address == addr.String() && record.TTL == ttl {
+			targets++
+			continue
+		}
+		if record.Address == before.Address {
+			stale = append(stale, recordDeleteRequest{Name: name, Type: "A", Address: record.Address})
+		}
+	}
+	if targets != 1 || len(stale) > 1 || len(afterPutMatches) != targets+len(stale) {
 		return Record{}, errors.New("managed_record_update_not_verified")
 	}
-	return after, nil
+	if len(stale) == 1 {
+		if err := c.do(ctx, http.MethodDelete, managed, stale, nil); err != nil {
+			return Record{}, err
+		}
+	}
+	finalRecords, err := c.List(ctx, managed)
+	if err != nil {
+		return Record{}, err
+	}
+	final, finalUnrelated := recordsForName(finalRecords, name, fqdn, "A")
+	if len(final) != 1 || final[0].Address != addr.String() || final[0].TTL != ttl {
+		return Record{}, errors.New("managed_record_update_not_verified")
+	}
+	if !recordsEqual(unrelated, finalUnrelated) {
+		return Record{}, errors.New("managed_record_unrelated_changed")
+	}
+	return final[0], nil
 }
 
 func (c *Client) streamACMEName(host, value string) (string, error) {
