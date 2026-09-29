@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -65,7 +66,61 @@ type publicIngressSwitcher struct {
 
 func newPublicIngressSwitcher(h *Handler) *publicIngressSwitcher {
 	record := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(h.cfg.PublicIngressHost)), ".")
-	return &publicIngressSwitcher{h: h, record: record, ttl: 60, lookupHost: net.DefaultResolver.LookupHost, lookupIP: net.DefaultResolver.LookupNetIP, httpClient: &http.Client{Timeout: 20 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}, now: time.Now}
+	return &publicIngressSwitcher{h: h, record: record, ttl: 60, lookupHost: lookupPublicA, lookupIP: net.DefaultResolver.LookupNetIP, httpClient: &http.Client{Timeout: 20 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}, now: time.Now}
+}
+
+func lookupPublicA(ctx context.Context, host string) ([]string, error) {
+	return lookupPublicAEndpoints(ctx, []string{
+		"https://dns.google/resolve?name=" + url.QueryEscape(host) + "&type=A",
+		"https://cloudflare-dns.com/dns-query?name=" + url.QueryEscape(host) + "&type=A",
+	})
+}
+
+func lookupPublicAEndpoints(ctx context.Context, endpoints []string) ([]string, error) {
+	client := &http.Client{Timeout: 10 * time.Second}
+	var consensus []string
+	for _, endpoint := range endpoints {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Accept", "application/dns-json")
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		var document struct {
+			Status int `json:"Status"`
+			Answer []struct {
+				Type int    `json:"type"`
+				Data string `json:"data"`
+			} `json:"Answer"`
+		}
+		decodeErr := json.NewDecoder(io.LimitReader(resp.Body, 256<<10)).Decode(&document)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK || decodeErr != nil || document.Status != 0 {
+			return nil, errors.New("public_recursive_lookup_failed")
+		}
+		answers := make([]string, 0, len(document.Answer))
+		for _, answer := range document.Answer {
+			if answer.Type == 1 {
+				ip, err := netip.ParseAddr(strings.TrimSpace(answer.Data))
+				if err != nil || !ip.Is4() {
+					return nil, errors.New("public_recursive_answer_invalid")
+				}
+				answers = append(answers, ip.String())
+			}
+		}
+		sort.Strings(answers)
+		if len(answers) == 0 {
+			return nil, errors.New("public_recursive_answer_empty")
+		}
+		if consensus != nil && strings.Join(consensus, ",") != strings.Join(answers, ",") {
+			return nil, errors.New("public_recursive_resolvers_disagree")
+		}
+		consensus = answers
+	}
+	return consensus, nil
 }
 
 func (s *publicIngressSwitcher) status(ctx context.Context) publicIngressState {
@@ -303,7 +358,7 @@ func recursiveAnswersMatch(ips []string, want string) bool {
 	return true
 }
 
-func (s *publicIngressSwitcher) freshPublicRequestClient() (*http.Client, func()) {
+func (s *publicIngressSwitcher) freshPublicRequestClient(ctx context.Context) (*http.Client, func(), error) {
 	base := s.httpClient
 	if base == nil {
 		base = &http.Client{Timeout: 20 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
@@ -316,17 +371,34 @@ func (s *publicIngressSwitcher) freshPublicRequestClient() (*http.Client, func()
 		transport = http.DefaultTransport.(*http.Transport).Clone()
 	}
 	if transport == nil {
-		return &client, func() {}
+		return &client, func() {}, nil
 	}
 	transport.DisableKeepAlives = true
+	if base.Transport == nil {
+		answers, err := s.lookupHost(ctx, s.record)
+		if err != nil || len(answers) == 0 {
+			return nil, func() {}, errors.New("public_recursive_lookup_failed")
+		}
+		ip, err := netip.ParseAddr(answers[0])
+		if err != nil || !ip.Is4() || !recursiveAnswersMatch(answers, ip.String()) {
+			return nil, func() {}, errors.New("public_recursive_answer_ambiguous")
+		}
+		dialer := &net.Dialer{Timeout: 10 * time.Second}
+		transport.DialContext = func(c context.Context, network, _ string) (net.Conn, error) {
+			return dialer.DialContext(c, network, net.JoinHostPort(ip.String(), "443"))
+		}
+	}
 	client.Transport = transport
-	return &client, transport.CloseIdleConnections
+	return &client, transport.CloseIdleConnections, nil
 }
 
 func (s *publicIngressSwitcher) verifyPublicRequest(ctx context.Context, expectedNodeID string) (string, error) {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+s.record+"/health", nil)
 	req.Close = true
-	client, closeIdle := s.freshPublicRequestClient()
+	client, closeIdle, err := s.freshPublicRequestClient(ctx)
+	if err != nil {
+		return "", err
+	}
 	defer closeIdle()
 	resp, err := client.Do(req)
 	if err != nil {

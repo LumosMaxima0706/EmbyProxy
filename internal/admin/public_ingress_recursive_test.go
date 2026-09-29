@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -82,5 +83,29 @@ func TestVerifyPublicRequestAlwaysUsesFreshConnection(t *testing.T) {
 	}
 	if got := connections.Load(); got < 2 {
 		t.Fatalf("connections=%d, want at least 2", got)
+	}
+}
+
+func TestLookupPublicARequiresResolverConsensus(t *testing.T) {
+	answer := "1.1.1.1"
+	resolver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"Status":0,"Answer":[{"type":1,"data":"` + answer + `"}]}`))
+	}))
+	defer resolver.Close()
+	got, err := lookupPublicAEndpoints(context.Background(), []string{resolver.URL + "/one", resolver.URL + "/two"})
+	if err != nil || len(got) != 1 || got[0] != "1.1.1.1" {
+		t.Fatalf("answers=%v err=%v", got, err)
+	}
+	calls := 0
+	resolver.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		value := "1.1.1.1"
+		if calls == 2 {
+			value = "2.2.2.2"
+		}
+		_, _ = w.Write([]byte(`{"Status":0,"Answer":[{"type":1,"data":"` + value + `"}]}`))
+	})
+	if _, err := lookupPublicAEndpoints(context.Background(), []string{resolver.URL + "/one", resolver.URL + "/two"}); err == nil || !strings.Contains(err.Error(), "resolvers_disagree") {
+		t.Fatalf("resolver disagreement accepted: %v", err)
 	}
 }
