@@ -55,10 +55,18 @@ func TestPublicIngressAutomaticTriesNextPreDNSCandidate(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now().Unix()
-	for priority, id := range []string{"edge-one", "edge-two"} {
-		if _, err := h.store.DB().ExecContext(ctx, `INSERT INTO proxy_nodes (id,name,public_address,enabled,state,priority,quota_bytes,used_bytes,reset_day,reset_timezone,next_reset_at,last_heartbeat_at,playback_healthy,ingress_healthy,config_synced,agent_version,agent_commit,credential_hash,last_error,created_at,updated_at) VALUES (?,?,?,1,'healthy',?,0,0,1,'UTC',0,?,1,1,1,'v','test','','',?,?)`, id, id, "https://127.0.0.1", priority+1, now, now, now); err != nil {
+	// Insert in the opposite order to the configured failover priority.
+	for _, candidate := range []struct {
+		id       string
+		priority int
+	}{{"edge-two", 2}, {"edge-one", 0}} {
+		if _, err := h.store.DB().ExecContext(ctx, `INSERT INTO proxy_nodes (id,name,public_address,enabled,state,priority,quota_bytes,used_bytes,reset_day,reset_timezone,next_reset_at,last_heartbeat_at,playback_healthy,ingress_healthy,config_synced,agent_version,agent_commit,credential_hash,last_error,created_at,updated_at) VALUES (?,?,?,1,'healthy',?,0,0,1,'UTC',0,?,1,1,1,'v','test','','',?,?)`, candidate.id, candidate.id, "https://127.0.0.1", candidate.priority, now, now, now); err != nil {
 			t.Fatal(err)
 		}
+	}
+	ordered, err := h.store.ListProxyNodes(ctx)
+	if err != nil || len(ordered) != 2 || ordered[0].ID != "edge-one" || ordered[1].ID != "edge-two" {
+		t.Fatalf("fallback priority order: %+v err=%v", ordered, err)
 	}
 	if err := s.reconcile(ctx); err == nil {
 		t.Fatal("two unreachable edges accepted")

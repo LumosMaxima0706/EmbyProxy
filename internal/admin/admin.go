@@ -291,7 +291,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			return
 		}
-		state, err := h.publicIngress.switchTo(r.Context(), nodeID, "admin_manual", mode)
+		trigger := "admin_manual"
+		if mode == "fixed" {
+			trigger = "admin_fixed"
+		}
+		state, err := h.publicIngress.switchTo(r.Context(), nodeID, trigger, mode)
 		if err != nil {
 			writePublicIngressState(w, http.StatusBadGateway, state, err)
 			return

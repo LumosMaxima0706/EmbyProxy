@@ -409,6 +409,26 @@ func (h *Handler) handleProxyNodesAPI(w http.ResponseWriter, r *http.Request, pa
 			if !decodeAuthJSON(w, r, &body) {
 				return
 			}
+			if raw, exists := body["priority"]; exists {
+				v, ok := raw.(float64)
+				if !ok || v < 0 || v > 10000 || v != float64(int(v)) {
+					writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "INVALID_PRIORITY"})
+					return
+				}
+			}
+			if raw, exists := body["priority"]; exists && len(body) == 1 {
+				if n.State == "removed" || n.State == "revoked" {
+					writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "error": "NODE_NOT_SCHEDULABLE"})
+					return
+				}
+				if err := h.store.SetProxyNodePriority(ctx, id, int(raw.(float64))); err != nil {
+					writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "error": "PRIORITY_UPDATE_FAILED"})
+					return
+				}
+				n, _ = h.store.GetProxyNode(ctx, id)
+				writeJSON(w, http.StatusOK, map[string]any{"ok": true, "node": n})
+				return
+			}
 			oldResetDay, oldResetTimezone := n.ResetDay, n.ResetTimezone
 			explicitNextResetValue, explicitNextReset := body["next_reset_at"].(float64)
 			explicitNextReset = explicitNextReset && explicitNextResetValue >= 0

@@ -518,6 +518,14 @@ func (s *publicIngressSwitcher) reconcile(ctx context.Context) error {
 			return err
 		}
 	}
+	// Old UI manual switches wrote fixed by default. Upgrade verified manual
+	// operations without changing explicitly pinned API requests.
+	if state.Phase == "verified" && state.Mode == "fixed" && state.Trigger == "admin_manual" && state.RequestVerified {
+		state.Mode = "preferred"
+		if err := s.save(ctx, state); err != nil {
+			return err
+		}
+	}
 	if state.Mode == "fixed" {
 		if s.schedulerStatus(ctx).Error != "" {
 			_ = s.saveSchedulerStatus(ctx, "", "")
@@ -610,6 +618,7 @@ func (h *Handler) StartPublicIngressScheduler(ctx context.Context) {
 		return
 	}
 	go func() {
+		_ = h.publicIngress.reconcileWithWarning(ctx)
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
 		for {

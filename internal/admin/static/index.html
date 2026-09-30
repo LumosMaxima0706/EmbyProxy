@@ -574,6 +574,7 @@ tr:last-child td{border-bottom:0}
         <section id="tabProxyNodes" class="stats-deck" style="display:none">
           <div class="context-card" id="dnsAutomationCard"><div class="stats-top"><div><strong>DNS 自动化</strong><p class="form-hint">Spaceship 凭据仅提交到 Controller，保存后不会再次显示。</p></div><button class="btn btn-sm" onclick="testDNSAutomation()">测试连接</button></div><div class="form-grid"><label>托管域名<input id="dnsManagedDomain" placeholder="149077530.xyz"></label><label>Spaceship API Key<input id="dnsAPIKey" type="password" autocomplete="off" placeholder="输入 API Key"></label><label>Spaceship API Secret<input id="dnsAPISecret" type="password" autocomplete="off" placeholder="输入 API Secret"></label><label>默认 TTL<input id="dnsTTL" type="number" value="300" min="30" max="86400"></label><button class="primary-action" onclick="saveDNSAutomation()">保存 DNS 配置</button></div><div id="dnsAutomationStatus" class="form-hint"></div></div>
           <div class="stats-top"><div><strong>反代节点</strong><p class="form-hint">调度、连接和远端生命周期统一管理。已移除节点默认隐藏。</p></div><button class="primary-action" onclick="openProxyNodeModal()">添加反代 VPS</button></div>
+          <p id="publicIngressModeStatus" class="form-hint" role="status" aria-live="polite"></p>
           <p id="publicIngressSchedulerStatus" class="form-hint" role="status" aria-live="polite"></p>
           <p id="publicIngressObservedStatus" class="form-hint" role="status" aria-live="polite"></p>
           <div class="signal-grid proxy-summary" id="proxyNodeSummary"></div>
@@ -731,6 +732,16 @@ tr:last-child td{border-bottom:0}
       <div class="form-group"><label for="proxyNodeThreshold">切换阈值 (%)</label><input id="proxyNodeThreshold" type="number" min="1" max="100" step="0.1" value="95"></div>
       <div class="form-group"><label for="proxyNodeResetDay">重置日</label><input id="proxyNodeResetDay" type="number" min="1" max="31" value="1"></div>
       <div class="form-actions form-full"><button type="button" class="btn" onclick="closeProxyNodeModal()">取消</button><button type="submit" class="primary-action" id="proxyNodeSubmit">创建并生成安装命令</button></div>
+    </form>
+  </div>
+</div>
+
+<div class="sheet-layer" id="proxyPriorityModal" style="display:none" onclick="if(event.target===this)closeProxyPriorityModal()">
+  <div class="sheet">
+    <div class="sheet-head"><div><h2>调度优先级</h2><p id="proxyPriorityNodeName"></p></div><button class="sheet-close" aria-label="关闭" onclick="closeProxyPriorityModal()">×</button></div>
+    <form id="proxyPriorityForm" class="form-grid" onsubmit="saveProxyPriority(event)">
+      <div class="form-group"><label for="proxyPriorityValue">优先级（数字越小越靠前）</label><input id="proxyPriorityValue" type="number" min="0" max="10000" step="1" required></div>
+      <div class="form-actions form-full"><button type="button" class="btn" onclick="closeProxyPriorityModal()">取消</button><button type="submit" class="primary-action">保存优先级</button></div>
     </form>
   </div>
 </div>
@@ -1764,11 +1775,21 @@ function switchTab(name, btn) {
   }
 }
 
+let proxyNodeLoadSequence = 0;
 async function loadProxyNodes() {
+  const sequence = ++proxyNodeLoadSequence;
   const r = await authFetch('/api/admin/proxy-nodes');
+  if (sequence !== proxyNodeLoadSequence) return;
   if (!r.ok) { toast('加载反代节点失败: ' + authErrorMessage(r.error), 'err'); return; }
   const ingress = await authFetch('/api/admin/public-ingress/status');
+  if (sequence !== proxyNodeLoadSequence) return;
 	window.publicIngressOperation = ingress.ok ? ingress.operation : null;
+  const modeStatus = document.getElementById('publicIngressModeStatus');
+  if (modeStatus) {
+    const operation = window.publicIngressOperation;
+    const node = (r.nodes || []).find(n => n.id === operation?.active_node_id);
+    modeStatus.textContent = ingress.ok && operation?.phase === 'verified' ? `已验证入口：${node?.name || operation.active_node_id} · ${operation.mode === 'fixed' ? '固定（故障不回退）' : '故障保护已启用'}` : '';
+  }
   const notice = document.getElementById('publicIngressSchedulerStatus');
   if (notice) {
     const warning = ingress.scheduler;
@@ -1781,6 +1802,7 @@ async function loadProxyNodes() {
     }
   }
   const observation = await authFetch('/api/admin/public-ingress/observe');
+  if (sequence !== proxyNodeLoadSequence) return;
   const observedStatus = document.getElementById('publicIngressObservedStatus');
   if (observedStatus) {
     const seen = observation.observation || {};
@@ -1809,6 +1831,7 @@ function renderProxyNodeTable() {
   const body = document.getElementById('proxyNodesBody');
   const verifiedNodeId = window.publicIngressOperation?.phase === 'verified' && window.publicIngressOperation?.request_verified ? window.publicIngressOperation.active_node_id : '';
   const items = all.filter(proxyNodeVisible);
+  const topPriority = all.filter(n=>n.enabled&&n.state==='healthy').reduce((best,n)=>Math.min(best,Number(n.priority)),Infinity);
   const summary = {all: all.filter(n=>n.state!=='removed').length, available: all.filter(n=>n.state==='healthy'&&n.enabled).length, active: all.filter(n=>n.id===verifiedNodeId).length, issue: all.filter(n=>n.state!=='removed'&&['degraded','online'].includes(n.state)&&!proxyNodeHealth(n)).length, disabled: all.filter(n=>['disabled','revoked','draining','removed'].includes(n.state)).length};
   const summaryEl = document.getElementById('proxyNodeSummary');
   if (summaryEl) summaryEl.innerHTML = [['all','反代节点'],['available','可用'],['active','上次已验证切换'],['issue','异常（degraded）'],['disabled','已停用/撤销/已移除']].map(([key,label])=>`<div class="signal"><b>${summary[key]}</b><div><span>${label}</span><em>控制面实时状态</em></div></div>`).join('');
@@ -1816,11 +1839,11 @@ function renderProxyNodeTable() {
     const remaining = n.quota_bytes > 0 ? Math.max(0, n.quota_bytes - n.used_bytes) : null;
     const health = proxyNodeHealth(n) ? 'healthy' : (n.state || 'unknown');
     const chip = (value, ok) => `<span class="chip ${ok ? 'ok' : 'warn'}">${value ? '正常' : '未通过'}</span>`;
-    const primary = `${n.id===verifiedNodeId ? '<span class="node-tag">上次已验证切换</span>' : ''}${Number(n.priority||0)===1 ? '<span class="node-tag">最高优先级</span>' : ''}${n.state==='healthy' && n.enabled ? `<button class="btn btn-sm btn-primary" onclick="switchProxyNode('${attr(n.id)}')">切换到此节点</button>` : (n.state==='disabled' ? `<button class="btn btn-sm btn-primary" onclick="toggleProxyNode('${attr(n.id)}',true)">启用</button>` : (n.state==='revoked' ? '<span class="chip err">需重新接入</span>' : ''))}`;
+    const primary = `${n.id===verifiedNodeId ? '<span class="node-tag">上次已验证切换</span>' : ''}${n.enabled && n.state==='healthy' && Number(n.priority)===topPriority ? '<span class="node-tag">最高优先级</span>' : ''}${n.state==='healthy' && n.enabled ? `<button class="btn btn-sm btn-primary" onclick="switchProxyNode('${attr(n.id)}')">切换到此节点</button>` : (n.state==='disabled' ? `<button class="btn btn-sm btn-primary" onclick="toggleProxyNode('${attr(n.id)}',true)">启用</button>` : (n.state==='revoked' ? '<span class="chip err">需重新接入</span>' : ''))}`;
     const remoteCleanupReady = n.decommission_capable || !n.last_heartbeat_at || (Date.now()/1000 - Number(n.last_heartbeat_at)) > 300;
     const removeLabel = remoteCleanupReady ? '彻底移除' : '从控制面移除（远端不支持）';
-    const menu = `<div class="proxy-action-menu"><button class="btn btn-sm proxy-more" aria-label="更多操作" onclick="toggleProxyMenu('${attr(n.id)}',event)">⋯</button><div class="proxy-menu" id="proxy-menu-${attr(n.id)}" hidden>${n.state!=='removed'?`<button onclick="viewProxyNodeDetails('${attr(n.id)}')">详情</button>`:''}${n.state!=='revoked'&&n.state!=='removed'?`<button onclick="openProxyQuotaModal('${attr(n.id)}')">流量与重置</button><button onclick="drainProxyNode('${attr(n.id)}')">排空现有连接</button>`:''}${n.state!=='revoked'&&n.state!=='removed'?`<button onclick="toggleProxyNode('${attr(n.id)}',${!n.enabled})">${n.enabled?'禁用调度':'启用调度'}</button>`:''}<button onclick="regenerateProxyBootstrap('${attr(n.id)}')">重新接入/重装</button>${n.state!=='revoked'&&n.state!=='removed'?`<button onclick="revokeProxyIdentity('${attr(n.id)}')">撤销身份</button>`:''}<button onclick="openDecommissionModal('${attr(n.id)}')">${removeLabel}</button></div></div>`;
-    return `<tr><td><strong>${esc(n.name)}</strong><small class="muted">${esc(n.public_address || '未配置 HTTPS origin')}</small><small class="muted">最近心跳：${n.last_heartbeat_at ? new Date(Number(n.last_heartbeat_at)*1000).toLocaleString() : '暂无'}</small></td><td><span class="chip ${health === 'healthy' ? 'ok' : (n.state==='revoked'?'err':'warn')}">${esc(n.state || 'unknown')}</span></td><td>${chip(n.playback_healthy, n.playback_healthy)}</td><td>${chip(n.ingress_healthy, n.ingress_healthy)}</td><td>${chip(n.enabled && health === 'healthy', n.enabled && health === 'healthy')}</td><td>${remaining === null ? '未设置' : `${formatBytes(n.used_bytes)} / ${formatBytes(n.quota_bytes)}<small class="muted">已用比例：${n.quota_bytes>0?(Number(n.used_bytes||0)*100/Number(n.quota_bytes)).toFixed(2):'--'}% · 切换阈值：${Number(n.threshold_percent||100)}%</small>`}</td><td>${Number(n.priority || i + 1)}</td><td><div class="action-pack" style="justify-content:flex-start">${primary}${menu}</div></td></tr>`;
+    const menu = `<div class="proxy-action-menu"><button class="btn btn-sm proxy-more" aria-label="更多操作" onclick="toggleProxyMenu('${attr(n.id)}',event)">⋯</button><div class="proxy-menu" id="proxy-menu-${attr(n.id)}" hidden>${n.state!=='removed'?`<button onclick="viewProxyNodeDetails('${attr(n.id)}')">详情</button>`:''}${n.state!=='revoked'&&n.state!=='removed'?`<button onclick="openProxyPriorityModal('${attr(n.id)}')">修改优先级</button><button onclick="openProxyQuotaModal('${attr(n.id)}')">流量与重置</button><button onclick="drainProxyNode('${attr(n.id)}')">排空现有连接</button>`:''}${n.state!=='revoked'&&n.state!=='removed'?`<button onclick="toggleProxyNode('${attr(n.id)}',${!n.enabled})">${n.enabled?'禁用调度':'启用调度'}</button>`:''}<button onclick="regenerateProxyBootstrap('${attr(n.id)}')">重新接入/重装</button>${n.state!=='revoked'&&n.state!=='removed'?`<button onclick="revokeProxyIdentity('${attr(n.id)}')">撤销身份</button>`:''}<button onclick="openDecommissionModal('${attr(n.id)}')">${removeLabel}</button></div></div>`;
+    return `<tr><td><strong>${esc(n.name)}</strong><small class="muted">${esc(n.public_address || '未配置 HTTPS origin')}</small><small class="muted">最近心跳：${n.last_heartbeat_at ? new Date(Number(n.last_heartbeat_at)*1000).toLocaleString() : '暂无'}</small></td><td><span class="chip ${health === 'healthy' ? 'ok' : (n.state==='revoked'?'err':'warn')}">${esc(n.state || 'unknown')}</span></td><td>${chip(n.playback_healthy, n.playback_healthy)}</td><td>${chip(n.ingress_healthy, n.ingress_healthy)}</td><td>${chip(n.enabled && health === 'healthy', n.enabled && health === 'healthy')}</td><td>${remaining === null ? '未设置' : `${formatBytes(n.used_bytes)} / ${formatBytes(n.quota_bytes)}<small class="muted">已用比例：${n.quota_bytes>0?(Number(n.used_bytes||0)*100/Number(n.quota_bytes)).toFixed(2):'--'}% · 切换阈值：${Number(n.threshold_percent||100)}%</small>`}</td><td>${Number(n.priority)}</td><td><div class="action-pack" style="justify-content:flex-start">${primary}${menu}</div></td></tr>`;
   }).join('') : '<tr><td colspan="8" class="table-empty">当前筛选暂无节点</td></tr>';
 }
 function toggleProxyMenu(id, event) { event?.stopPropagation(); document.querySelectorAll('.proxy-menu').forEach(el=>{ if(el.id!=='proxy-menu-'+id) el.hidden=true; }); const menu=document.getElementById('proxy-menu-'+id); if(menu) menu.hidden=!menu.hidden; }
@@ -1852,6 +1875,22 @@ async function submitProxyNode(event) {
   if (!r.ok) { const error = document.getElementById('proxyNodeAddressError'); error.textContent = r.error || '创建 enrollment 失败'; error.style.display='block'; toast(r.error || '创建 enrollment 失败','err'); return; }
   closeProxyNodeModal();
   const output = document.getElementById('proxyEnrollmentOutput'); output.hidden = false; output.textContent = `一次性安装命令（15 分钟内有效）\n${r.install_command}`; document.getElementById('proxyEnrollmentCopy').hidden = false; await loadProxyNodes(); toast('节点已创建，请执行安装命令', 'ok');
+}
+let proxyPriorityNodeId = '';
+function openProxyPriorityModal(id) {
+  const node=(window.proxyNodes||[]).find(n=>n.id===id); if (!node) return;
+  proxyPriorityNodeId=id;
+  document.getElementById('proxyPriorityNodeName').textContent=node.name;
+  document.getElementById('proxyPriorityValue').value=Number(node.priority);
+  showModal('proxyPriorityModal');
+}
+function closeProxyPriorityModal(){hideModal('proxyPriorityModal');proxyPriorityNodeId='';}
+async function saveProxyPriority(event) {
+  event.preventDefault(); if (!event.currentTarget.reportValidity() || !proxyPriorityNodeId) return;
+  const priority=Number(document.getElementById('proxyPriorityValue').value);
+  const r=await authFetch('/api/admin/proxy-nodes/'+encodeURIComponent(proxyPriorityNodeId),{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({priority})});
+  if (!r.ok){toast('保存优先级失败: '+authErrorMessage(r.error),'err');return;}
+  closeProxyPriorityModal(); await loadProxyNodes(); toast('优先级已保存','ok');
 }
 let proxyQuotaNodeId = '';
 function openProxyQuotaModal(id) {
@@ -1895,7 +1934,17 @@ async function confirmDecommission(){ const node=(window.proxyNodes||[]).find(n=
 async function retryDecommissionJob(jobId){ const r=await authFetch('/api/admin/proxy-node-jobs/'+encodeURIComponent(jobId)+'/retry',{method:'POST'}); if(!r.ok){toast('重试失败: '+authErrorMessage(r.error),'err');return;} toast('远端清理已重试','ok'); const job=r.job||{}; const progress=document.getElementById('decommissionProgress'); if(progress) progress.innerHTML=(job.steps||[]).map(s=>`<div class="job-step"><b>${esc(s.name)}</b><span>${esc(s.state)}</span></div>`).join(''); await loadProxyNodes(); }
 async function copyProxyEnrollmentCommand() { const output = document.getElementById('proxyEnrollmentOutput'); const command = (output?.textContent || '').split('\n').slice(1).join('\n').trim(); if (!command) return; try { await navigator.clipboard.writeText(command); toast('安装命令已复制', 'ok'); } catch (_) { toast('浏览器拒绝访问剪贴板，请手动复制', 'err'); } }
 async function revokeProxyNode(id) { if (!window.confirm('确认排空该节点？现有连接自然结束后将撤销凭据。')) return; const r=await authFetch('/api/admin/proxy-nodes/'+encodeURIComponent(id)+'/revoke',{method:'POST'}); if(!r.ok) toast('排空节点失败','err'); await loadProxyNodes(); }
-async function switchProxyNode(id) { if (window.proxySwitchInFlight) return; const fixed=window.confirm('确定：固定到此节点（取消则按“首选、故障允许回退”切换）？'); if (!window.confirm('将真实更新统一业务入口 DNS，并执行 TLS、路由、提供商回读、外部解析和请求落点验证。继续？')) return; window.proxySwitchInFlight=true; try { const r=await authFetch('/api/admin/public-ingress/switch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({node_id:id,mode:fixed?'fixed':'preferred',confirm:true})}); if(!r.ok){toast('公开入口切换失败: '+authErrorMessage(r.error),'err');return;} toast('公开入口已验证切换到目标 VPS','ok'); await loadProxyNodes(); } finally { window.proxySwitchInFlight=false; } }
+async function switchProxyNode(id) {
+  if (window.proxySwitchInFlight) return;
+  const node=(window.proxyNodes||[]).find(n=>n.id===id);
+  if (!node || !window.confirm(`将统一入口切换到 ${node.name}？故障时仍按优先级回退。`)) return;
+  window.proxySwitchInFlight=true;
+  try {
+    const r=await authFetch('/api/admin/public-ingress/switch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({node_id:id,mode:'preferred',confirm:true})});
+    if (!r.ok){toast('公开入口切换失败: '+authErrorMessage(r.error),'err');await loadProxyNodes();return;}
+    toast('公开入口已验证切换，故障保护已启用','ok'); await loadProxyNodes();
+  } finally {window.proxySwitchInFlight=false;}
+}
 
 async function loadNodes() {
   const r = await api('list');

@@ -706,7 +706,7 @@ func scanProxyNode(row interface{ Scan(...any) error }) (ProxyNode, error) {
 const proxyNodeFields = `id,name,public_address,enabled,state,priority,quota_bytes,used_bytes,threshold_percent,reset_day,reset_timezone,next_reset_at,last_heartbeat_at,playback_healthy,ingress_healthy,config_synced,agent_version,agent_commit,decommission_capable,last_error,created_at,updated_at`
 
 func (s *Store) ListProxyNodes(ctx context.Context) ([]ProxyNode, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+proxyNodeFields+` FROM proxy_nodes ORDER BY priority, name`)
+	rows, err := s.db.QueryContext(ctx, `SELECT `+proxyNodeFields+` FROM proxy_nodes ORDER BY priority, id`)
 	if err != nil {
 		return nil, err
 	}
@@ -801,8 +801,26 @@ func (s *Store) GetProxyNodeForEnrollment(ctx context.Context, enrollmentID stri
 	}
 	return &node, nil
 }
+func (s *Store) SetProxyNodePriority(ctx context.Context, id string, priority int) error {
+	if id == "" || priority < 0 || priority > 10000 {
+		return errors.New("invalid_priority")
+	}
+	result, err := s.db.ExecContext(ctx, `UPDATE proxy_nodes SET priority=?,updated_at=? WHERE id=? AND state NOT IN ('removed','revoked')`, priority, time.Now().Unix(), id)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 func (s *Store) UpdateProxyNode(ctx context.Context, n ProxyNode) error {
-	if n.ID == "" || !validNodeName(n.Name) || n.QuotaBytes < 0 || n.UsedBytes < 0 || n.ThresholdPercent <= 0 || n.ThresholdPercent > 100 || n.ResetDay < 1 || n.ResetDay > 31 {
+	if n.ID == "" || !validNodeName(n.Name) || n.Priority < 0 || n.Priority > 10000 || n.QuotaBytes < 0 || n.UsedBytes < 0 || n.ThresholdPercent <= 0 || n.ThresholdPercent > 100 || n.ResetDay < 1 || n.ResetDay > 31 {
 		return errors.New("invalid_proxy_node")
 	}
 	_, err := s.db.ExecContext(ctx, `UPDATE proxy_nodes SET name=?,public_address=?,enabled=?,state=?,priority=?,quota_bytes=?,used_bytes=?,threshold_percent=?,reset_day=?,reset_timezone=?,next_reset_at=?,playback_healthy=?,ingress_healthy=?,config_synced=?,last_error=?,updated_at=? WHERE id=?`, n.Name, n.PublicAddress, boolInt(n.Enabled), n.State, n.Priority, n.QuotaBytes, n.UsedBytes, n.ThresholdPercent, n.ResetDay, n.ResetTimezone, n.NextResetAt, boolInt(n.PlaybackHealthy), boolInt(n.IngressHealthy), boolInt(n.ConfigSynced), redactFailoverStorageText(n.LastError), time.Now().Unix(), n.ID)
