@@ -722,7 +722,7 @@ tr:last-child td{border-bottom:0}
     <form id="proxyNodeForm" class="form-grid" oninput="syncProxyNodeFormValidity()" onsubmit="submitProxyNode(event)">
       <div class="form-section">基本信息</div>
       <div class="form-group"><label for="proxyNodeName">节点名称</label><input id="proxyNodeName" required pattern="[a-z0-9][a-z0-9-]{1,62}" value="edge-new" placeholder="edge-new"><small class="form-hint">小写字母、数字和短横线</small></div>
-      <div class="form-group"><label for="proxyNodePriority">优先级</label><input id="proxyNodePriority" type="number" min="0" max="10000" value="10"></div>
+      <div class="form-group"><label for="proxyNodePriority">优先级（默认末位）</label><input id="proxyNodePriority" type="number" min="0" max="10000" step="1"></div>
       <div class="form-section">自动 DNS / HTTPS 入口</div>
       <div class="form-group"><label for="proxyNodePrefix">域名前缀</label><input id="proxyNodePrefix" pattern="[a-z0-9-]{1,63}" placeholder="rak"><small class="form-hint">启用 DNS 自动化后自动生成 FQDN</small></div>
       <div class="form-group"><label for="proxyNodeIPv4">VPS 公网 IPv4</label><input id="proxyNodeIPv4" type="text" pattern="[0-9.]{7,15}" placeholder="1.2.3.4"></div>
@@ -1856,7 +1856,7 @@ function syncProxyNodeFormValidity() {
   const button = document.getElementById('proxyNodeSubmit');
   if (form && button) button.disabled = !form.checkValidity();
 }
-function openProxyNodeModal() { document.getElementById('proxyNodeForm').reset(); document.getElementById('proxyNodeName').value='edge-new'; document.getElementById('proxyNodePriority').value='10'; document.getElementById('proxyNodeQuota').value='1000'; document.getElementById('proxyNodeThreshold').value='95'; document.getElementById('proxyNodeResetDay').value='1'; document.getElementById('proxyNodeAddressError').style.display='none'; showModal('proxyNodeModal'); syncProxyNodeFormValidity(); }
+function openProxyNodeModal() { document.getElementById('proxyNodeForm').reset(); document.getElementById('proxyNodeName').value='edge-new'; document.getElementById('proxyNodePriority').value=''; document.getElementById('proxyNodeQuota').value='1000'; document.getElementById('proxyNodeThreshold').value='95'; document.getElementById('proxyNodeResetDay').value='1'; document.getElementById('proxyNodeAddressError').style.display='none'; showModal('proxyNodeModal'); syncProxyNodeFormValidity(); }
 function closeProxyNodeModal() { hideModal('proxyNodeModal'); }
 async function submitProxyNode(event) {
   event.preventDefault();
@@ -1869,7 +1869,8 @@ async function submitProxyNode(event) {
   const quota = Number(document.getElementById('proxyNodeQuota').value || 0);
   const thresholdPercent = Number(document.getElementById('proxyNodeThreshold').value || 95);
   const resetDay = Number(document.getElementById('proxyNodeResetDay').value || 1);
-  const priority = Number(document.getElementById('proxyNodePriority').value || 0);
+  const priorityInput = document.getElementById('proxyNodePriority').value.trim();
+  const priority = priorityInput === '' ? undefined : Number(priorityInput);
   const r = await authFetch('/api/admin/proxy-nodes', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name,public_address:address,domain_prefix:domainPrefix,public_ipv4:publicIPv4,quota_bytes:Math.max(0,quota)*1e9,threshold_percent:thresholdPercent,reset_day:resetDay,reset_timezone:'Asia/Shanghai',priority})});
   button.disabled = false;
   if (!r.ok) { const error = document.getElementById('proxyNodeAddressError'); error.textContent = r.error || '创建 enrollment 失败'; error.style.display='block'; toast(r.error || '创建 enrollment 失败','err'); return; }

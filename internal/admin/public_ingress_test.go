@@ -133,7 +133,7 @@ func TestPublicIngressThresholdCooldown(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now().Unix()
-	if _, err := h.store.DB().ExecContext(ctx, `UPDATE proxy_nodes SET state='healthy',last_heartbeat_at=?,playback_healthy=1,ingress_healthy=1,config_synced=1,quota_bytes=100,used_bytes=100 WHERE id=?`, now, enrollment.NodeID); err != nil {
+	if _, err := h.store.DB().ExecContext(ctx, `UPDATE proxy_nodes SET enabled=1,state='healthy',last_heartbeat_at=?,playback_healthy=1,ingress_healthy=1,config_synced=1,quota_bytes=100,used_bytes=100 WHERE id=?`, now, enrollment.NodeID); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.reconcile(ctx); err != nil {

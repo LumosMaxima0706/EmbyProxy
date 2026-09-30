@@ -101,7 +101,7 @@ func (h *Handler) handleProxyNodesAPI(w http.ResponseWriter, r *http.Request, pa
 			ThresholdPercent        float64 `json:"threshold_percent"`
 			ResetDay                int     `json:"reset_day"`
 			ResetTimezone           string  `json:"reset_timezone"`
-			Priority                int     `json:"priority"`
+			Priority                *int    `json:"priority"`
 			DNSRecordID             string  `json:"dns_record_id"`
 			DNSRecordType           string  `json:"dns_record_type"`
 			DNSProvider             string  `json:"dns_provider"`
@@ -138,7 +138,7 @@ func (h *Handler) handleProxyNodesAPI(w http.ResponseWriter, r *http.Request, pa
 			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "INVALID_NODE_NAME"})
 			return
 		}
-		if body.Priority < 0 || body.Priority > 10000 {
+		if body.Priority != nil && (*body.Priority < 0 || *body.Priority > 10000) {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "INVALID_PRIORITY"})
 			return
 		}
@@ -211,12 +211,22 @@ func (h *Handler) handleProxyNodesAPI(w http.ResponseWriter, r *http.Request, pa
 			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "error": "CONTROLLER_PUBLIC_URL_NOT_CONFIGURED"})
 			return
 		}
-		enrollment, token, err := h.store.CreateProxyNode(ctx, storage.ProxyNode{Name: name, PublicAddress: body.PublicAddress, QuotaBytes: body.QuotaBytes, ThresholdPercent: body.ThresholdPercent, ResetDay: body.ResetDay, ResetTimezone: body.ResetTimezone, Priority: body.Priority}, 15*time.Minute)
+		newNode := storage.ProxyNode{Name: name, PublicAddress: body.PublicAddress, QuotaBytes: body.QuotaBytes, ThresholdPercent: body.ThresholdPercent, ResetDay: body.ResetDay, ResetTimezone: body.ResetTimezone}
+		var enrollment storage.Enrollment
+		var token string
+		if body.Priority == nil {
+			enrollment, token, err = h.store.CreateProxyNodeAtLowestPriority(ctx, newNode, 15*time.Minute)
+		} else {
+			newNode.Priority = *body.Priority
+			enrollment, token, err = h.store.CreateProxyNode(ctx, newNode, 15*time.Minute)
+		}
 		if err != nil {
 			if strings.Contains(err.Error(), "UNIQUE constraint failed: proxy_nodes.name") {
 				writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "error": "NODE_NAME_EXISTS"})
 			} else if strings.Contains(err.Error(), "invalid_reset_timezone") {
 				writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "INVALID_RESET_TIMEZONE"})
+			} else if strings.Contains(err.Error(), "priority_range_exhausted") {
+				writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "error": "PRIORITY_RANGE_EXHAUSTED"})
 			} else {
 				writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "NODE_CREATE_FAILED"})
 			}
@@ -985,18 +995,23 @@ CADDY
   wait_edge_local_health() {
     edge_wait_seconds=0
     edge_wait_timeout=60
-    while [ "$edge_wait_seconds" -lt "$edge_wait_timeout" ]; do
+    edge_wait_deadline=$(($(date +%%s) + edge_wait_timeout))
+    edge_health_error=$(mktemp "$state_dir/startup-health.XXXXXX")
+    while [ "$(date +%%s)" -lt "$edge_wait_deadline" ]; do
       if ! systemctl is-active --quiet embyproxy-edge.service; then
         edge_state=$(systemctl is-active embyproxy-edge.service 2>/dev/null || true)
         if [ "$edge_state" = failed ]; then
+          if [ -s "$edge_health_error" ]; then cat "$edge_health_error" >&2; fi
+          rm -f "$edge_health_error"
           edge_startup_diagnostics
           return 1
         fi
       else
-        edge_health_status=$(curl --silent --show-error --connect-timeout 2 --max-time 3 -o /dev/null -w '%%{http_code}' "http://$edge_probe/health" || true)
+        edge_health_status=$(curl --silent --show-error --connect-timeout 2 --max-time 3 -o /dev/null -w '%%{http_code}' "http://$edge_probe/health" 2>"$edge_health_error" || true)
         if [ "$edge_health_status" = 200 ]; then
           echo 'EDGE STARTUP: PASS'
           echo 'LOCAL HEALTH: PASS'
+          rm -f "$edge_health_error"
           return 0
         fi
       fi
@@ -1004,6 +1019,8 @@ CADDY
       edge_wait_seconds=$((edge_wait_seconds + 1))
     done
     echo 'edge agent startup timed out after 60 seconds' >&2
+    if [ -s "$edge_health_error" ]; then cat "$edge_health_error" >&2; fi
+    rm -f "$edge_health_error"
     edge_startup_diagnostics
     return 1
   }
@@ -1018,17 +1035,23 @@ CADDY
     wait_protocol="$7"
     wait_status=000
     wait_attempt=1
+    wait_error=$(mktemp "$state_dir/ingress-health.XXXXXX")
     while [ "$wait_attempt" -le "$wait_attempts" ]; do
       if [ "$wait_protocol" = https ]; then
-        wait_status=$(curl --silent --show-error --proto '=https' --tlsv1.2 --connect-timeout "$wait_connect_timeout" --max-time "$wait_max_time" -o /dev/null -w '%%{http_code}' "$wait_url" || true)
+        wait_status=$(curl --silent --show-error --proto '=https' --tlsv1.2 --connect-timeout "$wait_connect_timeout" --max-time "$wait_max_time" -o /dev/null -w '%%{http_code}' "$wait_url" 2>"$wait_error" || true)
       else
-        wait_status=$(curl --silent --show-error --connect-timeout "$wait_connect_timeout" --max-time "$wait_max_time" -o /dev/null -w '%%{http_code}' "$wait_url" || true)
+        wait_status=$(curl --silent --show-error --connect-timeout "$wait_connect_timeout" --max-time "$wait_max_time" -o /dev/null -w '%%{http_code}' "$wait_url" 2>"$wait_error" || true)
       fi
-      [ "$wait_status" = 200 ] && return 0
+      if [ "$wait_status" = 200 ]; then
+        rm -f "$wait_error"
+        return 0
+      fi
       if [ "$wait_attempt" -lt "$wait_attempts" ]; then sleep "$wait_delay"; fi
       wait_attempt=$((wait_attempt + 1))
     done
     echo "$wait_label health check failed after $wait_attempts attempts (last HTTP status: $wait_status)" >&2
+    if [ -s "$wait_error" ]; then cat "$wait_error" >&2; fi
+    rm -f "$wait_error"
     return 1
   }
   if [ "$ingress_mode" = external ]; then
@@ -1036,8 +1059,13 @@ CADDY
   else
     wait_http_200 'HTTPS edge ingress' "$edge_public/health" 18 5 5 5 https || exit 1
   fi
+  echo 'HTTPS INGRESS: PASS (node origin only; business-domain TLS is not checked)'
+  echo 'INSTALLATION: PASS'
+else
+  echo 'INSTALLATION: STAGED (services and health checks were not run)'
 fi
-echo 'ADMISSION: PENDING (data-plane playback canary required).'
+echo 'ADMISSION: NOT CHECKED (playback and business-domain TLS require separate validation; not an installation failure).'
+echo 'SCHEDULING: UNCHANGED (installation does not enable nodes, change priorities, or switch the public ingress).'
 	`, controller, persistedEdgePublic, buildinfo.Current().Version, buildinfo.Current().Commit, curlProtocol, url.PathEscape(enrollmentID), url.PathEscape(token), controller, curlProtocol, buildinfo.Current().Commit, decommissionPublicKey, boolText(node.CaddyInstalledByProject), boolText(node.CaddyConfigOwned), boolText(node.TLSStateOwned), boolText(node.EdgeUnitOwned), boolText(node.CaddyInstalledByProject), boolText(node.CaddyConfigOwned), boolText(node.TLSStateOwned), boolText(node.EdgeUnitOwned), curlProtocol)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")

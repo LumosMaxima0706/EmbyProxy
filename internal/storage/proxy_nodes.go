@@ -600,11 +600,20 @@ func (s *Store) ProxyNodeNameExists(ctx context.Context, name string) (bool, err
 }
 
 func (s *Store) CreateProxyNode(ctx context.Context, node ProxyNode, enrollmentTTL time.Duration) (Enrollment, string, error) {
+	return s.createProxyNode(ctx, node, enrollmentTTL, false)
+}
+
+// CreateProxyNodeAtLowestPriority appends within the enrollment transaction.
+func (s *Store) CreateProxyNodeAtLowestPriority(ctx context.Context, node ProxyNode, enrollmentTTL time.Duration) (Enrollment, string, error) {
+	return s.createProxyNode(ctx, node, enrollmentTTL, true)
+}
+
+func (s *Store) createProxyNode(ctx context.Context, node ProxyNode, enrollmentTTL time.Duration, appendPriority bool) (Enrollment, string, error) {
 	node.Name = strings.ToLower(strings.TrimSpace(node.Name))
 	if node.ThresholdPercent == 0 {
 		node.ThresholdPercent = 100
 	}
-	if !validNodeName(node.Name) || node.QuotaBytes < 0 || node.ThresholdPercent <= 0 || node.ThresholdPercent > 100 || node.ResetDay < 1 || node.ResetDay > 31 || enrollmentTTL <= 0 || enrollmentTTL > 24*time.Hour {
+	if !validNodeName(node.Name) || node.Priority < 0 || node.Priority > 10000 || node.QuotaBytes < 0 || node.ThresholdPercent <= 0 || node.ThresholdPercent > 100 || node.ResetDay < 1 || node.ResetDay > 31 || enrollmentTTL <= 0 || enrollmentTTL > 24*time.Hour {
 		return Enrollment{}, "", errors.New("invalid_proxy_node")
 	}
 	if node.ResetTimezone == "" {
@@ -621,7 +630,7 @@ func (s *Store) CreateProxyNode(ctx context.Context, node ProxyNode, enrollmentT
 		node.NextResetAt = next.Unix()
 	}
 	node.State = "registered"
-	node.Enabled = true
+	node.Enabled = false
 	node.CreatedAt, node.UpdatedAt = now, now
 	token, err := randomNodeToken()
 	if err != nil {
@@ -633,7 +642,15 @@ func (s *Store) CreateProxyNode(ctx context.Context, node ProxyNode, enrollmentT
 		return Enrollment{}, "", err
 	}
 	defer tx.Rollback()
-	if _, err = tx.ExecContext(ctx, `INSERT INTO proxy_nodes (id,name,public_address,enabled,state,priority,quota_bytes,used_bytes,threshold_percent,reset_day,reset_timezone,next_reset_at,last_heartbeat_at,playback_healthy,ingress_healthy,config_synced,agent_version,agent_commit,credential_hash,last_error,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, node.ID, node.Name, node.PublicAddress, 1, node.State, node.Priority, node.QuotaBytes, 0, node.ThresholdPercent, node.ResetDay, node.ResetTimezone, node.NextResetAt, 0, 0, 0, 0, "", "", "", "", now, now); err != nil {
+	if appendPriority {
+		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(priority),-1)+1 FROM proxy_nodes WHERE state NOT IN ('removed','revoked')`).Scan(&node.Priority); err != nil {
+			return Enrollment{}, "", err
+		}
+		if node.Priority > 10000 {
+			return Enrollment{}, "", errors.New("priority_range_exhausted")
+		}
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO proxy_nodes (id,name,public_address,enabled,state,priority,quota_bytes,used_bytes,threshold_percent,reset_day,reset_timezone,next_reset_at,last_heartbeat_at,playback_healthy,ingress_healthy,config_synced,agent_version,agent_commit,credential_hash,last_error,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, node.ID, node.Name, node.PublicAddress, 0, node.State, node.Priority, node.QuotaBytes, 0, node.ThresholdPercent, node.ResetDay, node.ResetTimezone, node.NextResetAt, 0, 0, 0, 0, "", "", "", "", now, now); err != nil {
 		return Enrollment{}, "", err
 	}
 	if _, err = tx.ExecContext(ctx, `INSERT INTO proxy_node_enrollments (id,node_id,token_hash,expires_at,created_at) VALUES (?,?,?,?,?)`, enrollment.ID, node.ID, nodeHash(token), enrollment.ExpiresAt, now); err != nil {
