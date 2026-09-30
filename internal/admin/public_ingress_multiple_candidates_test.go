@@ -68,6 +68,14 @@ func TestPublicIngressAutomaticTriesNextPreDNSCandidate(t *testing.T) {
 	if err != nil || len(ordered) != 2 || ordered[0].ID != "edge-one" || ordered[1].ID != "edge-two" {
 		t.Fatalf("fallback priority order: %+v err=%v", ordered, err)
 	}
+	if err := h.store.SetProxyNodePriority(ctx, "edge-two", 0); err != nil {
+		t.Fatal(err)
+	}
+	ordered, err = h.store.ListProxyNodes(ctx)
+	if err != nil || ordered[0].ID != "edge-two" || ordered[0].Priority != 0 || ordered[1].ID != "edge-one" || ordered[1].Priority != 1 {
+		t.Fatalf("updated fallback order: %+v err=%v", ordered, err)
+	}
+	var attempts []string
 	if err := s.reconcile(ctx); err == nil {
 		t.Fatal("two unreachable edges accepted")
 	}
@@ -77,7 +85,7 @@ func TestPublicIngressAutomaticTriesNextPreDNSCandidate(t *testing.T) {
 	if puts != 0 {
 		t.Fatalf("preflight wrote DNS: %d", puts)
 	}
-	rows, err := h.store.DB().QueryContext(ctx, `SELECT v FROM proxy_kv WHERE k LIKE 'failover:public-ingress:operation:%'`)
+	rows, err := h.store.DB().QueryContext(ctx, `SELECT v FROM proxy_kv WHERE k LIKE 'failover:public-ingress:operation:%' ORDER BY rowid`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,10 +99,14 @@ func TestPublicIngressAutomaticTriesNextPreDNSCandidate(t *testing.T) {
 		var item publicIngressState
 		if json.Unmarshal([]byte(raw), &item) == nil && item.Error == "target_preflight_failed" {
 			seen[item.RequestedNodeID]++
+			attempts = append(attempts, item.RequestedNodeID)
 		}
 	}
 	if seen["edge-one"] != 1 || seen["edge-two"] != 1 {
 		t.Fatalf("candidate attempts=%v", seen)
+	}
+	if len(attempts) != 2 || attempts[0] != "edge-two" || attempts[1] != "edge-one" {
+		t.Fatalf("scheduler ignored updated order: %v", attempts)
 	}
 	unsafe := failed
 	unsafe.OperationID, unsafe.PriorVerifiedID = "missing-history", "nonexistent"

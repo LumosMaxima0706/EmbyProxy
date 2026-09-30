@@ -74,12 +74,40 @@ func TestIngressPriorityPatchPersistsZeroAndRejectsInvalidValues(t *testing.T) {
 		t.Fatalf("tie update: %d %s", resp.Code, resp.Body.String())
 	}
 	ordered, err = h.store.ListProxyNodes(ctx)
-	if err != nil || ordered[0].ID > ordered[1].ID {
-		t.Fatalf("unstable tie order: %+v err=%v", ordered, err)
+	if err != nil || ordered[0].ID != a.NodeID || ordered[0].Priority != 0 || ordered[1].ID != b.NodeID || ordered[1].Priority != 1 {
+		t.Fatalf("insertion did not shift peer: %+v err=%v", ordered, err)
 	}
 	resp = serveAdminJSON(t, h, http.MethodGet, "/api/admin/proxy-nodes", nil, cookie)
 	if resp.Code != http.StatusOK || !strings.Contains(resp.Body.String(), `"priority":0`) {
 		t.Fatalf("priority readback: %d %s", resp.Code, resp.Body.String())
+	}
+}
+
+func TestIngressPriorityPatchShiftsBWG(t *testing.T) {
+	h := newAuthTestHandler(t, config.Config{AdminToken: "strong-admin-token"})
+	ctx := context.Background()
+	var ids []string
+	for i, name := range []string{"nosla", "bwg", "161"} {
+		e, _, err := h.store.CreateProxyNode(ctx, storage.ProxyNode{Name: name, Priority: i, ResetDay: 1}, time.Minute)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, e.NodeID)
+	}
+	cookie := serveAdminJSON(t, h, http.MethodPost, "/admin/auth/login", map[string]any{"token": "strong-admin-token"}, nil).Result().Cookies()[0]
+	for _, body := range []map[string]any{{"priority": 1}, {"priority": 1, "quota_bytes": 100}} {
+		resp := serveAdminJSON(t, h, http.MethodPatch, "/api/admin/proxy-nodes/"+ids[2], body, cookie)
+		if resp.Code != http.StatusOK {
+			t.Fatalf("patch failed: %d %s", resp.Code, resp.Body.String())
+		}
+		nodes, err := h.store.ListProxyNodes(ctx)
+		if err != nil || nodes[0].ID != ids[0] || nodes[1].ID != ids[2] || nodes[2].ID != ids[1] || nodes[2].Priority != 2 {
+			t.Fatalf("161 insertion failed: %+v err=%v", nodes, err)
+		}
+	}
+	resp := serveAdminJSON(t, h, http.MethodGet, "/api/admin/proxy-nodes", nil, cookie)
+	if resp.Code != http.StatusOK || !strings.Contains(resp.Body.String(), `"priority":2`) {
+		t.Fatalf("list refresh failed: %d %s", resp.Code, resp.Body.String())
 	}
 }
 

@@ -805,26 +805,101 @@ func (s *Store) SetProxyNodePriority(ctx context.Context, id string, priority in
 	if id == "" || priority < 0 || priority > 10000 {
 		return errors.New("invalid_priority")
 	}
-	result, err := s.db.ExecContext(ctx, `UPDATE proxy_nodes SET priority=?,updated_at=? WHERE id=? AND state NOT IN ('removed','revoked')`, priority, time.Now().Unix(), id)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	affected, err := result.RowsAffected()
+	defer tx.Rollback()
+	if err := setProxyNodePriorityTx(ctx, tx, id, priority); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// Reserve the requested slot while preserving peer order and unrelated gaps.
+// Legacy ties are resolved within the same transaction as the move.
+func setProxyNodePriorityTx(ctx context.Context, tx *sql.Tx, id string, priority int) error {
+	var old int
+	if err := tx.QueryRowContext(ctx, `SELECT priority FROM proxy_nodes WHERE id=? AND state NOT IN ('removed','revoked')`, id).Scan(&old); err != nil {
+		return err
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT id,priority FROM proxy_nodes WHERE id!=? AND state NOT IN ('removed','revoked') ORDER BY priority,id`, id)
 	if err != nil {
 		return err
 	}
-	if affected != 1 {
-		return sql.ErrNoRows
+	type peer struct {
+		id        string
+		old, next int
+	}
+	var peers []peer
+	last := -1
+	for rows.Next() {
+		var p peer
+		if err := rows.Scan(&p.id, &p.old); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		p.next = p.old
+		if priority < old && p.old >= priority && p.old < old {
+			p.next++
+		} else if priority > old && p.old > old && p.old <= priority {
+			p.next--
+		}
+		if p.next <= last {
+			p.next = last + 1
+		}
+		if p.next == priority {
+			p.next++
+		}
+		last = p.next
+		peers = append(peers, p)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if last > 10000 {
+		return errors.New("priority_order_overflow")
+	}
+	now := time.Now().Unix()
+	for _, p := range peers {
+		if p.old != p.next {
+			if _, err := tx.ExecContext(ctx, `UPDATE proxy_nodes SET priority=?,updated_at=? WHERE id=?`, p.next, now, p.id); err != nil {
+				return err
+			}
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE proxy_nodes SET priority=?,updated_at=? WHERE id=?`, priority, now, id); err != nil {
+		return err
 	}
 	return nil
 }
 
 func (s *Store) UpdateProxyNode(ctx context.Context, n ProxyNode) error {
-	if n.ID == "" || !validNodeName(n.Name) || n.Priority < 0 || n.Priority > 10000 || n.QuotaBytes < 0 || n.UsedBytes < 0 || n.ThresholdPercent <= 0 || n.ThresholdPercent > 100 || n.ResetDay < 1 || n.ResetDay > 31 {
+	return s.UpdateProxyNodeWithPriority(ctx, n, &n.Priority)
+}
+
+func (s *Store) UpdateProxyNodeWithPriority(ctx context.Context, n ProxyNode, priority *int) error {
+	if n.ID == "" || !validNodeName(n.Name) || n.QuotaBytes < 0 || n.UsedBytes < 0 || n.ThresholdPercent <= 0 || n.ThresholdPercent > 100 || n.ResetDay < 1 || n.ResetDay > 31 || (priority != nil && (*priority < 0 || *priority > 10000)) {
 		return errors.New("invalid_proxy_node")
 	}
-	_, err := s.db.ExecContext(ctx, `UPDATE proxy_nodes SET name=?,public_address=?,enabled=?,state=?,priority=?,quota_bytes=?,used_bytes=?,threshold_percent=?,reset_day=?,reset_timezone=?,next_reset_at=?,playback_healthy=?,ingress_healthy=?,config_synced=?,last_error=?,updated_at=? WHERE id=?`, n.Name, n.PublicAddress, boolInt(n.Enabled), n.State, n.Priority, n.QuotaBytes, n.UsedBytes, n.ThresholdPercent, n.ResetDay, n.ResetTimezone, n.NextResetAt, boolInt(n.PlaybackHealthy), boolInt(n.IngressHealthy), boolInt(n.ConfigSynced), redactFailoverStorageText(n.LastError), time.Now().Unix(), n.ID)
-	return err
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if priority != nil {
+		if err := setProxyNodePriorityTx(ctx, tx, n.ID, *priority); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE proxy_nodes SET name=?,public_address=?,enabled=?,state=?,quota_bytes=?,used_bytes=?,threshold_percent=?,reset_day=?,reset_timezone=?,next_reset_at=?,playback_healthy=?,ingress_healthy=?,config_synced=?,last_error=?,updated_at=? WHERE id=?`, n.Name, n.PublicAddress, boolInt(n.Enabled), n.State, n.QuotaBytes, n.UsedBytes, n.ThresholdPercent, n.ResetDay, n.ResetTimezone, n.NextResetAt, boolInt(n.PlaybackHealthy), boolInt(n.IngressHealthy), boolInt(n.ConfigSynced), redactFailoverStorageText(n.LastError), time.Now().Unix(), n.ID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // RecordProxyNodeUsage is the single write path for node traffic accounting.

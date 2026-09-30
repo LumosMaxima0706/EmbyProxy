@@ -429,6 +429,11 @@ func (h *Handler) handleProxyNodesAPI(w http.ResponseWriter, r *http.Request, pa
 				writeJSON(w, http.StatusOK, map[string]any{"ok": true, "node": n})
 				return
 			}
+			var priority *int
+			if v, ok := body["priority"].(float64); ok {
+				value := int(v)
+				priority = &value
+			}
 			oldResetDay, oldResetTimezone := n.ResetDay, n.ResetTimezone
 			explicitNextResetValue, explicitNextReset := body["next_reset_at"].(float64)
 			explicitNextReset = explicitNextReset && explicitNextResetValue >= 0
@@ -481,10 +486,11 @@ func (h *Handler) handleProxyNodesAPI(w http.ResponseWriter, r *http.Request, pa
 				}
 				n.NextResetAt = next.Unix()
 			}
-			if err := h.store.UpdateProxyNode(ctx, *n); err != nil {
+			if err := h.store.UpdateProxyNodeWithPriority(ctx, *n, priority); err != nil {
 				writeJSON(w, 400, map[string]any{"ok": false, "error": "INVALID_NODE"})
 				return
 			}
+			n, _ = h.store.GetProxyNode(ctx, id)
 			writeJSON(w, 200, map[string]any{"ok": true, "node": n})
 			return
 		}
