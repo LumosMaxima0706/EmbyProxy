@@ -106,7 +106,15 @@ func (h *Handler) verifyProxyNodeReadiness(w http.ResponseWriter, r *http.Reques
 		tested++
 		view.RouteResults[route.Slug] = "unverified"
 		target := root + "/s/" + url.PathEscape(route.Slug)
+		token := ""
+		if h.playbackCredentials != nil && h.playbackCredentials.PlaybackCredentialConfigured(ctx, route.Slug) {
+			token, _ = h.playbackCredentials.ReadPlaybackCredential(ctx, route.Slug)
+		}
 		info, _ := http.NewRequestWithContext(ctx, http.MethodGet, target+"/emby/System/Info/Public", nil)
+		info.Header.Set("User-Agent", "Yamby")
+		if token != "" {
+			info.Header.Set("X-Emby-Token", token)
+		}
 		res, e := client.Do(info)
 		if e != nil {
 			view.Routes = "failed"
@@ -129,8 +137,7 @@ func (h *Handler) verifyProxyNodeReadiness(w http.ResponseWriter, r *http.Reques
 			view.Error = "playback_credential_missing"
 			continue
 		}
-		token, e := h.playbackCredentials.ReadPlaybackCredential(ctx, route.Slug)
-		if e != nil {
+		if token == "" {
 			allPlayed = false
 			view.Error = "playback_credential_missing"
 			continue
@@ -175,6 +182,7 @@ func probeNodeMedia(ctx context.Context, client *http.Client, root, item, token 
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, infoURL, strings.NewReader(`{}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Emby-Token", token)
+	req.Header.Set("User-Agent", "Yamby")
 	req.Header.Set("X-Emby-Authorization", `Emby Client="EmbyProxy", Device="EmbyProxy", DeviceId="embyproxy-canary", Version="1.0"`)
 	res, err := client.Do(req)
 	if err != nil {
@@ -214,6 +222,9 @@ func probeNodeMedia(ctx context.Context, client *http.Client, root, item, token 
 		}
 		full := *base
 		if strings.HasPrefix(path.Path, "/s/") {
+			if !strings.HasPrefix(path.Path, strings.TrimRight(base.Path, "/")+"/") {
+				continue
+			}
 			full.Path = path.Path
 		} else {
 			full.Path = strings.TrimRight(base.Path, "/") + "/" + strings.TrimLeft(path.Path, "/")
@@ -222,6 +233,8 @@ func probeNodeMedia(ctx context.Context, client *http.Client, root, item, token 
 		for hop := 0; hop < 5; hop++ {
 			media, _ := http.NewRequestWithContext(ctx, http.MethodGet, full.String(), nil)
 			media.Header.Set("X-Emby-Token", token)
+			media.Header.Set("User-Agent", "Yamby")
+			media.Header.Set("X-Emby-Authorization", `Emby Client="EmbyProxy", Device="EmbyProxy", DeviceId="embyproxy-canary", Version="1.0"`)
 			media.Header.Set("Range", "bytes=0-1023")
 			response, e := client.Do(media)
 			if e != nil {

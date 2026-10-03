@@ -870,6 +870,12 @@ $edge_domain {
   reverse_proxy 127.0.0.1:18080
 }
 CADDY
+    # Preserve a working business certificate during a managed reinstall.
+    if [ "$caddy_managed" = true ] && [ -f "$caddy_root/Caddyfile" ] && [ -f "$cfg_dir/business-domain" ] &&
+       grep -Fx "domain=$edge_domain" "$caddy_marker" >/dev/null &&
+       grep -F '/var/lib/embyproxy-edge/tls/business-' "$caddy_root/Caddyfile" >/dev/null; then
+      cp -p "$caddy_root/Caddyfile" "$caddy_tmp"
+    fi
     chown root:caddy "$caddy_tmp"
     chmod 0640 "$caddy_tmp"
     "$caddy_bin" validate --config "$caddy_tmp" --adapter caddyfile || {
