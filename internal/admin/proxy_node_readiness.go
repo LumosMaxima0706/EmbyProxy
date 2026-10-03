@@ -161,6 +161,31 @@ func (h *Handler) verifyProxyNodeReadiness(w http.ResponseWriter, r *http.Reques
 			}
 		}
 	}
+	for name, path := range h.cfg.PublicMediaNodePaths {
+		if _, found := view.RouteResults[name]; found {
+			continue
+		}
+		tested++
+		api, _ := http.NewRequestWithContext(ctx, http.MethodGet, root+strings.TrimRight(path, "/")+"/System/Info/Public", nil)
+		api.Header.Set("User-Agent", "Yamby")
+		response, err := client.Do(api)
+		if err != nil {
+			allRoutes, allPlayed = false, false
+			view.RouteResults[name] = "public_route_unreachable"
+			view.Routes = "failed"
+			continue
+		}
+		io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
+		response.Body.Close()
+		if response.StatusCode != 200 {
+			allRoutes, allPlayed = false, false
+			view.RouteResults[name] = "public_route_failed"
+			view.Routes = "failed"
+			continue
+		}
+		allPlayed = false
+		view.RouteResults[name] = "api_ready_playback_unverified"
+	}
 	if tested == 0 {
 		view.Error = "public_routes_unconfigured"
 		return

@@ -299,6 +299,15 @@ func (s *publicIngressSwitcher) preflight(ctx context.Context, n storage.ProxyNo
 	for _, path := range s.h.cfg.PublicMediaExtraPaths {
 		paths = append(paths, strings.TrimRight(path, "/")+"/System/Info/Public")
 	}
+	managed, err := s.h.store.ListManagedRoutes(ctx)
+	if err != nil {
+		return errors.New("preflight_route_list_failed")
+	}
+	for _, route := range managed {
+		if route.Enabled && route.Public {
+			paths = append(paths, "/s/"+url.PathEscape(route.Slug)+"/emby/System/Info/Public")
+		}
+	}
 	if len(paths) == 0 {
 		return errors.New("preflight_public_routes_unconfigured")
 	}
@@ -308,6 +317,7 @@ func (s *publicIngressSwitcher) preflight(ctx context.Context, n storage.ProxyNo
 		if err != nil {
 			return err
 		}
+		route.Header.Set("User-Agent", "Yamby")
 		routeResp, err := client.Do(route)
 		if err != nil {
 			return err
