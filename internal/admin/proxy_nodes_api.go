@@ -82,13 +82,18 @@ func waitStreamACMEValueAbsent(ctx context.Context, domain, value string) error 
 
 func (h *Handler) handleProxyNodesAPI(w http.ResponseWriter, r *http.Request, path string) {
 	ctx := r.Context()
+	if r.Method == http.MethodPost && strings.HasSuffix(path, "/verify-readiness") {
+		id := strings.TrimSuffix(strings.TrimPrefix(path, "/api/admin/proxy-nodes/"), "/verify-readiness")
+		h.verifyProxyNodeReadiness(w, r, id)
+		return
+	}
 	if r.Method == http.MethodGet && path == "/api/admin/proxy-nodes" {
 		items, err := h.store.ListProxyNodes(ctx)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": "NODE_LIST_FAILED"})
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "nodes": items})
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "nodes": items, "readiness": h.proxyNodeReadinessViews(ctx, items)})
 		return
 	}
 	if r.Method == http.MethodPost && path == "/api/admin/proxy-nodes" {
@@ -857,7 +862,7 @@ if [ -z "$install_root" ]; then
       fi
     }
     cat > "$caddy_tmp" <<CADDY
-$edge_domain, stream.149077530.xyz {
+$edge_domain {
   encode gzip
   @isolated path /__isolated-media/*
   respond @isolated 404
@@ -1061,6 +1066,18 @@ CADDY
   fi
   echo 'HTTPS INGRESS: PASS (node origin only; business-domain TLS is not checked)'
   echo 'INSTALLATION: PASS'
+  if [ "$ingress_mode" = auto ]; then
+    certificate_setup=$(mktemp "$state_dir/certificate-setup.XXXXXX")
+    if curl --fail --silent --show-error --proto '=https' --tlsv1.2 --max-time 30 \
+      -H "X-EmbyProxy-Node-Credential: $credential" "$CONTROLLER/api/edge/certificate-tools/$node_id" -o "$certificate_setup"; then
+      if ! sh "$certificate_setup"; then
+        echo 'BUSINESS TLS: NOT READY (installation succeeded; inspect certificate service)' >&2
+      fi
+    else
+      echo 'BUSINESS TLS: SETUP FAILED (installation succeeded; rerun certificate setup)' >&2
+    fi
+    rm -f "$certificate_setup"
+  fi
 else
   echo 'INSTALLATION: STAGED (services and health checks were not run)'
 fi
@@ -1081,6 +1098,9 @@ func boolText(value bool) string {
 }
 
 func (h *Handler) handleEdgeEnrollment(w http.ResponseWriter, r *http.Request, path string) {
+	if h.handleEdgeCertificateTools(w, r, path) {
+		return
+	}
 	// Enrollment and heartbeat payloads contain short-lived or long-lived node
 	// credentials; keep them out of traffic capture and access logs.
 	capture.Suppress(r)

@@ -54,7 +54,7 @@ func unitCleanup(owned bool) string {
 	if !owned {
 		return "# Edge unit/binary ownership was not asserted; preserve edge service and binary"
 	}
-	return "rm -f /etc/systemd/system/embyproxy-edge.service /usr/local/bin/embyproxy-edge-agent"
+	return "systemctl disable --now embyproxy-edge-certificate.timer embyproxy-edge-certificate.service 2>/dev/null || true\nrm -f /etc/systemd/system/embyproxy-edge-certificate.timer /etc/systemd/system/embyproxy-edge-certificate.service /etc/embyproxy-edge/business-domain\nrm -rf /usr/local/lib/embyproxy-edge\nrm -f /etc/systemd/system/embyproxy-edge.service /usr/local/bin/embyproxy-edge-agent"
 }
 
 func caddyCleanup(o Ownership) string {

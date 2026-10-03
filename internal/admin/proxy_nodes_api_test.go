@@ -372,8 +372,8 @@ func TestProxyNodeBootstrapIsNoStoreAndDoesNotExposeAdminSecret(t *testing.T) {
 	if !strings.Contains(script, "PERSISTED_EDGE_PUBLIC='https://edge.example.net'") || !strings.Contains(script, "EMBYPROXY_EDGE_INGRESS_MODE") || !strings.Contains(script, "systemctl enable caddy.service") || !strings.Contains(script, "systemctl restart caddy.service") || !strings.Contains(script, "respond @isolated 404") || !strings.Contains(script, "systemctl cat caddy.service") || !strings.Contains(script, "wait_http_200 'HTTPS edge ingress'") {
 		t.Fatal("bootstrap does not bind to the persisted HTTPS edge ingress")
 	}
-	if !strings.Contains(script, "$edge_domain, stream.149077530.xyz {") {
-		t.Fatal("installer must provision TLS and routing for the unified business ingress")
+	if !strings.Contains(script, "$edge_domain {") || !strings.Contains(script, "/api/edge/certificate-tools/$node_id") || strings.Contains(script, "$edge_domain, stream.149077530.xyz {") {
+		t.Fatal("installer must use scoped DNS-01 tools instead of requesting business HTTP-01 on a backup")
 	}
 
 	for _, required := range []string{
