@@ -68,8 +68,16 @@ func (o ingressReadback) read(ctx context.Context) ingressReadbackResult {
 	if o.client == nil {
 		result.Errors = append(result.Errors, "public_client_unavailable")
 	} else {
+		switcher := &publicIngressSwitcher{record: o.record, httpClient: o.client, lookupHost: func(context.Context, string) ([]string, error) { return result.Recursive, nil }}
+		client, closeIdle, err := switcher.freshPublicRequestClient(ctx)
+		if err != nil {
+			result.Errors = append(result.Errors, "public_request_failed")
+			return result
+		}
+		defer closeIdle()
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+o.record+"/health", nil)
-		resp, err := o.client.Do(req)
+		req.Close = true
+		resp, err := client.Do(req)
 		if err != nil {
 			result.Errors = append(result.Errors, "public_request_failed")
 		} else {

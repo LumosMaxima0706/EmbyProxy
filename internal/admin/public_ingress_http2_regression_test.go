@@ -13,6 +13,40 @@ import (
 	"embyproxy/internal/config"
 )
 
+func TestIngressObservationDoesNotReusePreviousNodeConnection(t *testing.T) {
+	newNode := func(id string) *httptest.Server {
+		s := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("X-EmbyProxy-Node-ID", id)
+			_, _ = w.Write([]byte("ok"))
+		}))
+		s.EnableHTTP2 = true
+		s.StartTLS()
+		return s
+	}
+	old := newNode("old-node")
+	defer old.Close()
+	target := newNode("target-node")
+	defer target.Close()
+	var address atomic.Value
+	address.Store(old.Listener.Addr().String())
+	client := old.Client()
+	transport := client.Transport.(*http.Transport).Clone()
+	transport.ForceAttemptHTTP2 = true
+	transport.DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, address.Load().(string))
+	}
+	client.Transport = transport
+	defer transport.CloseIdleConnections()
+	o := ingressReadback{record: "example.com", client: client, lookup: func(context.Context, string) ([]string, error) { return []string{"1.1.1.1"}, nil }}
+	if got := o.read(context.Background()); got.PublicNodeID != "old-node" {
+		t.Fatalf("warmup: %+v", got)
+	}
+	address.Store(target.Listener.Addr().String())
+	if got := o.read(context.Background()); got.PublicNodeID != "target-node" {
+		t.Fatalf("observation reused previous node connection: %+v", got)
+	}
+}
+
 func TestVerifyPublicRequestDoesNotInheritWarmHTTP2Pool(t *testing.T) {
 	newNode := func(id string) *httptest.Server {
 		s := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
