@@ -60,6 +60,19 @@ def propagated(domain, value):
             return False
     return True
 
+def negative_cache_wait(domain):
+    query = urllib.parse.urlencode({'name': domain, 'type': 'SOA'})
+    with urllib.request.urlopen('https://dns.google/resolve?' + query, timeout=10) as response:
+        doc = json.load(response)
+    records = doc.get('Answer', []) + doc.get('Authority', [])
+    waits = [min(int(x['TTL']), int(x['data'].split()[-1])) for x in records if x.get('type') == 6]
+    if doc.get('Status') not in (0, 3) or not waits:
+        raise RuntimeError('cannot determine DNS negative-cache lifetime')
+    wait = max(waits) + 60
+    if wait > 3600:
+        raise RuntimeError('DNS negative-cache lifetime exceeds certificate task budget')
+    return wait
+
 def main():
     if len(sys.argv) != 2 or sys.argv[1] not in ('present', 'cleanup', 'recover'):
         raise RuntimeError('invalid hook action')
@@ -82,10 +95,12 @@ def main():
     tmp.chmod(0o600)
     tmp.replace(PENDING)
     try:
+        cache_wait = negative_cache_wait(domain)
         deadline = time.monotonic() + 240
         while True:
             try:
                 call('present', domain, value)
+                presented_at = time.monotonic()
                 break
             except urllib.error.HTTPError as error:
                 code = json.loads(error.read()).get('error')
@@ -96,6 +111,8 @@ def main():
         while time.monotonic() < deadline:
             try:
                 if propagated(domain, value):
+                    # CA resolvers may retain NXDOMAIN after the preceding exact cleanup.
+                    time.sleep(max(0, cache_wait - (time.monotonic() - presented_at)))
                     return
             except Exception:
                 pass

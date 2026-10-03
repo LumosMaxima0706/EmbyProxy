@@ -18,7 +18,7 @@ func (h *Handler) edgeCertificateSetup() string {
 	var out strings.Builder
 	out.WriteString("#!/bin/sh\nset -eu\numask 077\n")
 	out.WriteString("test -f /var/lib/embyproxy-edge/caddy-managed && grep -Fx 'managed_by=embyproxy-edge' /var/lib/embyproxy-edge/caddy-managed >/dev/null || { echo 'unowned Caddy; certificate setup refused' >&2; exit 1; }\n")
-	out.WriteString("command -v certbot >/dev/null 2>&1 || { apt-get update; DEBIAN_FRONTEND=noninteractive apt-get install -y certbot python3 openssl; }\n")
+	out.WriteString("if ! command -v certbot >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1 || ! command -v openssl >/dev/null 2>&1; then apt-get update; DEBIAN_FRONTEND=noninteractive apt-get install -y certbot python3 openssl; fi\n")
 	out.WriteString("install -d -m 0755 /usr/local/lib/embyproxy-edge\n")
 	for _, name := range []string{"acme_hook.py", "certificate_manager.py"} {
 		data, _ := edgeCertificateFiles.ReadFile("edgecert/" + name)
@@ -33,7 +33,7 @@ After=network-online.target
 [Service]
 Type=oneshot
 ExecStart=/usr/bin/python3 /usr/local/lib/embyproxy-edge/certificate_manager.py
-TimeoutStartSec=1200
+TimeoutStartSec=4500
 UMask=0077
 UNIT
 cat > /etc/systemd/system/embyproxy-edge-certificate.timer <<'UNIT'
@@ -50,13 +50,8 @@ UNIT
 systemctl daemon-reload
 if [ "${EMBYPROXY_CERTIFICATE_SETUP_ONLY:-0}" = 1 ]; then echo 'BUSINESS TLS: SETUP COMPLETE'; exit 0; fi
 systemctl enable --now embyproxy-edge-certificate.timer
-if systemctl start embyproxy-edge-certificate.service; then
- echo 'BUSINESS TLS: PASS (certificate prepared without changing public DNS or scheduling)'
-else
- echo 'BUSINESS TLS: PENDING/FAILED (software installed; certificate timer will retry)' >&2
- journalctl -u embyproxy-edge-certificate.service -n 20 --no-pager >&2
- exit 1
-fi
+systemctl start --no-block embyproxy-edge-certificate.service
+echo 'BUSINESS TLS: PREPARING (asynchronous DNS-01; certificate timer retries; public DNS and scheduling unchanged)'
 `)
 	return out.String()
 }

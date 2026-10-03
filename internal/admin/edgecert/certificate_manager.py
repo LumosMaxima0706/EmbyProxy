@@ -16,7 +16,8 @@ ROOT = pathlib.Path('/var/lib/embyproxy-edge')
 TOOLS = pathlib.Path('/usr/local/lib/embyproxy-edge')
 
 def run(args, **kwargs):
-    return subprocess.run(args, check=True, timeout=900, **kwargs)
+    os.environ.setdefault('HOME', '/root')
+    return subprocess.run(args, check=True, timeout=4200, **kwargs)
 
 def output(args):
     return subprocess.check_output(args, timeout=30)
@@ -53,15 +54,18 @@ def deploy(domain, origin, live):
     target.chmod(0o750)
     for src, name in ((chain, 'fullchain.pem'), (key, 'privkey.pem')):
         dst = target / name
-        shutil.copyfile(src, dst)
-        os.chown(dst, 0, gid)
-        dst.chmod(0o640)
+        tmp = target / (name + '.tmp')
+        shutil.copyfile(src, tmp)
+        os.chown(tmp, 0, gid)
+        tmp.chmod(0o640)
+        tmp.replace(dst)
     site = '  encode gzip\n  @isolated path /__isolated-media/*\n  respond @isolated 404\n  reverse_proxy 127.0.0.1:18080\n'
     text = origin + ' {\n' + site + '}\n' if origin != domain else ''
     text += domain + ' {\n  tls ' + str(target / 'fullchain.pem') + ' ' + str(target / 'privkey.pem') + '\n' + site + '}\n'
     conf = pathlib.Path('/etc/caddy/Caddyfile')
     previous = conf.read_bytes()
     if previous == text.encode():
+        run(['curl', '--fail', '--silent', '--show-error', '--noproxy', '*', '--max-time', '15', '--resolve', domain + ':443:127.0.0.1', 'https://' + domain + '/health'], stdout=subprocess.DEVNULL)
         print('BUSINESS TLS: already current')
         return
     temp = conf.with_name('Caddyfile.embyproxy-certificate')
@@ -69,6 +73,7 @@ def deploy(domain, origin, live):
     os.chown(temp, 0, gid)
     temp.chmod(0o640)
     try:
+        run(['caddy', 'fmt', '--overwrite', str(temp)])
         run(['caddy', 'validate', '--config', str(temp), '--adapter', 'caddyfile'])
         temp.replace(conf)
         try:
@@ -86,7 +91,7 @@ def deploy(domain, origin, live):
     print('BUSINESS TLS: certificate loaded and HTTPS verified')
 
 def main():
-    if sys.argv[1:] not in ([], ['--staging']):
+    if sys.argv[1:] not in ([], ['--staging'], ['--dry-run']):
         raise RuntimeError('invalid manager arguments')
     staging = sys.argv[1:] == ['--staging']
     ROOT.mkdir(exist_ok=True)
@@ -113,6 +118,13 @@ def main():
                 '--manual-cleanup-hook', hook + ' cleanup', '--cert-name', 'embyproxy-business',
                 '--keep-until-expiring', '--config-dir', str(acme / 'config'), '--work-dir', str(acme / 'work'),
                 '--logs-dir', str(acme / 'logs'), '-d', domain]
+        if sys.argv[1:] == ['--dry-run']:
+            try:
+                run(['certbot', 'renew', '--dry-run', '--cert-name', 'embyproxy-business', '--non-interactive', '--config-dir', str(acme / 'config'), '--work-dir', str(acme / 'work'), '--logs-dir', str(acme / 'logs')])
+            finally:
+                run([sys.executable, hook, 'recover'])
+            print('RENEWAL DRY-RUN: PASS (production certificate unchanged)')
+            return
         if staging:
             args.append('--staging')
         else:
@@ -131,7 +143,7 @@ if __name__ == '__main__':
     try:
         main()
     except Exception as error:
-        if '--staging' not in sys.argv:
+        if '--staging' not in sys.argv and '--dry-run' not in sys.argv:
             status('failed')
         print('BUSINESS TLS: FAIL (' + type(error).__name__ + ')', file=sys.stderr)
         sys.exit(1)

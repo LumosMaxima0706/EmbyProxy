@@ -23,7 +23,7 @@ import (
 )
 
 func waitStreamACMEValueAbsent(ctx context.Context, domain, value string) error {
-	ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 150*time.Second)
 	defer cancel()
 	timer := time.NewTimer(65 * time.Second)
 	select {
@@ -52,6 +52,7 @@ func waitStreamACMEValueAbsent(ctx context.Context, domain, value string) error 
 				break
 			}
 			var document struct {
+				Status int `json:"Status"`
 				Answer []struct {
 					Type int    `json:"type"`
 					Data string `json:"data"`
@@ -59,7 +60,7 @@ func waitStreamACMEValueAbsent(ctx context.Context, domain, value string) error 
 			}
 			decodeErr := json.NewDecoder(io.LimitReader(resp.Body, 256<<10)).Decode(&document)
 			_ = resp.Body.Close()
-			if resp.StatusCode != http.StatusOK || decodeErr != nil {
+			if resp.StatusCode != http.StatusOK || decodeErr != nil || (document.Status != 0 && document.Status != 3) {
 				absent = false
 				break
 			}
@@ -1098,13 +1099,13 @@ func boolText(value bool) string {
 }
 
 func (h *Handler) handleEdgeEnrollment(w http.ResponseWriter, r *http.Request, path string) {
-	if h.handleEdgeCertificateTools(w, r, path) {
-		return
-	}
 	// Enrollment and heartbeat payloads contain short-lived or long-lived node
 	// credentials; keep them out of traffic capture and access logs.
 	capture.Suppress(r)
 	requestlog.SuppressAccessLog(r.Context())
+	if h.handleEdgeCertificateTools(w, r, path) {
+		return
+	}
 	if r.Method == http.MethodGet && strings.HasPrefix(path, "/api/edge/bootstrap/") {
 		parts := strings.Split(strings.TrimPrefix(path, "/api/edge/bootstrap/"), "/")
 		if len(parts) != 2 {
@@ -1197,7 +1198,7 @@ func (h *Handler) handleEdgeEnrollment(w http.ResponseWriter, r *http.Request, p
 			return
 		}
 		if action == "present" {
-			if err := h.store.AcquireEdgeACMELease(r.Context(), nodeID, body.Validation, time.Now().Add(20*time.Minute)); err != nil {
+			if err := h.store.AcquireEdgeACMELease(r.Context(), nodeID, body.Validation, time.Now().Add(55*time.Minute)); err != nil {
 				writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "error": "ACME_LEASE_CONFLICT"})
 				return
 			}

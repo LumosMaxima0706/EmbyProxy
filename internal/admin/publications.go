@@ -215,6 +215,11 @@ func discoverEmbyPlaybackItems(ctx context.Context, target, token string, client
 	root := strings.TrimRight(base.String(), "/") + "/emby"
 	var user embyCurrentUser
 	userErr := doJSON(root+"/Users/Me", &user)
+	if userErr != nil || strings.TrimSpace(user.ID) == "" {
+		if sessionUser, err := resolveEmbyPlaybackUserID(ctx, target, token, client); err == nil && sessionUser != "" {
+			user.ID, userErr = sessionUser, nil
+		}
+	}
 	itemsURL := root + "/Items?Recursive=true&IncludeItemTypes=Movie%2CEpisode&Limit=8&SortBy=DateCreated&SortOrder=Descending"
 	if userErr == nil && strings.TrimSpace(user.ID) != "" {
 		itemsURL = root + "/Users/" + url.PathEscape(strings.TrimSpace(user.ID)) + "/Items?Recursive=true&IncludeItemTypes=Movie%2CEpisode&Limit=8&SortBy=DateCreated&SortOrder=Descending"

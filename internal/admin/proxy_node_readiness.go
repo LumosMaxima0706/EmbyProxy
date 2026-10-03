@@ -15,13 +15,14 @@ import (
 )
 
 type proxyNodeReadiness struct {
-	CheckedAt   int64  `json:"checked_at"`
-	BusinessTLS string `json:"business_tls"`
-	Routes      string `json:"routes"`
-	Playback    string `json:"playback"`
-	Error       string `json:"error,omitempty"`
-	Origin      string `json:"origin"`
-	AgentCommit string `json:"agent_commit"`
+	RouteResults map[string]string `json:"route_results,omitempty"`
+	CheckedAt    int64             `json:"checked_at"`
+	BusinessTLS  string            `json:"business_tls"`
+	Routes       string            `json:"routes"`
+	Playback     string            `json:"playback"`
+	Error        string            `json:"error,omitempty"`
+	Origin       string            `json:"origin"`
+	AgentCommit  string            `json:"agent_commit"`
 }
 
 func (h *Handler) proxyNodeReadinessViews(ctx context.Context, nodes []storage.ProxyNode) map[string]proxyNodeReadiness {
@@ -96,25 +97,32 @@ func (h *Handler) verifyProxyNodeReadiness(w http.ResponseWriter, r *http.Reques
 	}
 	tested := 0
 	allPlayed := true
+	allRoutes := true
+	view.RouteResults = map[string]string{}
 	for _, route := range routes {
 		if !route.Enabled || !route.Public {
 			continue
 		}
 		tested++
+		view.RouteResults[route.Slug] = "unverified"
 		target := root + "/s/" + url.PathEscape(route.Slug)
 		info, _ := http.NewRequestWithContext(ctx, http.MethodGet, target+"/emby/System/Info/Public", nil)
 		res, e := client.Do(info)
 		if e != nil {
 			view.Routes = "failed"
 			view.Error = "public_route_unreachable"
-			return
+			view.RouteResults[route.Slug] = view.Error
+			allPlayed, allRoutes = false, false
+			continue
 		}
 		io.Copy(io.Discard, io.LimitReader(res.Body, 4096))
 		res.Body.Close()
 		if res.StatusCode != 200 {
 			view.Routes = "failed"
 			view.Error = "public_route_failed"
-			return
+			view.RouteResults[route.Slug] = view.Error
+			allPlayed, allRoutes = false, false
+			continue
 		}
 		if h.playbackCredentials == nil || !h.playbackCredentials.PlaybackCredentialConfigured(ctx, route.Slug) {
 			allPlayed = false
@@ -132,13 +140,16 @@ func (h *Handler) verifyProxyNodeReadiness(w http.ResponseWriter, r *http.Reques
 			allPlayed = false
 			view.Playback = "failed"
 			view.Error = e.Error()
+			view.RouteResults[route.Slug] = view.Error
 			continue
 		}
+		view.RouteResults[route.Slug] = "ready"
 		for _, item := range items[:2] {
 			if e := probeNodeMedia(ctx, client, target, item, token); e != nil {
 				allPlayed = false
 				view.Playback = "failed"
 				view.Error = e.Error()
+				view.RouteResults[route.Slug] = view.Error
 				break
 			}
 		}
@@ -147,14 +158,21 @@ func (h *Handler) verifyProxyNodeReadiness(w http.ResponseWriter, r *http.Reques
 		view.Error = "public_routes_unconfigured"
 		return
 	}
-	view.Routes = "ready"
+	if allRoutes {
+		view.Routes = "ready"
+	}
 	if allPlayed {
 		view.Playback = "ready"
 	}
 }
 
 func probeNodeMedia(ctx context.Context, client *http.Client, root, item, token string) error {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, root+"/emby/Items/"+url.PathEscape(item)+"/PlaybackInfo", strings.NewReader(`{}`))
+	userID, _ := resolveEmbyPlaybackUserID(ctx, root, token, client)
+	infoURL := root + "/emby/Items/" + url.PathEscape(item) + "/PlaybackInfo"
+	if userID != "" {
+		infoURL += "?UserId=" + url.QueryEscape(userID)
+	}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, infoURL, strings.NewReader(`{}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Emby-Token", token)
 	req.Header.Set("X-Emby-Authorization", `Emby Client="EmbyProxy", Device="EmbyProxy", DeviceId="embyproxy-canary", Version="1.0"`)
@@ -167,6 +185,8 @@ func probeNodeMedia(ctx context.Context, client *http.Client, root, item, token 
 		MediaSources  []struct {
 			ID              string
 			DirectStreamURL string
+			IsRemote        bool
+			Protocol        string
 		}
 	}
 	decode := json.NewDecoder(io.LimitReader(res.Body, 2<<20)).Decode(&info)
@@ -176,7 +196,13 @@ func probeNodeMedia(ctx context.Context, client *http.Client, root, item, token 
 	}
 	source := info.MediaSources[0]
 	query := url.Values{"Static": {"true"}, "MediaSourceId": {source.ID}, "PlaySessionId": {info.PlaySessionID}}
+	if userID != "" {
+		query.Set("UserId", userID)
+	}
 	candidates := []string{source.DirectStreamURL, "/emby/Videos/" + url.PathEscape(item) + "/stream?" + query.Encode(), "/emby/Videos/" + url.PathEscape(item) + "/stream.mkv?" + query.Encode()}
+	if source.IsRemote && (strings.EqualFold(source.Protocol, "http") || strings.EqualFold(source.Protocol, "https")) {
+		candidates = append(candidates, "/emby/videos/"+url.PathEscape(item)+"/original.mkv?"+query.Encode())
+	}
 	base, _ := url.Parse(root)
 	for _, candidate := range candidates {
 		if candidate == "" {
