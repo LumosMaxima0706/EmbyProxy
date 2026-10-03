@@ -26,25 +26,27 @@ const publicIngressHistoryPrefix = "failover:public-ingress:operation:"
 const automaticIngressCooldown = time.Hour
 
 type publicIngressState struct {
-	OperationID       string `json:"operation_id"`
-	PriorVerifiedID   string `json:"prior_verified_id,omitempty"`
-	Phase             string `json:"phase"`
-	Trigger           string `json:"trigger"`
-	Mode              string `json:"mode"`
-	RequestedNodeID   string `json:"requested_node_id"`
-	ActiveNodeID      string `json:"active_node_id"`
-	RecordName        string `json:"record_name"`
-	PreviousAddress   string `json:"previous_address"`
-	DesiredAddress    string `json:"desired_address"`
-	ProviderAddress   string `json:"provider_address"`
-	RecursiveAddress  string `json:"recursive_address"`
-	RequestVerified   bool   `json:"request_verified"`
-	ObservedNodeID    string `json:"observed_node_id,omitempty"`
-	RollbackAttempted bool   `json:"rollback_attempted"`
-	RollbackVerified  bool   `json:"rollback_verified"`
-	Error             string `json:"error,omitempty"`
-	StartedAt         int64  `json:"started_at"`
-	CompletedAt       int64  `json:"completed_at,omitempty"`
+	OperationID          string `json:"operation_id"`
+	PriorVerifiedID      string `json:"prior_verified_id,omitempty"`
+	Phase                string `json:"phase"`
+	Trigger              string `json:"trigger"`
+	Mode                 string `json:"mode"`
+	RequestedNodeID      string `json:"requested_node_id"`
+	ActiveNodeID         string `json:"active_node_id"`
+	RecordName           string `json:"record_name"`
+	PreviousAddress      string `json:"previous_address"`
+	DesiredAddress       string `json:"desired_address"`
+	ProviderAddress      string `json:"provider_address"`
+	RecursiveAddress     string `json:"recursive_address"`
+	RequestVerified      bool   `json:"request_verified"`
+	ObservedNodeID       string `json:"observed_node_id,omitempty"`
+	RollbackAttempted    bool   `json:"rollback_attempted"`
+	RollbackVerified     bool   `json:"rollback_verified"`
+	Error                string `json:"error,omitempty"`
+	RequestError         string `json:"request_error,omitempty"`
+	FailedObservedNodeID string `json:"failed_observed_node_id,omitempty"`
+	StartedAt            int64  `json:"started_at"`
+	CompletedAt          int64  `json:"completed_at,omitempty"`
 }
 
 type publicIngressSchedulerStatus struct {
@@ -227,9 +229,11 @@ func (s *publicIngressSwitcher) switchToLocked(ctx context.Context, nodeID, trig
 	if err = s.save(ctx, state); err != nil {
 		return s.rollback(ctx, state, "state_persist_failed", err)
 	}
-	observedNode, verifyErr := s.verifyPublicRequest(ctx, nodeID)
+	observedNode, verifyErr := s.waitPublicRequest(ctx, nodeID, 30*time.Second)
 	state.ObservedNodeID = observedNode
 	if err = verifyErr; err != nil {
+		state.RequestError = publicRequestErrorCode(err)
+		state.FailedObservedNodeID = observedNode
 		return s.rollback(ctx, state, "public_request_failed", err)
 	}
 	state.RequestVerified = true
@@ -425,6 +429,46 @@ func (s *publicIngressSwitcher) verifyPublicRequest(ctx context.Context, expecte
 		return observed, errors.New("public_node_identity_mismatch")
 	}
 	return observed, nil
+}
+
+func publicRequestErrorCode(err error) string {
+	if err == nil {
+		return ""
+	}
+	if strings.HasPrefix(err.Error(), "public_") {
+		return err.Error()
+	}
+	var certificateError *tls.CertificateVerificationError
+	if errors.As(err, &certificateError) {
+		return "public_certificate_verification_failed"
+	}
+	return "public_transport_failed"
+}
+
+// A first DNS consensus can be followed by a stale anycast cache response.
+// Keep each attempt fresh and identity-checked before declaring failure.
+func (s *publicIngressSwitcher) waitPublicRequest(ctx context.Context, nodeID string, timeout time.Duration) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	var observed string
+	var lastErr error
+	for {
+		observed, lastErr = s.verifyPublicRequest(ctx, nodeID)
+		if lastErr == nil {
+			return observed, nil
+		}
+		var certificateError *tls.CertificateVerificationError
+		if errors.As(lastErr, &certificateError) {
+			return observed, lastErr
+		}
+		timer := time.NewTimer(2 * time.Second)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return observed, lastErr
+		case <-timer.C:
+		}
+	}
 }
 
 func (s *publicIngressSwitcher) rollback(ctx context.Context, state publicIngressState, code string, cause error) (publicIngressState, error) {

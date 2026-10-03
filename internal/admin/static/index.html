@@ -1789,6 +1789,11 @@ async function loadProxyNodes() {
     const operation = window.publicIngressOperation;
     const node = (r.nodes || []).find(n => n.id === operation?.active_node_id);
     modeStatus.textContent = ingress.ok && operation?.phase === 'verified' ? `已验证入口：${node?.name || operation.active_node_id} · ${operation.mode === 'fixed' ? '固定（故障不回退）' : '故障保护已启用'}` : '';
+    if (ingress.ok && operation?.phase !== 'verified' && operation?.error) {
+      const outcome = operation.rollback_verified ? '\u5df2\u56de\u6eda\u5230' : '\u5f53\u524d\u5165\u53e3';
+      const reason = operation.request_error || operation.error;
+      modeStatus.textContent = `\u4e0a\u6b21\u5207\u6362\u672a\u5b8c\u6210\uff1a${reason} \u00b7 ${outcome} ${node?.name || operation.active_node_id || '\u672a\u786e\u8ba4'}`;
+    }
   }
   const notice = document.getElementById('publicIngressSchedulerStatus');
   if (notice) {
@@ -1963,7 +1968,7 @@ async function switchProxyNode(id) {
   window.proxySwitchInFlight=true;
   try {
     const r=await authFetch('/api/admin/public-ingress/switch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({node_id:id,mode:'preferred',confirm:true})});
-    if (!r.ok){toast('公开入口切换失败: '+authErrorMessage(r.error),'err');await loadProxyNodes();return;}
+    if (!r.ok){toast('\u516c\u5f00\u5165\u53e3\u5207\u6362\u5931\u8d25: '+(r.operation?.request_error || authErrorMessage(r.error))+(r.operation?.rollback_verified?'\uff0c\u5df2\u56de\u6eda\u539f\u5165\u53e3':''),'err');await loadProxyNodes();return;}
     toast('公开入口已验证切换，故障保护已启用','ok'); await loadProxyNodes();
   } finally {window.proxySwitchInFlight=false;}
 }
