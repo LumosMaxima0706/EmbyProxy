@@ -60,14 +60,15 @@ type publicIngressSchedulerStatus struct {
 }
 
 type publicIngressSwitcher struct {
-	mu         sync.Mutex
-	h          *Handler
-	record     string
-	ttl        int
-	lookupIP   func(context.Context, string, string) ([]netip.Addr, error)
-	lookupHost func(context.Context, string) ([]string, error)
-	httpClient *http.Client
-	now        func() time.Time
+	mu             sync.Mutex
+	h              *Handler
+	record         string
+	ttl            int
+	lookupIP       func(context.Context, string, string) ([]netip.Addr, error)
+	lookupHost     func(context.Context, string) ([]string, error)
+	preflightCheck func(context.Context, storage.ProxyNode, netip.Addr) error
+	httpClient     *http.Client
+	now            func() time.Time
 }
 
 func newPublicIngressSwitcher(h *Handler) *publicIngressSwitcher {
@@ -286,6 +287,9 @@ func eligiblePublicIngressNode(n storage.ProxyNode) bool {
 }
 
 func (s *publicIngressSwitcher) preflight(ctx context.Context, n storage.ProxyNode, ip netip.Addr) error {
+	if s.preflightCheck != nil {
+		return s.preflightCheck(ctx, n, ip)
+	}
 	dialer := &net.Dialer{Timeout: 10 * time.Second}
 	transport := &http.Transport{TLSClientConfig: &tls.Config{ServerName: s.record, MinVersion: tls.VersionTLS12}, DialContext: func(c context.Context, network, _ string) (net.Conn, error) {
 		return dialer.DialContext(c, network, net.JoinHostPort(ip.String(), "443"))

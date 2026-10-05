@@ -94,5 +94,8 @@ func (s *publicIngressSwitcher) recoverAutomaticHealthLocked(ctx context.Context
 	if err := s.save(ctx, state); err != nil {
 		return err
 	}
+	if err := s.saveSchedulerStatus(ctx, "no_eligible_public_ingress_candidate", "automatic_health"); err != nil {
+		return err
+	}
 	return errors.New("no_eligible_public_ingress_candidate")
 }

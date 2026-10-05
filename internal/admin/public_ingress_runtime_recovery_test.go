@@ -6,9 +6,11 @@ import (
 	"embyproxy/internal/spaceship"
 	"embyproxy/internal/storage"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"strings"
 	"testing"
@@ -183,5 +185,84 @@ func TestRuntimeMonitorDetectsMediaFailureAndStaleData(t *testing.T) {
 		if got := s.runtimeIngressHealthy(ctx, node); got != test.healthy {
 			t.Fatalf("case %+v got %v", test, got)
 		}
+	}
+}
+
+func TestAutomaticHealthEndToEndRecoveryAndCandidateOrder(t *testing.T) {
+	h := newAuthTestHandler(t, config.Config{PublicIngressHost: "stream.example.com"})
+	ctx := context.Background()
+	now := time.Now().Unix()
+	for i, id := range []string{"dead", "first", "second"} {
+		_, err := h.store.DB().Exec(`INSERT INTO proxy_nodes (id,name,public_address,enabled,state,priority,last_heartbeat_at,playback_healthy,ingress_healthy,config_synced,reset_day,reset_timezone,created_at,updated_at) VALUES (?,?,?,1,'healthy',?,?,1,1,1,1,'UTC',?,?)`, id, id, []string{"https://1.1.1.1", "https://2.2.2.2", "https://3.3.3.3"}[i], i, now, now, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, err := h.store.DB().Exec(`UPDATE proxy_nodes SET last_heartbeat_at=0,state='degraded' WHERE id='dead'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := "1.1.1.1"
+	puts := 0
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut {
+			var records struct {
+				Items []spaceship.Record `json:"items"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&records); err != nil || len(records.Items) != 1 {
+				t.Errorf("invalid update: %v", err)
+				w.WriteHeader(400)
+				return
+			}
+			puts++
+			address = records.Items[0].Address
+			w.WriteHeader(204)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"items": []spaceship.Record{{Name: "stream", Type: "A", Address: address, TTL: 60}}, "total": 1})
+	}))
+	defer provider.Close()
+	h.dnsAutomation = &spaceship.Client{BaseURL: provider.URL, APIKey: "k", APISecret: "s", ManagedDomain: "example.com"}
+	s := newPublicIngressSwitcher(h)
+	var attempts []string
+	s.preflightCheck = func(_ context.Context, n storage.ProxyNode, _ netip.Addr) error {
+		attempts = append(attempts, n.ID)
+		if n.ID == "first" {
+			return errors.New("simulated_failed_candidate")
+		}
+		return nil
+	}
+	s.lookupHost = func(context.Context, string) ([]string, error) { return []string{address}, nil }
+	public := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-EmbyProxy-Node-ID", "second")
+		w.Write([]byte("ok"))
+	}))
+	defer public.Close()
+	u, _ := url.Parse(public.URL)
+	client := public.Client()
+	tr := client.Transport.(*http.Transport).Clone()
+	tr.DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, u.Host)
+	}
+	client.Transport = tr
+	s.httpClient = client
+	state := publicIngressState{OperationID: "actual-runtime-failure", Phase: "rollback_failed", Trigger: "automatic_health", Mode: "preferred", RecordName: s.record, ActiveNodeID: "dead", PreviousAddress: "1.1.1.1", DesiredAddress: "2.2.2.2"}
+	if err := s.save(ctx, state); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.reconcileWithWarning(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.status(ctx); got.Phase != "verified" || !got.RequestVerified || got.ActiveNodeID != "second" || got.RollbackAttempted {
+		t.Fatalf("not recovered %+v", got)
+	}
+	if address != "3.3.3.3" || puts != 1 || strings.Join(attempts, ",") != "first,second" {
+		t.Fatalf("address=%s puts=%d attempts=%v", address, puts, attempts)
+	}
+	if err := s.reconcileWithWarning(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if puts != 1 {
+		t.Fatal("healthy recovery switched again")
 	}
 }
