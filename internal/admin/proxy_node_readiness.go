@@ -21,6 +21,7 @@ type proxyNodeReadiness struct {
 	Routes       string            `json:"routes"`
 	Playback     string            `json:"playback"`
 	Error        string            `json:"error,omitempty"`
+	Monitor      nodeProbeMonitor  `json:"monitor,omitempty"`
 	Origin       string            `json:"origin"`
 	AgentCommit  string            `json:"agent_commit"`
 }
@@ -36,6 +37,7 @@ func (h *Handler) proxyNodeReadinessViews(ctx context.Context, nodes []storage.P
 		if view.CheckedAt < time.Now().Add(-15*time.Minute).Unix() || view.Origin != node.PublicAddress || view.AgentCommit != node.AgentCommit {
 			view.BusinessTLS, view.Routes, view.Playback = "stale", "stale", "stale"
 		}
+		_, _ = h.store.KV().GetJSON(ctx, "node-probe-monitor:"+node.ID, &view.Monitor)
 		views[node.ID] = view
 	}
 	return views
@@ -52,17 +54,20 @@ func (h *Handler) verifyProxyNodeReadiness(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, 503, map[string]any{"ok": false, "error": "PUBLIC_INGRESS_UNAVAILABLE"})
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+	view := h.checkProxyNodeReadiness(r.Context(), *node)
+	if err := h.store.KV().Put(context.WithoutCancel(r.Context()), "node-readiness:"+id, view); err != nil {
+		writeJSON(w, 500, map[string]any{"ok": false, "error": "READINESS_SAVE_FAILED"})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "readiness": view})
+}
+
+func (h *Handler) checkProxyNodeReadiness(parent context.Context, node storage.ProxyNode) (view proxyNodeReadiness) {
+	ctx, cancel := context.WithTimeout(parent, 90*time.Second)
 	defer cancel()
-	view := proxyNodeReadiness{CheckedAt: time.Now().Unix(), BusinessTLS: "unverified", Routes: "unverified", Playback: "unverified", Origin: node.PublicAddress, AgentCommit: node.AgentCommit}
-	defer func() {
-		if err := h.store.KV().Put(context.WithoutCancel(r.Context()), "node-readiness:"+id, view); err != nil {
-			writeJSON(w, 500, map[string]any{"ok": false, "error": "READINESS_SAVE_FAILED"})
-			return
-		}
-		writeJSON(w, 200, map[string]any{"ok": true, "readiness": view})
-	}()
-	ip, err := h.publicIngress.proxyNodeIPv4(ctx, *node)
+	id := node.ID
+	view = proxyNodeReadiness{CheckedAt: time.Now().Unix(), BusinessTLS: "unverified", Routes: "unverified", Playback: "unverified", Origin: node.PublicAddress, AgentCommit: node.AgentCommit}
+	ip, err := h.publicIngress.proxyNodeIPv4(ctx, node)
 	if err != nil {
 		view.Error = "target_address_invalid"
 		return
@@ -196,6 +201,8 @@ func (h *Handler) verifyProxyNodeReadiness(w http.ResponseWriter, r *http.Reques
 	if allPlayed {
 		view.Playback = "ready"
 	}
+	return
+
 }
 
 func probeNodeMedia(ctx context.Context, client *http.Client, root, item, token string) error {

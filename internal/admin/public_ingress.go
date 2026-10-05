@@ -26,33 +26,37 @@ const publicIngressHistoryPrefix = "failover:public-ingress:operation:"
 const automaticIngressCooldown = time.Hour
 
 type publicIngressState struct {
-	OperationID          string `json:"operation_id"`
-	PriorVerifiedID      string `json:"prior_verified_id,omitempty"`
-	Phase                string `json:"phase"`
-	Trigger              string `json:"trigger"`
-	Mode                 string `json:"mode"`
-	RequestedNodeID      string `json:"requested_node_id"`
-	ActiveNodeID         string `json:"active_node_id"`
-	RecordName           string `json:"record_name"`
-	PreviousAddress      string `json:"previous_address"`
-	DesiredAddress       string `json:"desired_address"`
-	ProviderAddress      string `json:"provider_address"`
-	RecursiveAddress     string `json:"recursive_address"`
-	RequestVerified      bool   `json:"request_verified"`
-	ObservedNodeID       string `json:"observed_node_id,omitempty"`
-	RollbackAttempted    bool   `json:"rollback_attempted"`
-	RollbackVerified     bool   `json:"rollback_verified"`
-	Error                string `json:"error,omitempty"`
-	RequestError         string `json:"request_error,omitempty"`
-	FailedObservedNodeID string `json:"failed_observed_node_id,omitempty"`
-	StartedAt            int64  `json:"started_at"`
-	CompletedAt          int64  `json:"completed_at,omitempty"`
+	OperationID           string `json:"operation_id"`
+	PriorVerifiedID       string `json:"prior_verified_id,omitempty"`
+	Phase                 string `json:"phase"`
+	Trigger               string `json:"trigger"`
+	Mode                  string `json:"mode"`
+	RequestedNodeID       string `json:"requested_node_id"`
+	ActiveNodeID          string `json:"active_node_id"`
+	RecordName            string `json:"record_name"`
+	PreviousAddress       string `json:"previous_address"`
+	RecoverySourceAddress string `json:"recovery_source_address,omitempty"`
+	DesiredAddress        string `json:"desired_address"`
+	ProviderAddress       string `json:"provider_address"`
+	RecursiveAddress      string `json:"recursive_address"`
+	RequestVerified       bool   `json:"request_verified"`
+	ObservedNodeID        string `json:"observed_node_id,omitempty"`
+	RollbackAttempted     bool   `json:"rollback_attempted"`
+	RollbackVerified      bool   `json:"rollback_verified"`
+	Error                 string `json:"error,omitempty"`
+	RequestError          string `json:"request_error,omitempty"`
+	FailedObservedNodeID  string `json:"failed_observed_node_id,omitempty"`
+	StartedAt             int64  `json:"started_at"`
+	CompletedAt           int64  `json:"completed_at,omitempty"`
 }
 
 type publicIngressSchedulerStatus struct {
-	Error     string `json:"error,omitempty"`
-	Trigger   string `json:"trigger,omitempty"`
-	UpdatedAt int64  `json:"updated_at,omitempty"`
+	LastAttemptAt int64  `json:"last_attempt_at,omitempty"`
+	LastSuccessAt int64  `json:"last_success_at,omitempty"`
+	NextRunAt     int64  `json:"next_run_at,omitempty"`
+	Error         string `json:"error,omitempty"`
+	Trigger       string `json:"trigger,omitempty"`
+	UpdatedAt     int64  `json:"updated_at,omitempty"`
 }
 
 type publicIngressSwitcher struct {
@@ -141,7 +145,9 @@ func (s *publicIngressSwitcher) schedulerStatus(ctx context.Context) publicIngre
 }
 
 func (s *publicIngressSwitcher) saveSchedulerStatus(ctx context.Context, code, trigger string) error {
-	return s.h.store.KV().Put(ctx, publicIngressSchedulerKey, publicIngressSchedulerStatus{Error: code, Trigger: trigger, UpdatedAt: s.now().Unix()})
+	status := s.schedulerStatus(ctx)
+	status.Error, status.Trigger, status.UpdatedAt = code, trigger, s.now().Unix()
+	return s.h.store.KV().Put(ctx, publicIngressSchedulerKey, status)
 }
 
 func (s *publicIngressSwitcher) save(ctx context.Context, state publicIngressState) error {
@@ -183,6 +189,9 @@ func (s *publicIngressSwitcher) switchToLocked(ctx context.Context, nodeID, trig
 	}
 	state.DesiredAddress = ip.String()
 	if err = s.preflight(ctx, *node, ip); err != nil {
+		return s.fail(ctx, state, "target_preflight_failed", err)
+	}
+	if err = s.runtimeMediaPreflight(ctx, *node); err != nil {
 		return s.fail(ctx, state, "target_preflight_failed", err)
 	}
 	current, err := s.h.dnsAutomation.ExactRecord(ctx, s.record, "A")
@@ -251,7 +260,7 @@ func (s *publicIngressSwitcher) switchToLocked(ctx context.Context, nodeID, trig
 
 func publicIngressInFlight(phase string) bool {
 	switch phase {
-	case "preparing", "submitting_dns", "waiting_recursive", "verifying_request", "rolling_back", "recovery_required", "rollback_failed":
+	case "preparing", "submitting_dns", "waiting_recursive", "verifying_request", "rolling_back", "recovery_required", "rollback_failed", "failover_pending":
 		return true
 	}
 	return false
@@ -472,6 +481,20 @@ func (s *publicIngressSwitcher) waitPublicRequest(ctx context.Context, nodeID st
 }
 
 func (s *publicIngressSwitcher) rollback(ctx context.Context, state publicIngressState, code string, cause error) (publicIngressState, error) {
+	if state.Trigger == "automatic_health" {
+		old, lookupErr := s.h.store.GetProxyNode(ctx, state.ActiveNodeID)
+		if lookupErr != nil || old == nil || !eligiblePublicIngressNode(*old) || !s.runtimeIngressHealthy(ctx, *old) {
+			state.Phase, state.Error = "failover_pending", code
+			state.CompletedAt = s.now().Unix()
+			if saveErr := s.save(ctx, state); saveErr != nil {
+				return state, saveErr
+			}
+			if cause == nil {
+				cause = errors.New(code)
+			}
+			return state, cause
+		}
+	}
 	state.RollbackAttempted = true
 	state.Phase = "rolling_back"
 	state.Error = code
@@ -560,7 +583,7 @@ func (s *publicIngressSwitcher) reconcile(ctx context.Context) error {
 	defer s.mu.Unlock()
 	state := s.status(ctx)
 	if publicIngressInFlight(state.Phase) {
-		return errors.New("public_ingress_recovery_required")
+		return s.recoverAutomaticHealthLocked(ctx, state)
 	}
 	if state.Phase == "failed" && state.PriorVerifiedID != "" && safePreDNSFailure(state.Error) {
 		verified, err := s.verifiedBeforeFailure(ctx, state)
@@ -601,7 +624,7 @@ func (s *publicIngressSwitcher) reconcile(ctx context.Context) error {
 			break
 		}
 	}
-	needsSwitch := active == nil || !eligiblePublicIngressNode(*active)
+	needsSwitch := active == nil || !eligiblePublicIngressNode(*active) || !s.runtimeIngressHealthy(ctx, *active)
 	trigger := "automatic_health"
 	if !needsSwitch && (active.QuotaBytes <= 0 || active.ThresholdPercent <= 0 || float64(active.UsedBytes)*100 < float64(active.QuotaBytes)*active.ThresholdPercent) && s.schedulerStatus(ctx).Error != "" {
 		_ = s.saveSchedulerStatus(ctx, "", "")
@@ -645,7 +668,20 @@ func (s *publicIngressSwitcher) reconcile(ctx context.Context) error {
 }
 
 func (s *publicIngressSwitcher) reconcileWithWarning(ctx context.Context) error {
+	status := s.schedulerStatus(ctx)
+	status.LastAttemptAt, status.NextRunAt = s.now().Unix(), 0
+	if err := s.h.store.KV().Put(ctx, publicIngressSchedulerKey, status); err != nil {
+		return err
+	}
 	err := s.reconcile(ctx)
+	status = s.schedulerStatus(ctx)
+	status.NextRunAt = s.now().Add(30 * time.Second).Unix()
+	if err == nil {
+		status.LastSuccessAt = s.now().Unix()
+	}
+	if saveErr := s.h.store.KV().Put(ctx, publicIngressSchedulerKey, status); saveErr != nil {
+		return errors.Join(err, saveErr)
+	}
 	if err == nil || err.Error() == "no_eligible_public_ingress_candidate" {
 		return err
 	}
@@ -671,6 +707,8 @@ func (h *Handler) StartPublicIngressScheduler(ctx context.Context) {
 	if h == nil || h.publicIngress == nil {
 		return
 	}
+	h.StartNodeBusinessMonitor(ctx)
+	h.StartIngressWatchdog(ctx)
 	go func() {
 		_ = h.publicIngress.reconcileWithWarning(ctx)
 		ticker := time.NewTicker(30 * time.Second)

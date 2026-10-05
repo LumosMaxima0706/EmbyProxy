@@ -254,7 +254,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "error": "PUBLIC_INGRESS_STATE_UNREADABLE", "operation": state})
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "operation": state, "scheduler": h.publicIngress.schedulerStatus(r.Context())})
+		var watchdog ingressWatchdogStatus
+		_, _ = h.store.KV().GetJSON(r.Context(), "failover:public-ingress:watchdog", &watchdog)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "operation": state, "scheduler": h.publicIngress.schedulerStatus(r.Context()), "watchdog": watchdog})
 		return
 	}
 	if path == "/api/admin/public-ingress/confirm-previous" && r.Method == http.MethodPost {

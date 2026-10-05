@@ -15,11 +15,13 @@ func TestLivePublicIngressMedia(t *testing.T) {
 	if os.Getenv("EMBYPROXY_LIVE_PUBLIC_CHECK") != "1" {
 		t.Skip("explicit public ingress check only")
 	}
+	expectedIP := os.Getenv("EMBYPROXY_LIVE_EXPECTED_IP"); if expectedIP == "" { expectedIP = "104.233.158.9" }
+	expectedID := os.Getenv("EMBYPROXY_LIVE_EXPECTED_NODE"); if expectedID == "" { expectedID = "5800c9d8fbd5cc739ae25cf4" }
 	transport := &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}, DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
 		conn, err := (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, network, address)
 		if err == nil {
 			t.Log("public DNS connection", conn.RemoteAddr().String())
-			if conn.RemoteAddr().String() != "104.233.158.9:443" {
+			if conn.RemoteAddr().String() != net.JoinHostPort(expectedIP,"443") {
 				conn.Close()
 				return nil, net.InvalidAddrError("public connection did not reach requested node")
 			}
@@ -33,7 +35,7 @@ func TestLivePublicIngressMedia(t *testing.T) {
 		t.Fatal(err)
 	}
 	response.Body.Close()
-	if response.StatusCode != 200 || response.Header.Get("X-EmbyProxy-Node-ID") != "5800c9d8fbd5cc739ae25cf4" {
+	if response.StatusCode != 200 || response.Header.Get("X-EmbyProxy-Node-ID") != expectedID {
 		t.Fatal("public health did not verify requested node")
 	}
 	for _, slug := range []string{"1111", "younoyes"} {
@@ -64,6 +66,7 @@ func TestLiveAuthoritativePublicIngress(t *testing.T) {
 	if os.Getenv("EMBYPROXY_LIVE_PUBLIC_CHECK") != "1" {
 		t.Skip("explicit authoritative DNS check only")
 	}
+	expectedIP := os.Getenv("EMBYPROXY_LIVE_EXPECTED_IP"); if expectedIP == "" { expectedIP = "104.233.158.9" }
 	for _, ns := range []string{"launch1.spaceship.net", "launch2.spaceship.net"} {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		addresses, err := net.DefaultResolver.LookupHost(ctx, ns)
@@ -77,7 +80,7 @@ func TestLiveAuthoritativePublicIngress(t *testing.T) {
 		}}
 		answers, err := resolver.LookupHost(ctx, "stream.149077530.xyz")
 		cancel()
-		if err != nil || !recursiveAnswersMatch(answers, "104.233.158.9") {
+		if err != nil || !recursiveAnswersMatch(answers, expectedIP) {
 			t.Fatalf("NS %s answers=%v err=%v", ns, answers, err)
 		}
 		t.Log("authoritative", ns, endpoint, answers)

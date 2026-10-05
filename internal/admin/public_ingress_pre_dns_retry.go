@@ -40,6 +40,15 @@ func (s *publicIngressSwitcher) verifiedBeforeFailure(ctx context.Context, faile
 			return previous, errors.New("verified_ingress_recursive_mismatch")
 		}
 	}
+	if failed.Trigger == "automatic_health" {
+		old, lookupErr := s.h.store.GetProxyNode(ctx, previous.ActiveNodeID)
+		if lookupErr != nil {
+			return previous, lookupErr
+		}
+		if old == nil || !eligiblePublicIngressNode(*old) || !s.runtimeIngressHealthy(ctx, *old) {
+			return previous, nil
+		}
+	}
 	if _, err := s.verifyPublicRequest(lookupCtx, previous.ActiveNodeID); err != nil {
 		return previous, errors.New("verified_ingress_public_mismatch")
 	}
