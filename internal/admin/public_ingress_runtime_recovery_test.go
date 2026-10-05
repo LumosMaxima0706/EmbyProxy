@@ -266,3 +266,64 @@ func TestAutomaticHealthEndToEndRecoveryAndCandidateOrder(t *testing.T) {
 		t.Fatal("healthy recovery switched again")
 	}
 }
+
+func TestAutomaticHealthDNSDelayStaysOnCandidateThenResumes(t *testing.T) {
+	h := newAuthTestHandler(t, config.Config{PublicIngressHost: "stream.example.com"})
+	ctx := context.Background()
+	now := time.Now().Unix()
+	puts := 0
+	address := "1.1.1.1"
+	_, err := h.store.DB().Exec(`INSERT INTO proxy_nodes (id,name,public_address,enabled,state,priority,last_heartbeat_at,playback_healthy,ingress_healthy,config_synced,reset_day,reset_timezone,created_at,updated_at) VALUES ('candidate','candidate','https://2.2.2.2',1,'healthy',0,?,1,1,1,1,'UTC',?,?)`, now, now, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut {
+			var body struct {
+				Items []spaceship.Record `json:"items"`
+			}
+			json.NewDecoder(r.Body).Decode(&body)
+			puts++
+			address = body.Items[0].Address
+			w.WriteHeader(204)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"items": []spaceship.Record{{Name: "stream", Type: "A", Address: address, TTL: 60}}, "total": 1})
+	}))
+	defer provider.Close()
+	h.dnsAutomation = &spaceship.Client{BaseURL: provider.URL, APIKey: "k", APISecret: "s", ManagedDomain: "example.com"}
+	s := newPublicIngressSwitcher(h)
+	s.preflightCheck = func(context.Context, storage.ProxyNode, netip.Addr) error { return nil }
+	s.lookupHost = func(context.Context, string) ([]string, error) { return []string{"1.1.1.1"}, nil }
+	step := time.Now()
+	s.now = func() time.Time { step = step.Add(5 * time.Minute); return step }
+	verified := publicIngressState{OperationID: "old", Phase: "verified", Trigger: "admin_manual", Mode: "preferred", RecordName: s.record, ActiveNodeID: "dead", DesiredAddress: "1.1.1.1", RequestVerified: true}
+	s.save(ctx, verified)
+	got, err := s.switchTo(ctx, "candidate", "automatic_health", "preferred")
+	if err == nil || got.Phase != "failover_pending" || got.RollbackAttempted || puts != 1 || address != "2.2.2.2" {
+		t.Fatalf("DNS delay rolled back to dead entry: %+v err=%v puts=%d address=%s", got, err, puts, address)
+	}
+	// Fresh controller object loads persisted intent and waits for propagation.
+	s = newPublicIngressSwitcher(h)
+	s.preflightCheck = func(context.Context, storage.ProxyNode, netip.Addr) error { return nil }
+	s.lookupHost = func(context.Context, string) ([]string, error) { return []string{address}, nil }
+	public := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-EmbyProxy-Node-ID", "candidate")
+		w.Write([]byte("ok"))
+	}))
+	defer public.Close()
+	u, _ := url.Parse(public.URL)
+	client := public.Client()
+	tr := client.Transport.(*http.Transport).Clone()
+	tr.DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, u.Host)
+	}
+	client.Transport = tr
+	s.httpClient = client
+	if err := s.reconcileWithWarning(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.status(ctx); got.Phase != "verified" || got.ActiveNodeID != "candidate" || got.RollbackAttempted || puts != 1 {
+		t.Fatalf("did not resume: %+v puts=%d", got, puts)
+	}
+}
